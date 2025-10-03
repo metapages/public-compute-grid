@@ -15,7 +15,7 @@ import {
   WebsocketMessageTypeServerBroadcast,
 } from "@metapages/compute-queues-shared";
 import { closeKv } from "../../shared/src/shared/kv.ts";
-import { assertDefined } from "retry/misc.ts";
+import { assertDefined } from "retry/misc";
 
 const fetch = fetchRobust;
 
