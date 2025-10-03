@@ -2,7 +2,7 @@
   "name": "@metapages/compute-queues-shared",
   "exports": "./src/mod.ts",
   "tasks": {
-    "build": "deno run --allow-read --allow-env --allow-run --allow-write ./bundle.ts"
+    "build": "deno bundle --check --output dist/client.mjs --platform browser --sourcemap=external src/client.ts"
   },
   "imports": {
     "/@/": "./src/"
