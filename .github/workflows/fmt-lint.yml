@@ -24,7 +24,7 @@ jobs:
       - name: Setup Deno
         uses: denoland/setup-deno@v2
         with:
-          deno-version: "2.4.3"
+          deno-version: "2.5.3"
 
       - name: Build shared
         run: just shared build

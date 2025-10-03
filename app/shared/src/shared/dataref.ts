@@ -18,7 +18,7 @@ export const dataRefToDownloadLink = async (ref: DataRef): Promise<string> => {
 export const dataRefToBuffer = async (
   ref: DataRef,
   address?: string,
-): Promise<Uint8Array> => {
+): Promise<Uint8Array<ArrayBuffer>> => {
   switch (ref.type) {
     case DataRefType.base64:
       return decodeBase64(ref.value as string);
@@ -82,7 +82,7 @@ export const copyLargeBlobsToCloud = async (
   await Promise.all(
     Object.keys(inputs).map(async (name) => {
       const type: DataRefType = inputs[name]?.type || DataRefTypeDefault;
-      let uint8ArrayIfBig: Uint8Array | undefined;
+      let uint8ArrayIfBig: Uint8Array<ArrayBuffer> | undefined;
       switch (type) {
         case DataRefType.key:
           // this is already cloud storage. no need to re-upload
@@ -267,12 +267,12 @@ export const fetchBlobFromHash: (
 };
 
 const _encoder = new TextEncoder();
-export const utf8ToBuffer = (str: string): Uint8Array => {
+export const utf8ToBuffer = (str: string): Uint8Array<ArrayBuffer> => {
   return _encoder.encode(str);
 };
 
 const _decoder = new TextDecoder();
-export const bufferToUtf8 = (buffer: Uint8Array): string => {
+export const bufferToUtf8 = (buffer: Uint8Array<ArrayBuffer>): string => {
   return _decoder.decode(buffer);
 };
 

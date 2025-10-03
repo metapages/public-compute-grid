@@ -15,7 +15,7 @@ import {
   WebsocketMessageTypeServerBroadcast,
 } from "@metapages/compute-queues-shared";
 import { closeKv } from "../../shared/src/shared/kv.ts";
-import { assertDefined } from "https://deno.land/x/retry@v2.0.0/misc.ts";
+import { assertDefined } from "retry/misc";
 
 const fetch = fetchRobust;
 
