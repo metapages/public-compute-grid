@@ -147,7 +147,7 @@ export function encodeBase64(data: ArrayBuffer | Uint8Array | string): string {
  * decodeBase64("Zm9vYmFy"); // Uint8Array(6) [ 102, 111, 111, 98, 97, 114 ]
  * ```
  */
-export function decodeBase64(b64: string): Uint8Array {
+export function decodeBase64(b64: string): Uint8Array<ArrayBuffer> {
   const binString = atob(b64);
   const size = binString.length;
   const bytes = new Uint8Array(size);

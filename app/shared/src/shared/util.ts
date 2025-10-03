@@ -255,7 +255,7 @@ export const shaObject = (obj: unknown): Promise<string> => {
   return sha256Buffer(msgBuffer);
 };
 
-export const sha256Buffer = async (buffer: Uint8Array): Promise<string> => {
+export const sha256Buffer = async (buffer: BufferSource): Promise<string> => {
   const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join(
