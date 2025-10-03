@@ -9,6 +9,7 @@
   "imports": {
     "@cliffy/command": "jsr:@cliffy/command@^1.0.0-rc.7",
     "@korkje/wsi": "jsr:@korkje/wsi@^0.3.2",
+    "@luca/esbuild-deno-loader": "jsr:@luca/esbuild-deno-loader@0.11.1",
     "@metapages/deno-redis-broadcastchannel": "jsr:@metapages/deno-redis-broadcastchannel@^0.4.0",
     "@metapages/hash-query": "npm:@metapages/hash-query@0.4.8",
     "@metapages/metapage": "npm:@metapages/metapage@1.0.21",
@@ -24,6 +25,7 @@
     "crypto-random-string": "https://deno.land/x/crypto_random_string@1.0.0/mod.ts",
     "deno-machine-id": "https://deno.land/x/deno_machine_id@1.0.0/mod.ts",
     "dockerode": "npm:dockerode@^4.0.7",
+    "esbuild": "npm:esbuild@0.25.5",
     "fast-deep-equal/es6": "npm:fast-deep-equal/es6/index.js",
     "fetch-retry": "npm:fetch-retry@^6.0.0",
     "hono": "https://deno.land/x/hono@v4.1.0-rc.1/mod.ts",
