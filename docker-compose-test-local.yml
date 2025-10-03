@@ -6,7 +6,7 @@ services:
     build:
       context: .
       dockerfile_inline: |
-        FROM denoland/deno:alpine-2.3.6
+        FROM denoland/deno:alpine-2.5.3
         RUN apk add --no-cache curl bash
     command: deno test --trace-leaks --watch --unsafely-ignore-certificate-errors --allow-all --unstable-cron --unstable-kv .
     working_dir: /app/app/test

@@ -10,7 +10,7 @@ services:
         condition: service_started
       redis:
         condition: service_healthy
-    image: denoland/deno:alpine-2.3.6
+    image: denoland/deno:alpine-2.5.3
     command: deno run --unsafely-ignore-certificate-errors --watch --allow-all --unstable-broadcast-channel --unstable-kv --unstable-cron app/api/src/server.ts
     working_dir: /app
     healthcheck:
@@ -64,7 +64,7 @@ services:
     depends_on:
       api1:
         condition: service_healthy
-    image: denoland/deno:alpine-2.3.6
+    image: denoland/deno:alpine-2.5.3
     command: deno run --unsafely-ignore-certificate-errors --watch --allow-all --unstable-broadcast-channel --unstable-kv --unstable-cron app/api/src/server.ts
     working_dir: /app
     healthcheck:
@@ -118,7 +118,7 @@ services:
     depends_on:
       api1:
         condition: service_healthy
-    image: denoland/deno:alpine-2.3.6
+    image: denoland/deno:alpine-2.5.3
     command: deno run --unsafely-ignore-certificate-errors --watch --allow-all --unstable-broadcast-channel --unstable-kv --unstable-cron app/api/src/server.ts
     working_dir: /app
     healthcheck:
@@ -304,7 +304,7 @@ services:
     depends_on:
       minio:
         condition: service_healthy
-    image: denoland/deno:alpine-2.3.6
+    image: denoland/deno:alpine-2.5.3
     command: deno run --watch --allow-all ./src/s3/create-bucket-development.ts
     working_dir: /app/app/api
     environment:
