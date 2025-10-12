@@ -1932,5 +1932,23 @@ export class BaseDockerJobQueue {
 
 const isJobRemovableFromQueue = (job: InMemoryDockerJob): boolean => {
   const now = Date.now();
+
+  // Don't remove jobs that should preserve logs for inspection:
+  // - Cancelled: user cancelled the job
+  // - JobReplacedByClient: job was replaced by a new job submission
+  // - TimedOut: job exceeded time limit (useful for debugging)
+  // - WorkerLost: worker disconnected (job gets requeued)
+  // - Error: job failed (useful for debugging)
+  if (
+    job.state === DockerJobState.Finished &&
+    (job.finishedReason === DockerJobFinishedReason.Cancelled ||
+      job.finishedReason === DockerJobFinishedReason.JobReplacedByClient ||
+      job.finishedReason === DockerJobFinishedReason.TimedOut ||
+      job.finishedReason === DockerJobFinishedReason.WorkerLost ||
+      job.finishedReason === DockerJobFinishedReason.Error)
+  ) {
+    return false;
+  }
+
   return job.state === DockerJobState.Finished && now - job.time > MAX_TIME_FINISHED_JOB_IN_QUEUE;
 };
