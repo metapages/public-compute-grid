@@ -30,18 +30,20 @@ import { useQueue } from "./useQueue";
 // make sure these are all in
 // app/browser/public/metaframe.json
 const HashParamKeysSystem = new Set([
-  "autostart",
   "allowsetjob",
-  "control",
+  "autostart",
   "config",
+  "control",
   "debug",
   "definition",
-  "inputs",
-  "queueOverride",
   "ignoreQueueOverride",
+  "inputs",
   "job",
-  "queue",
   "maxJobDuration",
+  "queue",
+  "queueOverride",
+  "resolverefs",
+  "terminal",
 ]);
 
 const getNonSystemHashParams = (): Record<string, string> => {
