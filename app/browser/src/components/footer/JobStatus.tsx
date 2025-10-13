@@ -16,6 +16,7 @@ import { Box, HStack, Icon, Link, Text, useToast, VStack } from "@chakra-ui/reac
 import { Check, Circle, HourglassMedium, Prohibit, WarningCircle } from "@phosphor-icons/react";
 
 import { useMinimalHeader } from "../../hooks/useMinimalHeader";
+import { useActiveJobsCount } from "../../hooks/useActiveJobsCount";
 
 const humanizeDurationOptions = {
   // round: true,
@@ -33,6 +34,9 @@ export const JobStatus: React.FC = () => {
   const newJobDefinition = useStore(state => state.newJobDefinition);
   const jobId = newJobDefinition?.hash;
   const buildLogs = useStore(state => state.buildLogs);
+  const setRightPanelContext = useStore(state => state.setRightPanelContext);
+  const rightPanelContext = useStore(state => state.rightPanelContext);
+  const activeJobsCount = useActiveJobsCount();
 
   const resultsFinished = job?.finished;
 
@@ -43,6 +47,7 @@ export const JobStatus: React.FC = () => {
     workers?.workers?.length || 0,
     buildLogs,
   );
+  const { workerCount } = rest;
   let { desc } = rest;
 
   const copyJobId = useCallback(() => {
@@ -65,6 +70,14 @@ export const JobStatus: React.FC = () => {
     }
   }, [jobId, toast]);
 
+  const openQueuePanel = useCallback(() => {
+    if (rightPanelContext === "queue") {
+      setRightPanelContext(null);
+    } else {
+      setRightPanelContext("queue");
+    }
+  }, [rightPanelContext, setRightPanelContext]);
+
   if (desc && desc.includes(" exec: ")) {
     desc = desc.split(" exec: ")[1];
   } else if (desc) {
@@ -81,9 +94,21 @@ export const JobStatus: React.FC = () => {
     <HStack h={"100%"} gap={5} alignItems="center" justifyContent={"center"}>
       {icon}
       <VStack gap={0.2} alignItems={"flex-start"}>
-        <Text align={"start"} fontWeight={500} noOfLines={1}>
-          {text}
-        </Text>
+        <HStack gap={1} alignItems={"baseline"}>
+          <Text align={"start"} fontWeight={500} noOfLines={1}>
+            {text}
+          </Text>
+          {workerCount !== undefined && (
+            <Text
+              ml="0.5rem"
+              fontSize={"0.85rem"}
+              cursor={"pointer"}
+              onClick={openQueuePanel}
+              _hover={{ textDecoration: "underline" }}>
+              ({activeJobsCount}/{workerCount})
+            </Text>
+          )}
+        </HStack>
 
         {!isMinimalHeader && jobId && (
           <Link href={`${resolvedQueue === "local" ? "http://localhost:8000" : ApiOrigin}/j/${jobId}`} isExternal>
@@ -99,7 +124,7 @@ export const JobStatus: React.FC = () => {
             </Text>
           </Link>
         )}
-        {desc && <Text fontSize={"0.7rem"}>{desc}</Text>}
+        {desc && !workerCount && <Text fontSize={"0.7rem"}>{desc}</Text>}
       </VStack>
     </HStack>
   );
@@ -117,6 +142,7 @@ const getJobStateValues = (
   let desc = null;
   let exitCode = null;
   let showExitCodeRed = false;
+  let returnWorkerCount: number | undefined = undefined;
   const state = job?.state;
 
   const errorBlob = resultFinished?.result?.error as { statusCode: number; json: { message: string } } | undefined;
@@ -177,12 +203,12 @@ const getJobStateValues = (
     case DockerJobState.Running:
       text = buildLogs && buildLogs.length > 0 ? "Job Building" : "Job Running";
       icon = <Icon as={Circle} color={"orange"} boxSize={STATUS_ICON_SIZE} />;
-      desc = `${workerCount} Worker${workerCount > 1 ? "s" : ""}`;
+      returnWorkerCount = workerCount;
       break;
     case DockerJobState.Removed:
       text = "-";
       icon = <Icon as={Prohibit} boxSize={STATUS_ICON_SIZE} opacity={0} />;
       break;
   }
-  return { text, icon, desc, exitCode, jobId, showExitCodeRed };
+  return { text, icon, desc, exitCode, jobId, showExitCodeRed, workerCount: returnWorkerCount };
 };
