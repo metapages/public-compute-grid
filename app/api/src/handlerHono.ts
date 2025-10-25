@@ -92,6 +92,9 @@ app.get("/:queue/metrics", metricsHandler);
 app.get("/q/:queue/status", statusHandler);
 app.get("/q/:queue/metrics", metricsHandler);
 
+// Serve llms.txt file from public folder
+app.get("/llms.txt", serveStatic({ path: "app/browser/public/llms.txt" }));
+
 // Serve static assets, and the index.html as the fallback
 app.get("/*", serveStatic({ root: "app/browser/dist" }));
 app.get("/", serveStatic({ path: "app/browser/dist/index.html" }));

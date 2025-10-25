@@ -1,5 +1,7 @@
 # Run docker containers as metaframes in the browser
 
+[llms.txt](container.mtfm.io/llms.txt)
+
 ## Quickstart: Run a worker
 
 Run a worker pointing to a queue `public1` (you can change this queue name to anything you like, just make it long and

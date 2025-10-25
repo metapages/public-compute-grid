@@ -1,0 +1,306 @@
+# worker.metapage.io - Public Compute Queues
+
+> Open-source, browser-first compute queues for running Docker containers on distributed workers
+> Version: 0.54.80
+> Production: https://container.mtfm.io
+> Documentation: https://docs.metapage.io/docs/containers
+> Repository: https://github.com/metapages/worker.metapage.io
+
+## Overview
+
+This project provides a web-based system for executing Docker containers on distributed compute workers, designed to make compute-intensive tasks accessible directly from browser-based workflows. It enables running Python, R, and other containerized workloads without managing infrastructure.
+
+### Core Value Proposition
+
+- **URL-Based Everything**: Jobs and queues are represented as unique URLs containing all execution context
+- **Zero Setup Required**: No authentication, instant queue creation, queues identified by unguessable hashes
+- **Browser-Native**: Built for metapages (browser-based workflow system), safely embedding arbitrary compute
+- **Bring Your Own Workers**: Run workers on laptops, workstations, or clusters - the API is just coordination
+- **Data Retention**: Storage for 1 month, optimized for low-cost public hosting
+
+## Architecture
+
+### Components
+
+1. **Browser Client** (`app/browser/`)
+   - React + TypeScript + Vite frontend
+   - Chakra UI for interface
+   - Served as metaframe (iframe) at https://container.mtfm.io
+   - Configures and submits jobs, displays results with real-time terminal output
+   - Uses hash parameters for URL-based configuration
+
+2. **API Server** (`app/api/`)
+   - Deno-based HTTP server using Hono framework
+   - Deployed to Deno Deploy (Cloudflare Workers-like)
+   - REST API for job submission, queue management, file storage
+   - WebSocket support for real-time job status updates
+   - S3-compatible blob storage with signed URLs
+
+3. **Worker** (`app/worker/`)
+   - Deno + Docker runtime
+   - Published as Docker image: `metapage/metaframe-docker-worker`
+   - Polls queues, executes jobs in Docker containers
+   - Manages file I/O, resource limits (CPU/GPU), caching
+   - Two modes:
+     - **Local Mode**: All data stays on local machine, desktop-only
+     - **Remote Mode**: Cloud storage, multi-device access
+
+4. **CLI Tool** (`app/cli/`)
+   - Command-line interface for job submission and management
+   - Deno-based, not yet versioned/published as binary
+
+5. **Shared Library** (`app/shared/`)
+   - Common TypeScript types and utilities
+   - Shared between browser, API, worker, and CLI
+
+### Operating Modes
+
+**Local Mode**:
+- Jobs run exclusively on the user's computer
+- Simpler setup, no cloud dependencies
+- Data never leaves local machine
+
+**Remote Mode**:
+- Workers connect to named queues (e.g., `my-unique-queue`)
+- Enables distributed compute, cross-device workflows
+- Supports multiple workers per queue
+
+## Key Technical Features
+
+### Job Execution Environment
+
+Containers automatically receive environment variables:
+- `JOB_INPUTS`: Path to input files directory (`/inputs`)
+- `JOB_OUTPUTS`: Path for output files (`/outputs`)
+- `JOB_CACHE`: Shared cache directory persisting across jobs (`/job-cache`)
+- `JOB_ID`: Unique job identifier
+- `CUDA_VISIBLE_DEVICES`: GPU assignment (if GPUs allocated)
+- URL search parameters automatically injected as environment variables
+
+### Data Flow
+
+1. Input files copied to container's `/inputs` directory
+2. Container executes command/script
+3. Output files must be placed in `/outputs` directory
+4. Cache directory `/job-cache` shared across jobs on same worker (for ML models, datasets)
+
+### Security Model
+
+- Queues secured by URL obscurity (unguessable hashes), no authentication
+- Designed for public internet but workers can restrict to private networks
+- Data auto-expires after 1 month
+
+## REST API Endpoints
+
+### Health
+- `GET /healthz` - Server health check
+
+### File Storage (S3-backed)
+- `GET /f/:key` - Download file (signed S3 URL redirect)
+- `GET /f/:key/exists` - Check file existence (200/404)
+- `PUT /f/:key` - Upload file (signed S3 URL redirect)
+
+### Job Management
+- `POST /q/:queue` - Submit job to queue (creates queue if needed)
+- `GET /q/:queue` - List jobs in queue
+- `GET /q/:queue/j/:jobId` - Get job definition + results + queue status
+- `GET /j/:jobId` - Get job (global lookup)
+- `GET /j/:jobId/definition.json` - Job definition
+- `GET /j/:jobId/result.json` - Job results
+- `GET /j/:jobId/inputs/:file` - Job input file
+- `GET /j/:jobId/outputs/:file` - Job output file
+- `POST /j/:jobId/copy` - Copy job to another queue
+- `POST /q/:queue/j/:jobId/cancel` - Cancel job
+
+### Queue Status
+- `GET /q/:queue/status` - Queue status
+- `GET /q/:queue/metrics` - Prometheus-compatible metrics
+
+## Development Setup
+
+### Prerequisites
+- `just` (command runner): https://just.systems
+- `docker`: https://docs.docker.com/engine/install/
+- `deno`: https://docs.deno.com/runtime/manual/getting_started/installation
+- `mkcert`: https://github.com/FiloSottile/mkcert (run `mkcert -install`)
+
+### Quick Start
+
+```bash
+# Start full local development stack
+just dev
+
+# Runs:
+# - API server (Deno, auto-reload on changes)
+# - Browser dev server (Vite, https://worker-metaframe.localhost:443)
+# - Worker (local mode)
+# - MinIO (local S3), DenoDB (local key-value)
+```
+
+### Development Commands
+
+```bash
+# Start individual services
+just browser dev        # Browser only (points to local API)
+just browser prod       # Browser only (points to production API)
+just worker dev         # Worker only
+just api dev            # API only
+
+# Testing
+just test               # Full test suite (creates new local stack)
+just test-all           # All tests
+just watch              # Watch tests on file changes
+
+# Code quality
+just lint               # Run linters
+just lint-fix           # Fix linting issues
+just fmt                # Format all code
+just check              # TypeScript compilation checks
+
+# Deployment
+just deploy [version]   # Bump version, commit, trigger CI/CD
+```
+
+### Project Structure
+
+```
+.
+├── app/
+│   ├── api/           # Deno HTTP server (Hono framework)
+│   ├── browser/       # React + TypeScript frontend (Vite)
+│   ├── worker/        # Deno worker daemon
+│   ├── cli/           # Command-line tool
+│   ├── shared/        # Shared TypeScript types/utils
+│   ├── test/          # Functional tests
+│   └── deploy/        # Cloud deployment configs
+├── docker-compose*.yml # Development stack configurations
+├── deno.json          # Deno workspace configuration
+└── justfile           # Development commands
+```
+
+## Technology Stack
+
+### Backend (API + Worker)
+- **Runtime**: Deno (TypeScript-first, web standards)
+- **HTTP Framework**: Hono (fast, lightweight)
+- **Docker**: dockerode (Node.js Docker API)
+- **Storage**: S3-compatible API (MinIO for local dev)
+- **Database**: Deno KV (key-value store)
+- **Real-time**: WebSockets, BroadcastChannel
+
+### Frontend (Browser)
+- **Framework**: React 18
+- **Build Tool**: Vite
+- **UI Library**: Chakra UI
+- **State Management**: Zustand
+- **Forms**: Formik + Yup
+- **Metaframe**: @metapages/metapage-react
+
+### Development Tools
+- **Task Runner**: just
+- **Containerization**: Docker + docker-compose
+- **TLS (local)**: mkcert
+- **Linting**: ESLint + Prettier (browser), Deno lint (backend)
+- **Formatting**: Prettier (browser), Deno fmt (backend)
+
+## Use Cases
+
+1. **Machine Learning Pipelines**: Train models, run inference, data preprocessing
+2. **Data Analysis Workflows**: R/Python scripts in browser-based notebooks
+3. **Scientific Computing**: Reproducible computations with containerized environments
+4. **Collaborative Research**: Share compute workflows via URLs, team queues
+5. **Educational**: Teaching computational methods without local setup
+
+## Deployment
+
+### Production API
+- **Platform**: Deno Deploy
+- **Trigger**: Push to `main` branch
+- **URL**: https://container.mtfm.io
+- **Includes**: Browser client (built as part of API deployment)
+
+### Worker Distribution
+- **Image**: Docker Hub `metapage/metaframe-docker-worker`
+- **Trigger**: Git semver tags
+- **Version**: Current 0.54.80
+
+## Important Constraints & Limitations
+
+- Worker instances currently support individual machines only
+- Planned: Kubernetes and Nomad orchestration support
+- Queue security relies on URL obscurity, not authentication
+- Data auto-expires after 1 month to keep costs low
+- Public queue `public1` has limited compute availability
+
+## Example: Running a Worker
+
+**Local mode** (test on your machine):
+```bash
+docker run -p 8000:8000 --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /tmp:/tmp \
+  metapage/metaframe-docker-worker:0.54.80 run \
+  --mode=local \
+  --cpus=2 \
+  --max-job-duration=20m \
+  --data-directory=/tmp/worker-metapage-io-local
+```
+
+**Remote mode** (connect to named queue):
+```bash
+docker run --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /tmp:/tmp \
+  metapage/metaframe-docker-worker:0.54.80 run \
+  --cpus=2 \
+  --max-job-duration=20m \
+  --data-directory=/tmp/worker-metapage-io-remote \
+  my-unique-queue-name
+```
+
+## Example: Submitting a Job
+
+Via browser client:
+https://container.mtfm.io/#?job=<base64-encoded-job-definition>&queue=my-queue
+
+Via CLI:
+```bash
+cd app/cli
+deno run --allow-all src/cli.ts job add my-queue \
+  --file ./data.csv \
+  -c 'python3 /inputs/script.py' \
+  --wait
+```
+
+## Metaframe Integration
+
+This application is a **metaframe** - an iframe-compatible module for the metapage.io platform:
+- Receives inputs via postMessage API
+- Sends outputs via postMessage API
+- URL hash parameters configure behavior (see `metaframe.json`)
+- Can be composed with other metaframes in visual workflows
+
+Hash parameters: `allowsetjob`, `autostart`, `config`, `control`, `debug`, `definition`, `ignoreQueueOverride`, `inputs`, `job`, `maxJobDuration`, `queue`, `queueOverride`, `resolverefs`, `terminal`
+
+## Contributing & Development Philosophy
+
+- **Open Source**: Built for public good, funded by Astera Foundation
+- **Web-First**: Designed for browser embedding, portability
+- **URL-Shareable**: Everything accessible via links
+- **Low Cost**: Optimized for minimal hosting expenses
+- **Team Collaboration**: Small research teams as primary users
+
+## Key Files for AI/LLM Understanding
+
+- `README.md` - Project overview, setup instructions
+- `app/api/src/handlerHono.ts` - API route definitions
+- `app/worker/src/lib/local-handler.ts` - Worker HTTP handler (local mode)
+- `app/worker/src/cli.ts` - Worker CLI entry point
+- `app/browser/public/metaframe.json` - Metaframe metadata
+- `docker-compose*.yml` - Development stack configurations
+- `justfile` - Development commands
+- `deno.json` - Deno workspace and dependency configuration
+
+## Acknowledgements
+
+Funded by Astera Foundation (2025) for open science infrastructure. Original seed project (2018) supported by Autodesk Life Sciences.
