@@ -1,5 +1,7 @@
 # Public Compute Queues for everyone everywhere all at once
 
+[llms.txt](https://container.mtfm.io/llms.txt)
+
 https://container.mtfm.io
 
 Examples: https://about.metapage.io/examples
