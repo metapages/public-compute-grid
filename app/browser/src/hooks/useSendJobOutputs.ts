@@ -67,6 +67,8 @@ export const useSendJobOutputs = () => {
   const [stateFinished, setStateFinished] = useState<StateChangeValueFinished | undefined>(undefined);
   useEffect(() => {
     if (dockerJobServerTuple?.[0]) {
+      // Clear stateFinished immediately when jobId changes to prevent using stale data
+      setStateFinished(undefined);
       let cancelled = false;
       (async () => {
         const retrievedFinishedJob = await cache.getFinishedJob(dockerJobServerTuple?.[0]);
@@ -77,6 +79,9 @@ export const useSendJobOutputs = () => {
       return () => {
         cancelled = true;
       };
+    } else {
+      // Clear stateFinished when there's no job
+      setStateFinished(undefined);
     }
   }, [dockerJobServerTuple]);
 
