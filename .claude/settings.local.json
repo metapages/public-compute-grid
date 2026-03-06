@@ -12,7 +12,8 @@
       "Bash(echo \"MODE: $MODE\")",
       "Bash(docker logs:*)",
       "Bash(deno test:*)",
-      "WebFetch(domain:docs.metapage.io)"
+      "WebFetch(domain:docs.metapage.io)",
+      "Bash(head:*)"
     ],
     "deny": [],
     "ask": []

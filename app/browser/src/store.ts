@@ -149,6 +149,7 @@ export const useStore = create<MainStore>((set, get) => ({
       }));
       return;
     }
+
     if (get().newJobDefinition?.hash === job.hash) {
       // no change.
       // But we update the state anyway, in case the job state changed
@@ -158,9 +159,6 @@ export const useStore = create<MainStore>((set, get) => ({
         currentState = cachedFinishedState;
       }
 
-      // if (cachedFinishedState) {
-      //   currentState.finished = cachedFinishedState;
-      // }
       set(() => ({
         jobState: get().jobStates[job.hash] ? [job.hash, currentState] : EmptyJobStateTuple,
       }));
