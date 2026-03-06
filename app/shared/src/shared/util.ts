@@ -1,14 +1,14 @@
 import {
-  type DataRef,
   type DockerJobDefinitionInputRefs,
   DockerJobFinishedReason,
+  type DockerJobImageBuild,
   DockerJobState,
   type InMemoryDockerJob,
+  type InputsRefs,
   type StateChangeValueFinished,
 } from "/@/shared/types.ts";
 import fetchRetry from "fetch-retry";
 import { LRUMap } from "mnemonist";
-import { create } from "mutative";
 import stringify from "safe-stable-stringify";
 
 export const getJobStateString = (job?: InMemoryDockerJob | undefined | null): string => {
@@ -185,51 +185,117 @@ export function sanitizeFilename(filename: string): string {
   return sanitized;
 }
 
+/**
+ * Cleans InputsRefs for hashing: for each DataRef, only includes `value` and `type`
+ * (excludes `hash` and any other extra fields). For URL-type refs, normalizes the
+ * URL to remove presigned parameters.
+ *
+ * NOTE: This takes ALL keys from the record - the set of input/configFile names
+ * is unbounded and determined by the user's job configuration.
+ */
+const cleanInputsRefsForHash = (
+  refs: InputsRefs | undefined,
+): Record<string, { value: unknown; type?: string }> | undefined => {
+  if (!refs) return undefined;
+  const cleaned: Record<string, { value: unknown; type?: string }> = {};
+  for (const key of Object.keys(refs)) {
+    const ref = refs[key];
+    let value = ref.value;
+    // Normalize URLs to remove presigned/S3 query params
+    if (ref.type === "url" && typeof value === "string") {
+      value = reduceUrlToHashVersion(value);
+    }
+    cleaned[key] = { value, type: ref.type };
+  }
+  return cleaned;
+};
+
+/**
+ * Builds a deterministic hash blob from a DockerJobDefinitionInputRefs using only
+ * whitelisted known fields. This ensures that extra fields added by clients, servers,
+ * or intermediate systems do not affect the hash.
+ *
+ * Fields are grouped into:
+ * 1. Scalar/array fields from DockerJobDefinitionInputsBase64V1 (fully known)
+ * 2. Structured sub-objects with whitelisted sub-fields (build, requirements)
+ * 3. Open-ended Record fields where all keys are included (env, inputs, configFiles)
+ *    - these are marked with comments since we can't whitelist individual keys
+ */
+const buildJobHashBlob = (job: DockerJobDefinitionInputRefs): Record<string, unknown> => {
+  const blob: Record<string, unknown> = {};
+
+  // --- Scalar/array fields (fully known from DockerJobDefinitionInputsBase64V1) ---
+  if (job.v !== undefined) blob.v = job.v;
+  if (job.image !== undefined) blob.image = job.image;
+  if (job.command !== undefined) blob.command = job.command;
+  if (job.entrypoint !== undefined) blob.entrypoint = job.entrypoint;
+  if (job.workdir !== undefined) blob.workdir = job.workdir;
+  if (job.shmSize !== undefined) blob.shmSize = job.shmSize;
+  if (job.maxDuration !== undefined) blob.maxDuration = job.maxDuration;
+  if (job.tags !== undefined) blob.tags = job.tags;
+
+  // --- Structured sub-object: build (whitelisted sub-fields from DockerJobImageBuild) ---
+  if (job.build) {
+    const build: Partial<DockerJobImageBuild> = {};
+    if (job.build.context !== undefined) build.context = job.build.context;
+    if (job.build.buildContext !== undefined) build.buildContext = job.build.buildContext;
+    if (job.build.filename !== undefined) build.filename = job.build.filename;
+    if (job.build.target !== undefined) build.target = job.build.target;
+    if (job.build.dockerfile !== undefined) build.dockerfile = job.build.dockerfile;
+    if (job.build.buildArgs !== undefined) build.buildArgs = job.build.buildArgs;
+    if (job.build.platform !== undefined) build.platform = job.build.platform;
+    blob.build = build;
+  }
+
+  // --- Structured sub-object: requirements (whitelisted sub-fields) ---
+  if (job.requirements) {
+    const reqs: Record<string, unknown> = {};
+    if (job.requirements.cpus !== undefined) reqs.cpus = job.requirements.cpus;
+    if (job.requirements.gpus !== undefined) reqs.gpus = job.requirements.gpus;
+    if (job.requirements.maxDuration !== undefined) reqs.maxDuration = job.requirements.maxDuration;
+    if (job.requirements.memory !== undefined) reqs.memory = job.requirements.memory;
+    blob.requirements = reqs;
+  }
+
+  // --- Open-ended Record: env (all keys included, but channel/CHANNEL excluded) ---
+  // NOTE: env keys are unbounded - any hash param or user-defined env var can appear here.
+  // We include all keys except channel/CHANNEL which change every page refresh.
+  if (job.env) {
+    const env: Record<string, string> = {};
+    for (const key of Object.keys(job.env)) {
+      if (key === "channel" || key === "CHANNEL") continue;
+      env[key] = job.env[key];
+    }
+    if (Object.keys(env).length > 0) {
+      blob.env = env;
+    }
+  }
+
+  // --- Open-ended Record: inputs (all keys included, DataRef cleaned) ---
+  // NOTE: input names are unbounded - determined by the user's metaframe inputs.
+  const cleanedInputs = cleanInputsRefsForHash(job.inputs);
+  if (cleanedInputs && Object.keys(cleanedInputs).length > 0) {
+    blob.inputs = cleanedInputs;
+  }
+
+  // --- Open-ended Record: configFiles (all keys included, DataRef cleaned) ---
+  // NOTE: configFile names are unbounded - determined by the user's URL hash "inputs" param.
+  const cleanedConfigFiles = cleanInputsRefsForHash(job.configFiles);
+  if (cleanedConfigFiles && Object.keys(cleanedConfigFiles).length > 0) {
+    blob.configFiles = cleanedConfigFiles;
+  }
+
+  return blob;
+};
+
 export const shaDockerJob = (
   job: DockerJobDefinitionInputRefs,
 ): Promise<string> => {
   if (!job) {
     throw new Error("shaDockerJob: job is undefined");
   }
-  const jobReadyForSha = create(job, (draft: DockerJobDefinitionInputRefs) => {
-    // Remove any presignedurl/... from the URLs
-    const configFiles = draft.configFiles;
-    if (configFiles) {
-      Object.keys(configFiles).forEach((key) => {
-        if (configFiles[key].type === "url") {
-          configFiles[key].value = reduceUrlToHashVersion(
-            (configFiles[key] as DataRef<string>)?.value,
-          );
-        }
-        delete configFiles[key].hash;
-      });
-    }
-
-    // Remove any presignedurl/... from the URLs
-    const inputs = draft.inputs;
-    if (inputs) {
-      Object.keys(inputs).forEach((key) => {
-        if (inputs[key].type === "url") {
-          inputs[key].value = reduceUrlToHashVersion(
-            (inputs[key] as DataRef<string>)?.value,
-          );
-        }
-        delete inputs[key].hash;
-      });
-    }
-
-    // remove the channel env var since it changes every refresh
-    if (draft?.env?.channel) {
-      delete draft.env.channel;
-    }
-    if (draft?.env?.CHANNEL) {
-      delete draft.env.CHANNEL;
-    }
-
-    // other aspects not relevant to the hash
-  });
-
-  return shaObject(jobReadyForSha);
+  const blob = buildJobHashBlob(job);
+  return shaObject(blob);
 };
 
 const reduceUrlToHashVersion = (url: string): string => {
