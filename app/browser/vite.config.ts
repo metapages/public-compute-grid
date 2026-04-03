@@ -4,6 +4,7 @@ import { defineConfig } from "vite";
 
 import react from "@vitejs/plugin-react";
 import process from "node:process";
+import { VitePWA } from "vite-plugin-pwa";
 
 const HOST: string = process.env.HOST || "server1.localhost";
 const PORT: string = process.env.PORT || "4440";
@@ -25,7 +26,22 @@ export default defineConfig(({ mode }) => ({
     preserveSymlinks: true,
   },
 
-  plugins: [react()],
+  plugins: [
+    react(),
+    VitePWA({
+      strategies: "injectManifest",
+      srcDir: "src",
+      filename: "sw.ts",
+      registerType: "autoUpdate",
+      manifest: false,
+      injectManifest: {
+        globPatterns: ["**/*.{js,css,html,ico,woff2,webmanifest}"],
+      },
+      devOptions: {
+        enabled: false,
+      },
+    }),
+  ],
 
   esbuild: {
     logOverride: { "this-is-undefined-in-esm": "silent" },
