@@ -483,10 +483,10 @@ export class DockerJobQueue {
               tag: this.workerId,
               job: locallyRunningJobId,
               state: computeQueuesShared.DockerJobState.Running,
-              value: ({
+              value: {
                 worker: this.workerId,
                 time: locallyRunningJob.time || Date.now(),
-              } as computeQueuesShared.StateChangeValueRunning),
+              } as computeQueuesShared.StateChangeValueRunning,
             },
           });
           break;
@@ -794,10 +794,10 @@ export class DockerJobQueue {
           reason: computeQueuesShared.DockerJobFinishedReason.Error,
           worker: this.workerId,
           time: Date.now(),
-          result: ({
+          result: {
             error: `${err}`,
             logs: [[`💥 ${err}`, Date.now(), true]],
-          } as computeQueuesShared.DockerRunResultWithOutputs),
+          } as computeQueuesShared.DockerRunResultWithOutputs,
         };
 
         // console.log(
@@ -1048,14 +1048,14 @@ export class DockerJobQueue {
           reason: computeQueuesShared.DockerJobFinishedReason.Error,
           worker: this.workerId,
           time: Date.now(),
-          result: ({
+          result: {
             error: err,
             logs: [[`💥 Job Error`, Date.now(), true], [
               `${err}`,
               Date.now(),
               true,
             ]],
-          } as computeQueuesShared.DockerRunResultWithOutputs),
+          } as computeQueuesShared.DockerRunResultWithOutputs,
         };
 
         // console.log(

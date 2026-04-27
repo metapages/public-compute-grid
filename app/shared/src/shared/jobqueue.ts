@@ -430,7 +430,7 @@ export class BaseDockerJobQueue {
           this.broadcastToLocalWorkers(
             JSON.stringify({
               type: WebsocketMessageTypeServerBroadcast.ClearJobCache,
-              payload: (payload.value as BroadcastChannelDeleteCachedJob),
+              payload: payload.value as BroadcastChannelDeleteCachedJob,
             } as WebsocketMessageServerBroadcast),
           );
           break;

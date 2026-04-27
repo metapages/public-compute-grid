@@ -205,7 +205,9 @@ const cleanInputsRefsForHash = (
     if (ref.type === "url" && typeof value === "string") {
       value = reduceUrlToHashVersion(value);
     }
-    cleaned[key] = { value, type: ref.type };
+    const entry: { value: unknown; type?: string } = { value };
+    if (ref.type != null) entry.type = ref.type;
+    cleaned[key] = entry;
   }
   return cleaned;
 };
@@ -225,36 +227,42 @@ const buildJobHashBlob = (job: DockerJobDefinitionInputRefs): Record<string, unk
   const blob: Record<string, unknown> = {};
 
   // --- Scalar/array fields (fully known from DockerJobDefinitionInputsBase64V1) ---
-  if (job.v !== undefined) blob.v = job.v;
-  if (job.image !== undefined) blob.image = job.image;
-  if (job.command !== undefined) blob.command = job.command;
-  if (job.entrypoint !== undefined) blob.entrypoint = job.entrypoint;
-  if (job.workdir !== undefined) blob.workdir = job.workdir;
-  if (job.shmSize !== undefined) blob.shmSize = job.shmSize;
-  if (job.maxDuration !== undefined) blob.maxDuration = job.maxDuration;
-  if (job.tags !== undefined) blob.tags = job.tags;
+  // Use != null to exclude both undefined AND null, so that fields explicitly
+  // set to null by external clients don't produce a different hash.
+  if (job.v != null) blob.v = job.v;
+  if (job.image != null) blob.image = job.image;
+  if (job.command != null) blob.command = job.command;
+  if (job.entrypoint != null) blob.entrypoint = job.entrypoint;
+  if (job.workdir != null) blob.workdir = job.workdir;
+  if (job.shmSize != null) blob.shmSize = job.shmSize;
+  if (job.maxDuration != null) blob.maxDuration = job.maxDuration;
+  if (job.tags != null) blob.tags = job.tags;
 
   // --- Structured sub-object: build (whitelisted sub-fields from DockerJobImageBuild) ---
   if (job.build) {
     const build: Partial<DockerJobImageBuild> = {};
-    if (job.build.context !== undefined) build.context = job.build.context;
-    if (job.build.buildContext !== undefined) build.buildContext = job.build.buildContext;
-    if (job.build.filename !== undefined) build.filename = job.build.filename;
-    if (job.build.target !== undefined) build.target = job.build.target;
-    if (job.build.dockerfile !== undefined) build.dockerfile = job.build.dockerfile;
-    if (job.build.buildArgs !== undefined) build.buildArgs = job.build.buildArgs;
-    if (job.build.platform !== undefined) build.platform = job.build.platform;
-    blob.build = build;
+    if (job.build.context != null) build.context = job.build.context;
+    if (job.build.buildContext != null) build.buildContext = job.build.buildContext;
+    if (job.build.filename != null) build.filename = job.build.filename;
+    if (job.build.target != null) build.target = job.build.target;
+    if (job.build.dockerfile != null) build.dockerfile = job.build.dockerfile;
+    if (job.build.buildArgs != null) build.buildArgs = job.build.buildArgs;
+    if (job.build.platform != null) build.platform = job.build.platform;
+    if (Object.keys(build).length > 0) {
+      blob.build = build;
+    }
   }
 
   // --- Structured sub-object: requirements (whitelisted sub-fields) ---
   if (job.requirements) {
     const reqs: Record<string, unknown> = {};
-    if (job.requirements.cpus !== undefined) reqs.cpus = job.requirements.cpus;
-    if (job.requirements.gpus !== undefined) reqs.gpus = job.requirements.gpus;
-    if (job.requirements.maxDuration !== undefined) reqs.maxDuration = job.requirements.maxDuration;
-    if (job.requirements.memory !== undefined) reqs.memory = job.requirements.memory;
-    blob.requirements = reqs;
+    if (job.requirements.cpus != null) reqs.cpus = job.requirements.cpus;
+    if (job.requirements.gpus != null) reqs.gpus = job.requirements.gpus;
+    if (job.requirements.maxDuration != null) reqs.maxDuration = job.requirements.maxDuration;
+    if (job.requirements.memory != null) reqs.memory = job.requirements.memory;
+    if (Object.keys(reqs).length > 0) {
+      blob.requirements = reqs;
+    }
   }
 
   // --- Open-ended Record: env (all keys included, but channel/CHANNEL excluded) ---
