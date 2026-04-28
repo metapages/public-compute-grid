@@ -3,9 +3,9 @@ Deno.cron("Check for webhooks to retry", "* * * * *", () => {
 });
 
 import { JobDataCacheDurationMilliseconds } from "./constants.ts";
-import { getKv } from "/@/shared/kv.ts";
-import type { DockerJobControlConfig } from "/@/shared/types.ts";
-import { getJobColorizedString, getQueueColorizedString } from "/@/shared/util.ts";
+import { getKv } from "@shared/kv.ts";
+import type { DockerJobControlConfig } from "@shared/types.ts";
+import { getJobColorizedString, getQueueColorizedString } from "@shared/util.ts";
 
 export const callJobWebhook = async (
   queue: string,

@@ -1,5 +1,5 @@
-import { db } from "/@/db/db.ts";
-import { getApiDockerJobQueue } from "/@/routes/websocket.ts";
+import { db } from "@/db/db.ts";
+import { getApiDockerJobQueue } from "@/routes/websocket.ts";
 import type { Context } from "hono";
 
 import {

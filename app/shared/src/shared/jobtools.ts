@@ -1,5 +1,5 @@
-import { decodeBase64 } from "/@/shared/base64.ts";
-import { ENV_VAR_DATA_ITEM_LENGTH_MAX, fetchBlobFromHash } from "/@/shared/dataref.ts";
+import { decodeBase64 } from "@shared/base64.ts";
+import { ENV_VAR_DATA_ITEM_LENGTH_MAX, fetchBlobFromHash } from "@shared/dataref.ts";
 import {
   type DataRef,
   DataRefType,
@@ -11,8 +11,8 @@ import {
   type StateChangeValueQueued,
   type WebsocketMessageClientToServer,
   WebsocketMessageTypeClientToServer,
-} from "/@/shared/types.ts";
-import { sanitizeFilename, shaDockerJob } from "/@/shared/util.ts";
+} from "@shared/types.ts";
+import { sanitizeFilename, shaDockerJob } from "@shared/util.ts";
 import { retryAsync } from "retry";
 import { ensureDir, ensureDirSync, exists, existsSync } from "std/fs";
 import { dirname, join } from "std/path";

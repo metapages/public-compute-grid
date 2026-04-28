@@ -1,11 +1,12 @@
 {
   "workspace": [
-    "./app/api",
-    "./app/cli",
-    "./app/shared",
-    "./app/test",
-    "./app/worker"
+    "app/api",
+    "app/cli",
+    "app/shared",
+    "app/test",
+    "app/worker"
   ],
+  "unstable": ["kv", "broadcast-channel", "cron", "sloppy-imports"],
   "imports": {
     "@cliffy/command": "jsr:@cliffy/command@^1.0.0-rc.7",
     "@korkje/wsi": "jsr:@korkje/wsi@^0.3.2",
@@ -59,40 +60,12 @@
     "uuid": "npm:uuid@9.0.1",
     "zip": "https://deno.land/x/zip@v1.2.5/mod.ts"
   },
-  "unstable": [
-    "kv",
-    "broadcast-channel",
-    "sloppy-imports"
-  ],
-  "exclude": [
-    "./app/browser",
-    "./app/shared/dist",
-    "./app/deploy"
-  ],
   "nodeModulesDir": "auto",
-  "deploy": {
-    "project": "0ec3b251-6723-4067-9587-39c2c3c2703a",
-    "exclude": [
-      "**/node_modules"
-    ],
-    "include": [
-      "app/api/assets",
-      "app/api/src",
-      "app/api/deno.json",
-      "app/cli/deno.json",
-      "app/worker/deno.json",
-      "app/test/deno.json",
-      "app/shared/deno.json",
-      "app/shared/src",
-      "deno.json",
-      "deno.lock"
-    ],
-    "entrypoint": "app/api/src/server.ts"
-  },
   "fmt": {
     "lineWidth": 120,
     "indentWidth": 2,
     "semiColons": true,
-    "singleQuote": false
+    "singleQuote": false,
+    "exclude": ["app/browser"]
   }
 }

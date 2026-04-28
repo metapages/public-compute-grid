@@ -13,7 +13,7 @@
 import { ms } from "ms";
 import { createNanoEvents, type Emitter } from "nanoevents";
 import { delay } from "std/async/delay";
-import { DB } from "/@/shared/db.ts";
+import { DB } from "@shared/db.ts";
 import {
   type BroadcastJobDefinitions,
   type BroadcastJobStates,
@@ -41,7 +41,7 @@ import {
   type WebsocketMessageWorkerToServer,
   type WorkerRegistration,
   type WorkerStatusResponse,
-} from "/@/shared/types.ts";
+} from "@shared/types.ts";
 import {
   getJobColorizedString,
   getJobStateString,
@@ -52,7 +52,7 @@ import {
   resolveMostCorrectJob,
   setJobStateRemoved,
   setJobStateRunning,
-} from "/@/shared/util.ts";
+} from "@shared/util.ts";
 
 import type { BroadcastChannelRedis } from "@metapages/deno-redis-broadcastchannel";
 import { setJobStateFinished } from "../client.ts";
@@ -430,7 +430,7 @@ export class BaseDockerJobQueue {
           this.broadcastToLocalWorkers(
             JSON.stringify({
               type: WebsocketMessageTypeServerBroadcast.ClearJobCache,
-              payload: (payload.value as BroadcastChannelDeleteCachedJob),
+              payload: payload.value as BroadcastChannelDeleteCachedJob,
             } as WebsocketMessageServerBroadcast),
           );
           break;

@@ -1,7 +1,7 @@
 import { assertEquals, assertNotEquals } from "std/assert";
 
-import { DataRefType, type DockerJobDefinitionInputRefs } from "/@/shared/types.ts";
-import { shaDockerJob } from "/@/shared/util.ts";
+import { DataRefType, type DockerJobDefinitionInputRefs } from "@shared/types.ts";
+import { shaDockerJob } from "@shared/util.ts";
 
 // A minimal job definition used as a base for tests
 const baseJob: DockerJobDefinitionInputRefs = {

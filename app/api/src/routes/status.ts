@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 
-import { getApiDockerJobQueue } from "/@/routes/websocket.ts";
+import { getApiDockerJobQueue } from "@/routes/websocket.ts";
 
 export const statusHandler = async (c: Context) => {
   const queue: string | undefined = c.req.param("queue");

@@ -13,7 +13,12 @@
       "Bash(docker logs:*)",
       "Bash(deno test:*)",
       "WebFetch(domain:docs.metapage.io)",
-      "Bash(head:*)"
+      "Bash(head:*)",
+      "Bash(docker context:*)",
+      "WebSearch",
+      "Bash(tail:*)",
+      "Bash(just fmt-check:*)",
+      "Bash(just ci:*)"
     ],
     "deny": [],
     "ask": []

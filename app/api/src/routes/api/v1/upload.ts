@@ -1,4 +1,4 @@
-import { bucketParams, s3Client } from "/@/routes/s3config.ts";
+import { bucketParams, s3Client } from "@/routes/s3config.ts";
 import { PutObjectCommand } from "aws-sdk/client-s3";
 import { getSignedUrl } from "aws-sdk/s3-request-presigner";
 import type { Context } from "hono";

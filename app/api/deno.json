@@ -1,8 +1,12 @@
 {
+  "deploy": {
+    "org": "metapage",
+    "app": "container"
+  },
   "name": "@metapages/compute-queues-api",
   "exports": {},
-  "imports": {
-    "/@/": "./src/"
+  "tasks": {
+    "start": "deno run -A --config deno.json src/server.ts"
   },
   "fmt": {
     "exclude": ["dist", "README.md", "*.json", "*.lock"],
@@ -10,6 +14,8 @@
     "indentWidth": 2,
     "semiColons": true,
     "singleQuote": false
-    
+  },
+  "imports": {
+    "@/": "./src/"
   }
 }

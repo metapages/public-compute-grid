@@ -1,4 +1,4 @@
-import { bucketParams, s3Client } from "/@/routes/s3config.ts";
+import { bucketParams, s3Client } from "@/routes/s3config.ts";
 import { HeadObjectCommand } from "aws-sdk/client-s3";
 import type { Context } from "hono";
 
