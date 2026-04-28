@@ -1,6 +1,6 @@
 import { type DataRef, DataRefType } from "@metapages/compute-queues-shared";
-import { db } from "/@/db/db.ts";
-import { getDownloadPresignedUrl } from "/@/routes/api/v1/download.ts";
+import { db } from "@/db/db.ts";
+import { getDownloadPresignedUrl } from "@/routes/api/v1/download.ts";
 import type { Context } from "hono";
 import mime from "mime";
 

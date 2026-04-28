@@ -1,7 +1,7 @@
 import { createHandler } from "metapages/worker/routing/handlerDeno";
 
-import { handlerHttp } from "/@/handlerHono.ts";
-import { handleWebsocketConnection } from "/@/handlerWs.ts";
+import { handlerHttp } from "@/handlerHono.ts";
+import { handleWebsocketConnection } from "@/handlerWs.ts";
 
 const port = parseInt(Deno.env.get("PORT") || "8000");
 

@@ -1,5 +1,5 @@
 import type { Context } from "hono";
-import { getApiDockerJobQueue } from "/@/routes/websocket.ts";
+import { getApiDockerJobQueue } from "@/routes/websocket.ts";
 
 import { type EnqueueJob, shaDockerJob } from "@metapages/compute-queues-shared";
 

@@ -6,7 +6,7 @@ import {
   type InMemoryDockerJob,
   type InputsRefs,
   type StateChangeValueFinished,
-} from "/@/shared/types.ts";
+} from "@shared/types.ts";
 import fetchRetry from "fetch-retry";
 import { LRUMap } from "mnemonist";
 import stringify from "safe-stable-stringify";
