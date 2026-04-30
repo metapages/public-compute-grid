@@ -97,6 +97,23 @@ Timestamp: ${Date.now()}`;
 
       const inputFileContent = await inputFileResponse!.text();
       assertEquals(inputFileResponse!.status, 200);
+      if (inputFileContent !== testInputContent) {
+        console.log(
+          `DEBUG: inputFileContent.length=${inputFileContent.length}, testInputContent.length=${testInputContent.length}`,
+        );
+        console.log(`DEBUG: inputFileContent first 200 chars: ${JSON.stringify(inputFileContent.substring(0, 200))}`);
+        console.log(`DEBUG: testInputContent first 200 chars: ${JSON.stringify(testInputContent.substring(0, 200))}`);
+        console.log(
+          `DEBUG: inputFileContent last 50 chars: ${
+            JSON.stringify(inputFileContent.substring(inputFileContent.length - 50))
+          }`,
+        );
+        console.log(
+          `DEBUG: testInputContent last 50 chars: ${
+            JSON.stringify(testInputContent.substring(testInputContent.length - 50))
+          }`,
+        );
+      }
       assertEquals(inputFileContent, testInputContent);
 
       // Test output file access with multi-segment path
