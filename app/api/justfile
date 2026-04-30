@@ -72,30 +72,32 @@ _serve:
     DENO_KV_URL=http://denokv:4512 \
         deno run --allow-sys --allow-net --allow-read --allow-env --unstable-kv --unstable-cron app/api/src/server.ts
 
-# Perform a fresh build and deploy to deno-deploy
-deploy: _ensure_deployctl build
-    cd ../../ && \
-        deployctl deploy \
-        --project=compute-queue-api \
-        --prod \
-        --include=app/api/deno.json \
-        --include=app/api/src \
-        --include=app/browser/dist \
-        --include=app/cli/deno.json \
-        --include=app/shared/deno.json \
-        --include=app/shared/src \
-        --include=app/test/deno.json \
-        --include=app/worker/deno.json \
-        --include=deno.json \
-        --include=deno.lock \
-        app/api/src/server.ts
+# Perform a fresh build and deploy to deno deploy
+deploy: build
+    #!/usr/bin/env bash
+    # The new deno deploy does not like workspaces, so we must
+    # modify a workspace into a standalone app for the api
+    set -euo pipefail
+    deploy=$(mktemp -d)
+    tmp=$(mktemp)
+    cp deno.json $deploy/
+    cp -r src $deploy/
+    mkdir -p $deploy/app/browser
+    cp -r ../browser/dist $deploy/app/browser/
+    cp -r ../shared/src $deploy/shared
+    jq --slurpfile src ../../deno.json '.imports = $src[0].imports' deno.json > $deploy/deno.json
+    jq --slurpfile src ../../deno.json '.unstable = $src[0].unstable' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json
+    jq --slurpfile src ../../deno.json '.nodeModulesDir = $src[0].nodeModulesDir' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json
+    jq '.imports["@/"] = "./src/"' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json
+    jq '.imports["@metapages/compute-queues-shared"] = "./shared/mod.ts"' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json
+    jq '.imports["@shared/"] = "./shared/shared/"' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json
+    cd $deploy/
+    du -sh .
+    deno deploy --prod
 
 # Delete generate assets and caches
 clean:
     rm -rf dist
-
-@_ensure_deployctl:
-    if ! command -v deployctl &> /dev/null; then echo '‼️ deployctl is being installed ‼️'; deno install -Arf jsr:@deno/deployctl; fi
 
 # Add new helper recipe for building shared dependencies
 _build_shared:

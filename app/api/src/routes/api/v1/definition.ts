@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 
-import { db } from "/@/db/db.ts";
+import { db } from "@/db/db.ts";
 
 export const getDefinitionHandler = async (c: Context) => {
   try {

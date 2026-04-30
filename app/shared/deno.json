@@ -5,7 +5,8 @@
     "build": "deno run --allow-read --allow-env --allow-run --allow-write ./bundle.ts"
   },
   "imports": {
-    "/@/": "./src/"
+    "@shared": "./src/shared",
+    "@shared/": "./src/shared/"
   },
   "compilerOptions": {
     "strict": true

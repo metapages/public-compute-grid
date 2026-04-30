@@ -1,4 +1,4 @@
-import { db } from "/@/db/db.ts";
+import { db } from "@/db/db.ts";
 import type { Context } from "hono";
 
 import type { InMemoryDockerJob } from "@metapages/compute-queues-shared";

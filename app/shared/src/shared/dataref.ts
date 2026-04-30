@@ -1,8 +1,8 @@
-import { type DataRef, DataRefType, DataRefTypeDefault, type InputsRefs } from "/@/shared/types.ts";
+import { type DataRef, DataRefType, DataRefTypeDefault, type InputsRefs } from "@shared/types.ts";
 
-import { fetchRobust as fetch, sha256Buffer } from "/@/shared/util.ts";
+import { fetchRobust as fetch, sha256Buffer } from "@shared/util.ts";
 
-import { decodeBase64 } from "/@/shared/base64.ts";
+import { decodeBase64 } from "@shared/base64.ts";
 
 import type { DataRefSerializedBlob, MetaframeInputMap } from "@metapages/metapage";
 

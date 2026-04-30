@@ -172,14 +172,22 @@ const getJobStateValues = (
         case DockerJobFinishedReason.Error:
           showExitCodeRed = true;
           icon = <Icon color={"red"} as={WarningCircle} boxSize={STATUS_ICON_SIZE} />;
-          text = `Job Failed ${resultFinished?.result?.duration ? `(${humanizeDuration(resultFinished.result.duration, humanizeDurationOptions)})` : ""}`;
+          text = `Job Failed ${
+            resultFinished?.result?.duration
+              ? `(${humanizeDuration(resultFinished.result.duration, humanizeDurationOptions)})`
+              : ""
+          }`;
           // truncate to char len, add modal if it's longer than one line (to right of exit code)
           desc = errorBlob?.json?.message;
           exitCode = errorBlob?.statusCode;
           break;
         case DockerJobFinishedReason.Success:
           exitCode = resultFinished?.result?.StatusCode;
-          text = `Job Complete ${resultFinished?.result?.duration ? `(${humanizeDuration(resultFinished.result.duration, humanizeDurationOptions)})` : ""}`;
+          text = `Job Complete ${
+            resultFinished?.result?.duration
+              ? `(${humanizeDuration(resultFinished.result.duration, humanizeDurationOptions)})`
+              : ""
+          }`;
           if (exitCode === 0) {
             icon = <Icon color={"green"} as={Check} boxSize={STATUS_ICON_SIZE} />;
           } else {
@@ -188,7 +196,11 @@ const getJobStateValues = (
           break;
         case DockerJobFinishedReason.TimedOut:
           icon = <Icon color={"red"} as={WarningCircle} boxSize={STATUS_ICON_SIZE} />;
-          text = `Job Timed Out ${resultFinished?.result?.duration ? `(${humanizeDuration(resultFinished.result.duration, humanizeDurationOptions)})` : ""}`;
+          text = `Job Timed Out ${
+            resultFinished?.result?.duration
+              ? `(${humanizeDuration(resultFinished.result.duration, humanizeDurationOptions)})`
+              : ""
+          }`;
           break;
         case DockerJobFinishedReason.WorkerLost:
           icon = <Icon color={"red"} as={WarningCircle} boxSize={STATUS_ICON_SIZE} />;

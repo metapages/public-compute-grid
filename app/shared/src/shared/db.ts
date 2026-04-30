@@ -4,7 +4,7 @@ import { LRUMap } from "mnemonist";
 import { retryAsync } from "retry";
 import { ensureDir } from "std/fs";
 import { join } from "std/path";
-import { getKv } from "/@/shared/kv.ts";
+import { getKv } from "@shared/kv.ts";
 import {
   type DataRef,
   DefaultNamespace,
@@ -16,8 +16,8 @@ import {
   type StateChange,
   type StateChangeValue,
   type StateChangeValueFinished,
-} from "/@/shared/types.ts";
-import { addJobProcessSubmissionWebhook } from "/@/shared/webhooks.ts";
+} from "@shared/types.ts";
+import { addJobProcessSubmissionWebhook } from "@shared/webhooks.ts";
 
 import { JobDataCacheDurationMilliseconds } from "./constants.ts";
 import {
@@ -83,7 +83,7 @@ export class DB {
     if (AWS_SECRET_ACCESS_KEY) {
       // Import S3 functions
       ({ deleteFromS3, putJsonToS3, getJsonFromS3 } = await import(
-        "/@/shared/s3.ts"
+        "@shared/s3.ts"
       ));
     } else {
       deleteFromS3 = async (key: string): Promise<void> => {
