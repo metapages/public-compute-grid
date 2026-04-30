@@ -18,7 +18,8 @@
       "WebSearch",
       "Bash(tail:*)",
       "Bash(just fmt-check:*)",
-      "Bash(just ci:*)"
+      "Bash(just ci:*)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []

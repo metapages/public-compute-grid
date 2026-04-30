@@ -275,3 +275,149 @@ Deno.test("shaDockerJob: env with only channel vars produces same hash as no env
   const hash2 = await shaDockerJob(jobOnlyChannel);
   assertEquals(hash1, hash2);
 });
+
+Deno.test("shaDockerJob: null scalar fields produce same hash as omitted fields", async () => {
+  const jobClean: DockerJobDefinitionInputRefs = { ...baseJob };
+
+  // Simulate an external client sending explicit nulls for optional fields
+  const jobWithNulls = {
+    ...baseJob,
+    v: null,
+    entrypoint: null,
+    workdir: null,
+    shmSize: null,
+    maxDuration: null,
+    tags: null,
+  } as unknown as DockerJobDefinitionInputRefs;
+
+  const hash1 = await shaDockerJob(jobClean);
+  const hash2 = await shaDockerJob(jobWithNulls);
+  assertEquals(hash1, hash2);
+});
+
+Deno.test("shaDockerJob: null fields in build sub-object produce same hash as omitted fields", async () => {
+  const jobWithBuild: DockerJobDefinitionInputRefs = {
+    ...baseJob,
+    build: {
+      context: "https://github.com/example/repo.git",
+      dockerfile: "FROM alpine\nRUN echo hi",
+    },
+  };
+  const jobWithNullBuildFields = {
+    ...baseJob,
+    build: {
+      context: "https://github.com/example/repo.git",
+      dockerfile: "FROM alpine\nRUN echo hi",
+      filename: null,
+      target: null,
+      buildArgs: null,
+      platform: null,
+    },
+  } as unknown as DockerJobDefinitionInputRefs;
+
+  const hash1 = await shaDockerJob(jobWithBuild);
+  const hash2 = await shaDockerJob(jobWithNullBuildFields);
+  assertEquals(hash1, hash2);
+});
+
+Deno.test("shaDockerJob: null fields in requirements sub-object produce same hash as omitted fields", async () => {
+  const jobWithReqs: DockerJobDefinitionInputRefs = {
+    ...baseJob,
+    requirements: { cpus: 2 },
+  };
+  const jobWithNullReqFields = {
+    ...baseJob,
+    requirements: {
+      cpus: 2,
+      gpus: null,
+      maxDuration: null,
+      memory: null,
+    },
+  } as unknown as DockerJobDefinitionInputRefs;
+
+  const hash1 = await shaDockerJob(jobWithReqs);
+  const hash2 = await shaDockerJob(jobWithNullReqFields);
+  assertEquals(hash1, hash2);
+});
+
+Deno.test("shaDockerJob: empty build object produces same hash as no build", async () => {
+  const jobNoBuild: DockerJobDefinitionInputRefs = { ...baseJob };
+  const jobEmptyBuild: DockerJobDefinitionInputRefs = {
+    ...baseJob,
+    // deno-lint-ignore no-explicit-any
+    build: {} as any,
+  };
+
+  const hash1 = await shaDockerJob(jobNoBuild);
+  const hash2 = await shaDockerJob(jobEmptyBuild);
+  assertEquals(hash1, hash2);
+});
+
+Deno.test("shaDockerJob: empty requirements object produces same hash as no requirements", async () => {
+  const jobNoReqs: DockerJobDefinitionInputRefs = { ...baseJob };
+  const jobEmptyReqs: DockerJobDefinitionInputRefs = {
+    ...baseJob,
+    // deno-lint-ignore no-explicit-any
+    requirements: {} as any,
+  };
+
+  const hash1 = await shaDockerJob(jobNoReqs);
+  const hash2 = await shaDockerJob(jobEmptyReqs);
+  assertEquals(hash1, hash2);
+});
+
+Deno.test("shaDockerJob: build with all-null fields produces same hash as no build", async () => {
+  const jobNoBuild: DockerJobDefinitionInputRefs = { ...baseJob };
+  const jobAllNullBuild = {
+    ...baseJob,
+    build: {
+      context: null,
+      buildContext: null,
+      filename: null,
+      target: null,
+      dockerfile: null,
+      buildArgs: null,
+      platform: null,
+    },
+  } as unknown as DockerJobDefinitionInputRefs;
+
+  const hash1 = await shaDockerJob(jobNoBuild);
+  const hash2 = await shaDockerJob(jobAllNullBuild);
+  assertEquals(hash1, hash2);
+});
+
+Deno.test("shaDockerJob: requirements with all-null fields produces same hash as no requirements", async () => {
+  const jobNoReqs: DockerJobDefinitionInputRefs = { ...baseJob };
+  const jobAllNullReqs = {
+    ...baseJob,
+    requirements: {
+      cpus: null,
+      gpus: null,
+      maxDuration: null,
+      memory: null,
+    },
+  } as unknown as DockerJobDefinitionInputRefs;
+
+  const hash1 = await shaDockerJob(jobNoReqs);
+  const hash2 = await shaDockerJob(jobAllNullReqs);
+  assertEquals(hash1, hash2);
+});
+
+Deno.test("shaDockerJob: input ref with null type produces same hash as omitted type", async () => {
+  const jobWithType: DockerJobDefinitionInputRefs = {
+    ...baseJob,
+    inputs: {
+      file1: { value: "some data" },
+    },
+  };
+  const jobWithNullType = {
+    ...baseJob,
+    inputs: {
+      file1: { value: "some data", type: null },
+    },
+  } as unknown as DockerJobDefinitionInputRefs;
+
+  const hash1 = await shaDockerJob(jobWithType);
+  const hash2 = await shaDockerJob(jobWithNullType);
+  assertEquals(hash1, hash2);
+});
