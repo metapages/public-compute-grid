@@ -26,6 +26,6 @@ registerRoute(
     new NetworkFirst({
       cacheName: "navigation-cache",
       networkTimeoutSeconds: 3,
-    })
-  )
+    }),
+  ),
 );
