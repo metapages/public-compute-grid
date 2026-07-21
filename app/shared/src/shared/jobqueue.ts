@@ -198,10 +198,10 @@ export class BaseDockerJobQueue {
   protected readonly debug: boolean;
 
   // intervals
-  protected _intervalWorkerBroadcast: number | undefined;
-  protected _intervalJobsBroadcast: number | undefined;
-  protected _intervalCheckForDuplicateJobsSameSource: number | undefined;
-  protected _intervalRemoveOldFinishedJobsFromQueue: number | undefined;
+  protected _intervalWorkerBroadcast: ReturnType<typeof setInterval> | undefined;
+  protected _intervalJobsBroadcast: ReturnType<typeof setInterval> | undefined;
+  protected _intervalCheckForDuplicateJobsSameSource: ReturnType<typeof setInterval> | undefined;
+  protected _intervalRemoveOldFinishedJobsFromQueue: ReturnType<typeof setInterval> | undefined;
 
   constructor(opts: {
     serverId: string;

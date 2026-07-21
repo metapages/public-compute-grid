@@ -53,8 +53,8 @@ export class DockerJobQueue {
 
   queueKey: string;
   jobDefinitions: JobDefinitionCache;
-  private registrationInterval: number | null = null;
-  private runningJobHealthInterval: number | null = null;
+  private registrationInterval: ReturnType<typeof setInterval> | null = null;
+  private runningJobHealthInterval: ReturnType<typeof setInterval> | null = null;
   gotFirstCompleteJobState: boolean = false;
   performedInitialContainerCheckAfterJobState: boolean = false;
 
