@@ -101,6 +101,75 @@ const existsHandler = async (c: Context) => {
   }
 };
 
+/**
+ * Persist a content-addressed blob (`<blobDir>/<key>`, key = sha256 of the bytes)
+ * without ever exposing a truncated or partial file to concurrent readers.
+ *
+ * Two properties, both required for correctness:
+ *
+ *  - Skip if the blob already exists and is non-empty. Blobs are immutable by
+ *    construction (the key IS the content hash) and are hard-linked into every
+ *    job that references them. The same hash is PUT more than once by design —
+ *    fileToDataref retries its upload, copyLargeBlobsToCloud dedups only
+ *    per-process — so re-writing a present blob is pure risk with no benefit.
+ *
+ *  - Otherwise write to a unique temp file and rename() into place. rename(2) is
+ *    atomic on one filesystem, so a reader sees either no file or the complete
+ *    file, never an intermediate state.
+ *
+ * The previous implementation opened the final path with `truncate: true` and
+ * streamed in place. A duplicate PUT then zeroed the shared inode before
+ * refilling it, and any GET (or running job's mounted input) that landed in the
+ * truncate→refill window observed an empty/partial file — the intermittent
+ * "HTTP 200 with empty body" from getJobInputsHandler.
+ *
+ * Returns true if the bytes were written, false if an existing blob was reused.
+ */
+export const saveContentAddressedBlob = async (
+  blobDir: string,
+  key: string,
+  body: ReadableStream<Uint8Array>,
+): Promise<boolean> => {
+  await Deno.mkdir(blobDir, { recursive: true, mode: 0o777 });
+  const fullFilePath = join(blobDir, key);
+
+  try {
+    const existing = await Deno.stat(fullFilePath);
+    if (existing.isFile && existing.size > 0) {
+      // Discard the duplicate body; the blob is immutable and already correct.
+      await body.cancel();
+      return false;
+    }
+  } catch (err) {
+    if (!(err instanceof Deno.errors.NotFound)) {
+      throw err;
+    }
+    // Not present yet: fall through and write it.
+  }
+
+  const tmpPath = `${fullFilePath}.tmp.${crypto.randomUUID()}`;
+  try {
+    const file = await Deno.open(tmpPath, {
+      write: true,
+      create: true,
+      truncate: true,
+      mode: 0o777,
+    });
+    // pipeTo closes the writable (and so the file) on both success and error.
+    await body.pipeTo(file.writable);
+    await Deno.rename(tmpPath, fullFilePath);
+  } catch (err) {
+    // Never leave a partial temp file behind.
+    try {
+      await Deno.remove(tmpPath);
+    } catch (_) {
+      // temp file may not exist; ignore
+    }
+    throw err;
+  }
+  return true;
+};
+
 const uploadHandler = async (c: Context) => {
   const key: string | undefined = c.req.param("key");
 
@@ -110,13 +179,10 @@ const uploadHandler = async (c: Context) => {
   }
 
   const config = getConfig();
-  const filePath = join(config.dataDirectory, "f");
-  const fullFilePath = join(filePath, key);
+  const blobDir = join(config.dataDirectory, "f");
+  const fullFilePath = join(blobDir, key);
 
   try {
-    // Create directory if it doesn't exist
-    await Deno.mkdir(filePath, { recursive: true, mode: 0o777 });
-
     // Get the request body as a ReadableStream
     const stream = c.req.raw.body;
     if (!stream) {
@@ -124,24 +190,8 @@ const uploadHandler = async (c: Context) => {
       return c.text("No file uploaded");
     }
 
-    // Create a file write stream
-    const file = await Deno.open(fullFilePath, {
-      write: true,
-      create: true,
-      truncate: true,
-      mode: 0o777,
-    });
-
-    // Stream the request body directly to the file
-    await stream.pipeTo(file.writable);
-    try {
-      // https://github.com/denoland/deno/issues/14210
-      file.close();
-    } catch (_) {
-      // pass
-    }
-
-    return c.text(`file saved to ${fullFilePath}`);
+    const written = await saveContentAddressedBlob(blobDir, key, stream);
+    return c.text(written ? `file saved to ${fullFilePath}` : `file already exists ${fullFilePath}`);
   } catch (err) {
     console.error("Error uploading file:", err);
     return c.text((err as Error).message, 500);
