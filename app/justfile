@@ -69,9 +69,46 @@ test mode="remote" +args="": _build_shared check (_validate_mode mode)
     #!/usr/bin/env bash
     set -e # exit when any command fails, preserving the status of the failed command
 
+    # Docker compose project name for this test stack.
+    #
+    # This MUST be unique per (branch, mode). The `local mode` and `remote mode` CI
+    # jobs run concurrently with no `needs:` between them, so with a shared project
+    # name one job's `down` tears down the containers the other job is starting.
+    # GITHUB_REF_NAME is used in CI because actions/checkout leaves a detached HEAD.
+    branch="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo local)}"
+    [ "$branch" = "HEAD" ] && branch="detached"
+    # docker compose project names allow only [a-z0-9_-]
+    STACK="$(printf 'test-%s-%s' "{{ mode }}" "$branch" \
+        | tr '[:upper:]' '[:lower:]' \
+        | sed -E 's/[^a-z0-9_-]+/-/g' \
+        | cut -c1-40 \
+        | sed -E 's/-+$//')"
+    export STACK
+    echo -e "Using STACK=${STACK}"
+
+    # `timeout` is GNU coreutils and is not guaranteed on every self-hosted runner
+    timeout_cmd=""
+    for candidate in timeout gtimeout; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            timeout_cmd="$candidate"
+            break
+        fi
+    done
+
     cleanup() {
-        echo "Cleaning up test stack..."
-        docker compose --project-name=test -f ../docker-compose.yml -f ../docker-compose-{{ mode }}.yml -f ../docker-compose-test-{{ mode }}.yml down 2>/dev/null || true
+        echo "Cleaning up test stack (${STACK})..."
+        # Bounded and loud. This `down` previously hung against the docker daemon and
+        # consumed the entire 20 minute job timeout while reporting nothing, because
+        # stderr went to /dev/null. Fail visibly and let the run continue instead.
+        if ! ${timeout_cmd:+$timeout_cmd 180} docker compose --project-name="${STACK}" \
+            -f ../docker-compose.yml \
+            -f ../docker-compose-{{ mode }}.yml \
+            -f ../docker-compose-test-{{ mode }}.yml \
+            down --remove-orphans; then
+            echo "WARNING: 'docker compose down' failed or timed out for project ${STACK}" >&2
+            docker ps -a --filter "label=com.docker.compose.project=${STACK}" \
+                --format '{{{{.Names}}}}\t{{{{.Status}}}}' >&2 || true
+        fi
     }
 
     trap cleanup EXIT # cleanup when the script exits for any reason, including failure
@@ -136,13 +173,13 @@ test mode="remote" +args="": _build_shared check (_validate_mode mode)
     export AWS_S3_BUCKET="localbucket"
     export DENO_BROADCAST_REDIS_URL="redis://localhost:6379"
 
-    docker rm test-worker-1 2>/dev/null || true
+    docker rm "${STACK}-worker-1" 2>/dev/null || true
     just shared/build
     # tests don't need the browser but dir needs to exist
     mkdir -p browser/dist
-    docker compose --project-name=test -f ../docker-compose.yml -f ../docker-compose-{{ mode }}.yml -f ../docker-compose-test-{{ mode }}.yml up --build --remove-orphans --detach
+    docker compose --project-name="${STACK}" -f ../docker-compose.yml -f ../docker-compose-{{ mode }}.yml -f ../docker-compose-test-{{ mode }}.yml up --build --remove-orphans --detach
         # functional tests
-    just test/test-in-docker {{ mode }}
+    just test/test-in-docker {{ mode }} "${STACK}"
     just worker/test
     just shared/test
     just cli/test
@@ -230,9 +267,21 @@ status-local:
 results-dev-job jobId:
     curl https://{{ APP_FQDN }}:{{ APP_PORT }}/j/{{ jobId }}/result.json  2>/dev/null | jq .
 
-# Clean up the test stack, if it didn't exit cleanly
-@test-cleanup:
-    docker compose --project-name=test -f ../docker-compose.yml -f ../docker-compose-remote.yml down || true
+# Remove every `test-<mode>-<branch>` stack left behind by a run that didn't exit cleanly
+test-cleanup:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    projects="$(docker compose ls --all --format json \
+        | deno eval 'const j=JSON.parse(await new Response(Deno.stdin.readable).text()); console.log(j.map(p=>p.Name).filter(n=>n.startsWith("test-")).join("\n"))')"
+    if [ -z "$projects" ]; then
+        echo "No test stacks to clean up"
+        exit 0
+    fi
+    while read -r project; do
+        [ -z "$project" ] && continue
+        echo "Removing stack: ${project}"
+        docker compose --project-name="$project" down --remove-orphans -v || true
+    done <<< "$projects"
 
 # Publish worker docker images with whatever versioning scheme is appropriate
 @publish-versioned-artifacts version="":

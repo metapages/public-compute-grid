@@ -13,6 +13,7 @@ import {
   DockerJobDefinitionMetadata,
   DockerJobDefinitionParamsInUrlHash,
   isDataRef,
+  isParentInjectedHashParamKey,
   JobInputs,
   shaDockerJob,
 } from "/@shared/client";
@@ -52,6 +53,15 @@ const getNonSystemHashParams = (): Record<string, string> => {
   HashParamKeysSystem.forEach(key => {
     delete hashParams[key];
   });
+  // never inject params an embedding parent page (metapage.io) added: they are
+  // plumbing, not container config, and several vary per page load or per viewer.
+  // Deliberately not in app/browser/public/metaframe.json — that list is the
+  // allowlist metapage.io uses to decide what to persist, and these are runtime only.
+  Object.keys(hashParams)
+    .filter(isParentInjectedHashParamKey)
+    .forEach(key => {
+      delete hashParams[key];
+    });
   return hashParams;
 };
 

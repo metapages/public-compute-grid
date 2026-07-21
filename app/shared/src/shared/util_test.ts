@@ -1,7 +1,7 @@
 import { assertEquals, assertNotEquals } from "std/assert";
 
 import { DataRefType, type DockerJobDefinitionInputRefs } from "@shared/types.ts";
-import { shaDockerJob } from "@shared/util.ts";
+import { isParentInjectedHashParamKey, shaDockerJob } from "@shared/util.ts";
 
 // A minimal job definition used as a base for tests
 const baseJob: DockerJobDefinitionInputRefs = {
@@ -274,6 +274,88 @@ Deno.test("shaDockerJob: env with only channel vars produces same hash as no env
   const hash1 = await shaDockerJob(jobNoEnv);
   const hash2 = await shaDockerJob(jobOnlyChannel);
   assertEquals(hash1, hash2);
+});
+
+Deno.test("shaDockerJob: metapage-injected env keys do not affect the hash", async () => {
+  const jobNoEnv: DockerJobDefinitionInputRefs = { ...baseJob };
+
+  // metapage.io injects a fresh mp-channel uuid on every page load for anonymous
+  // viewers; two refreshes of the same metapage must produce the same job id.
+  const refresh1: DockerJobDefinitionInputRefs = {
+    ...baseJob,
+    env: {
+      "mp-channel": "wss://router.metapage.io/8bb1e0f24a5a4d0f9c6b1e2d3f4a5b6c",
+      "parent-metapage-id": "7ca89718c03b4b97b06e2312dce2cc11",
+      "fs-path": "/some/path",
+    },
+  };
+  const refresh2: DockerJobDefinitionInputRefs = {
+    ...baseJob,
+    env: {
+      "mp-channel": "wss://router.metapage.io/1111222233334444555566667777888",
+      "parent-metapage-id": "7ca89718c03b4b97b06e2312dce2cc11",
+      "fs-path": "/some/path",
+    },
+  };
+
+  const hashNoEnv = await shaDockerJob(jobNoEnv);
+  assertEquals(await shaDockerJob(refresh1), hashNoEnv);
+  assertEquals(await shaDockerJob(refresh2), hashNoEnv);
+});
+
+Deno.test("shaDockerJob: readonly/edit do not make job ids differ between viewers", async () => {
+  // `readonly` is injected only when the viewer does not own the metaframe, so
+  // the owner and a visitor must still compute the same job id.
+  const owner: DockerJobDefinitionInputRefs = { ...baseJob };
+  const visitor: DockerJobDefinitionInputRefs = {
+    ...baseJob,
+    env: { readonly: "true", edit: "true" },
+  };
+
+  assertEquals(await shaDockerJob(visitor), await shaDockerJob(owner));
+});
+
+Deno.test("shaDockerJob: any future mp- prefixed param is excluded automatically", async () => {
+  const jobNoEnv: DockerJobDefinitionInputRefs = { ...baseJob };
+
+  // The point of the reserved prefix: metapage.io can add new injected params
+  // without this repo changing. Keys below do not exist today and must still
+  // be excluded.
+  const withFutureParams: DockerJobDefinitionInputRefs = {
+    ...baseJob,
+    env: {
+      "mp-some-future-param": "abc",
+      "mp_another_future_param": "def",
+    },
+  };
+
+  assertEquals(await shaDockerJob(withFutureParams), await shaDockerJob(jobNoEnv));
+});
+
+Deno.test("isParentInjectedHashParamKey: classifies keys correctly", () => {
+  // reserved prefix, both spellings
+  assertEquals(isParentInjectedHashParamKey("mp-channel"), true);
+  assertEquals(isParentInjectedHashParamKey("mp_debug"), true);
+  assertEquals(isParentInjectedHashParamKey("mp-anything-new"), true);
+
+  // frozen legacy set
+  for (const key of ["channel", "CHANNEL", "readonly", "edit", "parent-metapage-id", "fs-path"]) {
+    assertEquals(isParentInjectedHashParamKey(key), true, `expected ${key} to be parent-injected`);
+  }
+
+  // user env vars and container-owned params must pass through
+  for (const key of ["FOO", "mpower", "MP_USER_VAR", "map-tiles", "image", "command"]) {
+    assertEquals(isParentInjectedHashParamKey(key), false, `expected ${key} NOT to be parent-injected`);
+  }
+});
+
+Deno.test("shaDockerJob: user env vars still affect the hash", async () => {
+  const jobA: DockerJobDefinitionInputRefs = { ...baseJob, env: { FOO: "a" } };
+  const jobB: DockerJobDefinitionInputRefs = { ...baseJob, env: { FOO: "b" } };
+
+  const hashA = await shaDockerJob(jobA);
+  const hashB = await shaDockerJob(jobB);
+  assertNotEquals(hashA, hashB);
 });
 
 Deno.test("shaDockerJob: null scalar fields produce same hash as omitted fields", async () => {

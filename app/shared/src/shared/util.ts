@@ -213,6 +213,39 @@ const cleanInputsRefsForHash = (
 };
 
 /**
+ * Params injected into a metaframe URL by an embedding parent page (metapage.io)
+ * rather than by the user. They are plumbing, not container configuration, and
+ * must never reach definition.env or the job hash: several of them vary per page
+ * load or per viewer, which would give an otherwise identical container a new job
+ * id on every refresh.
+ *
+ * `mp-` / `mp_` is the reserved prefix for these. Any NEW param metapage.io
+ * injects must use it, and is then excluded here automatically with no change to
+ * this repo. app.metapage.io has a test enforcing that
+ * (frontend/browser/src/io/definition/tests/InjectedHashParamsConvention.test.ts).
+ *
+ * The set below is the frozen list of params that predate the convention. It
+ * should never grow. Params the container itself owns (config, queueOverride,
+ * ...) are handled separately by HashParamKeysSystem in the browser app.
+ */
+const ParentInjectedHashParamPrefix = /^mp[-_]/;
+
+const ParentInjectedHashParamKeysLegacy = new Set([
+  // deprecated spelling of mp-channel
+  "channel",
+  "CHANNEL",
+  // injected only when the viewer does not own the metaframe, so it would
+  // otherwise make job ids differ between viewers of the same metapage
+  "readonly",
+  "edit",
+  "parent-metapage-id",
+  "fs-path",
+]);
+
+export const isParentInjectedHashParamKey = (key: string): boolean =>
+  ParentInjectedHashParamPrefix.test(key) || ParentInjectedHashParamKeysLegacy.has(key);
+
+/**
  * Builds a deterministic hash blob from a DockerJobDefinitionInputRefs using only
  * whitelisted known fields. This ensures that extra fields added by clients, servers,
  * or intermediate systems do not affect the hash.
@@ -265,13 +298,14 @@ const buildJobHashBlob = (job: DockerJobDefinitionInputRefs): Record<string, unk
     }
   }
 
-  // --- Open-ended Record: env (all keys included, but channel/CHANNEL excluded) ---
+  // --- Open-ended Record: env (all keys included, except parent-injected keys) ---
   // NOTE: env keys are unbounded - any hash param or user-defined env var can appear here.
-  // We include all keys except channel/CHANNEL which change every page refresh.
+  // We exclude keys injected by an embedding parent page (metapage.io), which change
+  // every page refresh and would otherwise give the same container a new job id each load.
   if (job.env) {
     const env: Record<string, string> = {};
     for (const key of Object.keys(job.env)) {
-      if (key === "channel" || key === "CHANNEL") continue;
+      if (isParentInjectedHashParamKey(key)) continue;
       env[key] = job.env[key];
     }
     if (Object.keys(env).length > 0) {
