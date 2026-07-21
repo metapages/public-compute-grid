@@ -1,5 +1,5 @@
 {
   "permissions": {
-    "allow": ["Bash(head:*)", "Bash(npm info:*)", "Bash(tail:*)"]
+    "allow": ["Bash(head:*)", "Bash(npm info:*)", "Bash(tail:*)", "Bash(./node_modules/typescript/bin/tsc:*)"]
   }
 }
