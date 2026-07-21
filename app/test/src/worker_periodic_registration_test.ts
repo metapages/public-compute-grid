@@ -9,7 +9,7 @@ import { closeKv } from "../../shared/src/shared/kv.ts";
 
 // Mock the DockerJobQueue to test periodic registration
 class MockDockerJobQueue {
-  private registrationInterval: number | null = null;
+  private registrationInterval: ReturnType<typeof setInterval> | null = null;
   private registrationCount = 0;
   private sender: (message: WebsocketMessageWorkerToServer) => void;
 

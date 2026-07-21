@@ -1,4 +1,4 @@
-FROM denoland/deno:alpine-2.5.3
+FROM denoland/deno:alpine-2.9.3
 
 RUN apk --no-cache --update add \
     bash \

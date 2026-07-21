@@ -36,7 +36,7 @@ export const runChecksOnInterval = async (
   interval: number = 5000,
 ) => {
   await ensureResourcesAndCleanseUnknownJobContainers(queue);
-  let intervalId: number | undefined = setInterval(async () => {
+  let intervalId: ReturnType<typeof setInterval> | undefined = setInterval(async () => {
     await ensureResourcesAndCleanseUnknownJobContainers(queue);
   }, interval);
 
