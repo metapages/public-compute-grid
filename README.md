@@ -1,6 +1,8 @@
 # Public Compute Queues for everyone everywhere all at once
 
-[llms.txt](https://container.mtfm.io/llms.txt)
+[Docs](https://container.mtfm.io/docs/) ·
+[Backend integration guide](https://container.mtfm.io/docs/guide/backend-integration.html) ·
+[Agent Skill](https://container.mtfm.io/docs/guide/agent-skill.html) · [llms.txt](https://container.mtfm.io/llms.txt)
 
 https://container.mtfm.io
 

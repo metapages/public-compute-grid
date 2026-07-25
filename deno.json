@@ -66,6 +66,6 @@
     "indentWidth": 2,
     "semiColons": true,
     "singleQuote": false,
-    "exclude": ["app/browser"]
+    "exclude": ["app/browser", "docs"]
   }
 }

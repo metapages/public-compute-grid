@@ -95,6 +95,14 @@ app.get("/q/:queue/metrics", metricsHandler);
 // Serve llms.txt file from public folder
 app.get("/llms.txt", serveStatic({ path: "app/browser/public/llms.txt" }));
 
+// VitePress docs site (source: docs/, build: `just docs build`).
+// The site is built with base=/docs/ into docs/dist/docs, so the extra `docs`
+// segment in the request path maps straight onto the directory below the root
+// and no path rewriting is needed. Deployment copies docs/dist — see the
+// `deploy` recipe in app/api/justfile.
+app.get("/docs", (c: Context) => c.redirect("/docs/", 301));
+app.get("/docs/*", serveStatic({ root: "docs/dist" }));
+
 // Serve static assets, and the index.html as the fallback
 app.get("/*", serveStatic({ root: "app/browser/dist" }));
 app.get("/", serveStatic({ path: "app/browser/dist/index.html" }));
