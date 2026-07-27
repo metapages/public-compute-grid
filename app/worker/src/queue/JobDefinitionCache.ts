@@ -60,7 +60,9 @@ export class JobDefinitionCache {
 
   prefetch(jobIds: string[]) {
     for (const jobId of jobIds) {
-      this.get(jobId);
+      // Fire and forget, but swallow the rejection: an unhandled rejection here
+      // takes down the worker process.
+      this.get(jobId).catch(() => {});
     }
   }
 

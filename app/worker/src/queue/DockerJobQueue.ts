@@ -57,6 +57,10 @@ export class DockerJobQueue {
   private runningJobHealthInterval: ReturnType<typeof setInterval> | null = null;
   gotFirstCompleteJobState: boolean = false;
   performedInitialContainerCheckAfterJobState: boolean = false;
+  /** Last logged server job state, so identical snapshots are not logged every interval */
+  private lastLoggedJobStateSignature: string = "";
+  /** Jobs we have already explained we cannot claim, so the reason is logged once */
+  private unclaimableJobsLogged = new Set<string>();
 
   constructor(args: DockerJobQueueArgs) {
     const { sender, cpus, gpus, id, maxJobDuration, queue, jobDefinitions } = args;
@@ -304,18 +308,21 @@ export class DockerJobQueue {
     message: computeQueuesShared.BroadcastJobStates,
   ) {
     message.isSubset = false;
-    if (Object.keys(message?.state?.jobs || {}).length > 0 || !message.isSubset) {
+    // This is the full snapshot, resent on a timer, so it is usually identical
+    // to the last one. Only log when something actually changed, otherwise the
+    // log is a wall of identical lines that hides everything useful.
+    const jobStateSummary = Object.keys(message?.state?.jobs || {}).map((jobId) =>
+      getJobColorizedString(jobId) +
+      `(server says: ${message.state.jobs[jobId].state}, local says: phase=${
+        this.queue[jobId]?.phase
+      }, executionExists=${!!this.queue[jobId]?.execution}, executionKilled=${
+        this.queue[jobId]?.execution?.isKilled.value ? "KILLED" : "ALIVE"
+      })`
+    ).join(", ");
+    if (jobStateSummary !== this.lastLoggedJobStateSignature) {
+      this.lastLoggedJobStateSignature = jobStateSummary;
       console.log(
-        `${getWorkerColorizedString(this.workerId)} JobStateUpdates [isSubset=${message.isSubset}] from server: ${
-          Object.keys(message?.state?.jobs || {}).map((jobId) =>
-            getJobColorizedString(jobId) +
-            `(server says: ${message.state.jobs[jobId].state}, local says: phase=${
-              this.queue[jobId]?.phase
-            }, executionExists=${!!this.queue[jobId]?.execution}, executionKilled=${
-              this.queue[jobId]?.execution?.isKilled.value ? "KILLED" : "ALIVE"
-            })`
-          ).join(", ")
-        }`,
+        `${getWorkerColorizedString(this.workerId)} JobStates (all) from server: ${jobStateSummary || "(none)"}`,
       );
     }
     this._updateApiQueue(message);
@@ -623,6 +630,14 @@ export class DockerJobQueue {
               computeQueuesShared.DockerJobState.Queued
           );
 
+        // Forget jobs that have left the queue, so their reason is logged again
+        // if they come back, and so the set does not grow forever.
+        for (const jobId of this.unclaimableJobsLogged) {
+          if (!this.apiQueue[jobId]) {
+            this.unclaimableJobsLogged.delete(jobId);
+          }
+        }
+
         queuedJobKeys.sort((a, b) => {
           const aQueuedTime = this.apiQueue[a].queuedTime;
           const bQueuedTime = this.apiQueue[b].queuedTime;
@@ -638,7 +653,18 @@ export class DockerJobQueue {
             continue;
           }
           // const job = jobStates[jobKey];
-          const definition = await this.jobDefinitions.get(jobKey);
+          let definition: DockerJobDefinitionInputRefs | null = null;
+          try {
+            definition = await this.jobDefinitions.get(jobKey);
+          } catch (err) {
+            // Throwing here would abort the whole claim loop, silently starving
+            // every other queued job behind this one.
+            console.log(
+              `${this.workerIdShort} ${getJobColorizedString(jobKey)} 🎳 _claimJobs failed to get definition`,
+              err,
+            );
+            continue;
+          }
           if (!definition) {
             console.log(
               `${this.workerIdShort} ${getJobColorizedString(jobKey)} 🎳 _claimJobs failed to get definition`,
@@ -658,23 +684,27 @@ export class DockerJobQueue {
             // GPUs?
             if (definition.requirements?.gpus) {
               if (!this.isGPUCapacity()) {
-                // no gpu capacity but the job needs it
-                // skip this job
-                if (config.debug) {
+                // no gpu capacity but the job needs it, skip this job.
+                // Log it once per job: a job silently sitting in Queued forever
+                // because no worker can satisfy it is otherwise invisible.
+                if (!this.unclaimableJobsLogged.has(jobKey)) {
+                  this.unclaimableJobsLogged.add(jobKey);
                   console.log(
                     `${this.workerIdShort} ${
                       getJobColorizedString(jobKey)
-                    } 🎳 _claimJobs no gpu capacity but definition.gpu=[${definition.requirements?.gpus}]`,
+                    } ⛔ cannot claim job - needs ${definition.requirements.gpus} GPU(s), this worker has ${this.gpus} (run the worker with --gpus)`,
                   );
                 }
                 continue;
               }
             }
+            this.unclaimableJobsLogged.delete(jobKey);
             console.log(
               `${this.workerIdShort} ${getJobColorizedString(jobKey)} claiming job`,
             );
             this._startJob(jobKey, definition);
-          } else {
+          } else if (!this.unclaimableJobsLogged.has(jobKey)) {
+            this.unclaimableJobsLogged.add(jobKey);
             console.log(
               `${this.workerIdShort} ${getJobColorizedString(jobKey)} cannot claim job - no CPU capacity (${
                 Object.keys(this.queue).length

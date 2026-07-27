@@ -1,3 +1,8 @@
+# This stack mirrors production: several api instances, workers connected to a
+# different instance than the browser, and redis as the cross-instance message
+# bus under the same REDIS_URL name production uses. Keep it that way — the
+# native BroadcastChannel only reaches within one isolate, so any instance that
+# is not the one holding a worker's websocket goes blind.
 services:
   # api1 is exposed, worker connects to api3
   api1:
@@ -32,7 +37,7 @@ services:
       - AWS_S3_BUCKET=${AWS_S3_BUCKET:-localbucket}
       - DENO_KV_ACCESS_TOKEN=localdenoaccesstoken
       - DENO_KV_URL=http://denokv:4512
-      - DENO_BROADCAST_REDIS_URL=redis://redis:6379
+      - REDIS_URL=redis://redis:6379
       - DENO_BROADCAST_DEBUG=
       - METAPAGE_IO_SERVER_ID=api1
     volumes:
@@ -86,7 +91,7 @@ services:
       - AWS_S3_BUCKET=${AWS_S3_BUCKET:-localbucket}
       - DENO_KV_ACCESS_TOKEN=localdenoaccesstoken
       - DENO_KV_URL=http://denokv:4512
-      - REDIS_URL=redis://redis:DENO_BROADCAST_REDIS_URL=redis://redis:6379
+      - REDIS_URL=redis://redis:6379
       - DENO_BROADCAST_DEBUG=
       - METAPAGE_IO_SERVER_ID=api2
     volumes:
@@ -140,7 +145,7 @@ services:
       - AWS_S3_BUCKET=${AWS_S3_BUCKET:-localbucket}
       - DENO_KV_ACCESS_TOKEN=localdenoaccesstoken
       - DENO_KV_URL=http://denokv:4512
-      - DENO_BROADCAST_REDIS_URL=redis://redis:6379
+      - REDIS_URL=redis://redis:6379
       - DENO_BROADCAST_DEBUG=
       - METAPAGE_IO_SERVER_ID=api3
     volumes:
@@ -200,7 +205,7 @@ services:
       - NPM_CONFIG_REGISTRY=${NPM_CONFIG_REGISTRY:-}
       - DENO_DIR=/deno
       - DENO_INSTALL_ROOT=/deno
-      - DENO_BROADCAST_REDIS_URL=redis://redis:6379
+      - REDIS_URL=redis://redis:6379
       - DENO_BROADCAST_DEBUG=
       - AWS_S3_BUCKET=${AWS_S3_BUCKET:-localbucket}
     volumes:
@@ -255,7 +260,7 @@ services:
       - NPM_CONFIG_REGISTRY=${NPM_CONFIG_REGISTRY:-}
       - DENO_DIR=/deno
       - DENO_INSTALL_ROOT=/deno
-      - DENO_BROADCAST_REDIS_URL=redis://redis:6379
+      - REDIS_URL=redis://redis:6379
       - DENO_BROADCAST_DEBUG=
       - AWS_S3_BUCKET=${AWS_S3_BUCKET:-localbucket}
     volumes:

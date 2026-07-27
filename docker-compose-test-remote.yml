@@ -31,7 +31,7 @@ services:
       - AWS_S3_BUCKET=${AWS_S3_BUCKET:-localbucket}
       - DENO_KV_ACCESS_TOKEN=localdenoaccesstoken
       - DENO_KV_URL=http://denokv:4512
-      - DENO_BROADCAST_REDIS_URL=redis://redis:6379
+      - REDIS_URL=redis://redis:6379
       - DENO_BROADCAST_DEBUG=
     volumes:
       - deno:/deno
