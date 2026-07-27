@@ -4,3 +4,4 @@
 **/.eslintcache
 **/dist
 **/node_modules
+docs/.vitepress/cache

@@ -57,15 +57,49 @@ import {
 import type { BroadcastChannelRedis } from "@metapages/deno-redis-broadcastchannel";
 import { setJobStateFinished } from "../client.ts";
 
-let CustomBroadcastChannel: typeof BroadcastChannel = BroadcastChannel;
+/**
+ * Cross-instance messaging (job states, worker registrations, job logs, cache
+ * invalidation) goes over this channel.
+ *
+ * The native BroadcastChannel only connects channels *within a single isolate*.
+ * Deploy Classic wired it into a global message bus across every isolate of a
+ * deployment; the new Deno Deploy does not, so on the native implementation an
+ * api instance holding a worker's websocket never hears about a job enqueued
+ * over HTTP on another instance, and the job sits Queued forever. Redis pubsub
+ * is the bus instead, in production and in the local multi-instance stack
+ * alike. Native is only correct where a single process is the whole server —
+ * the worker's `--mode=local`.
+ */
+const redisUrl: string | undefined = Deno.env.get("DENO_BROADCAST_REDIS_URL") ||
+  Deno.env.get("REDIS_URL");
 
-// If Redis is configured, then dynamically import:
-if (Deno.env.get("DENO_BROADCAST_REDIS_URL") === "redis://redis:6379") {
-  // console.log("👀 Using redis broadcast channel");
-  const { BroadcastChannelRedis } = await import(
-    "@metapages/deno-redis-broadcastchannel"
+let CustomBroadcastChannel: typeof BroadcastChannel = BroadcastChannel;
+export let usingRedisBroadcastChannel = false;
+
+if (redisUrl) {
+  // The library reads DENO_BROADCAST_REDIS_URL at import time and throws
+  // without it, so bridge production's REDIS_URL onto the name it wants.
+  Deno.env.set("DENO_BROADCAST_REDIS_URL", redisUrl);
+  try {
+    const { BroadcastChannelRedis } = await import(
+      "@metapages/deno-redis-broadcastchannel"
+    );
+    CustomBroadcastChannel = BroadcastChannelRedis;
+    usingRedisBroadcastChannel = true;
+    console.log(`🌺 broadcast channel: redis (${new URL(redisUrl).hostname})`);
+  } catch (err) {
+    // Serving without a bus is bad, but refusing to boot is worse.
+    console.error(
+      `🚨 broadcast channel: redis at ${redisUrl} unavailable, falling back to the ` +
+        `in-isolate BroadcastChannel. Multi-instance coordination WILL NOT WORK.`,
+      err,
+    );
+  }
+} else {
+  console.log(
+    `⚠️ broadcast channel: no DENO_BROADCAST_REDIS_URL or REDIS_URL set, using the ` +
+      `in-isolate BroadcastChannel. This is only correct for a single-process server.`,
   );
-  CustomBroadcastChannel = BroadcastChannelRedis;
 }
 
 export const MAX_TIME_FINISHED_JOB_IN_QUEUE = ms("60 seconds") as number;
@@ -196,6 +230,8 @@ export class BaseDockerJobQueue {
   protected readonly channelEmitter: Emitter<BroadcastMessageEvents>;
   public db!: DB;
   protected readonly debug: boolean;
+  /** Local worker count at the last channel broadcast, see broadcastWorkersToChannel */
+  protected lastBroadcastWorkerCount = 0;
 
   // intervals
   protected _intervalWorkerBroadcast: ReturnType<typeof setInterval> | undefined;
@@ -503,6 +539,10 @@ export class BaseDockerJobQueue {
       queueInfo: {
         address: this.address,
         serverId: this.serverId,
+        // Which cross-instance bus this server is on. "in-isolate" means this
+        // server cannot hear any other, which looks exactly like a healthy
+        // single-instance deployment until a worker lands somewhere else.
+        broadcastChannel: usingRedisBroadcastChannel ? "redis" : "in-isolate",
         jobCount,
         localWorkerCount,
         otherWorkerCount,
@@ -651,8 +691,8 @@ export class BaseDockerJobQueue {
     // Initialize the db with the data directory
     this.db = await DB.initialize(this.dataDirectory);
 
-    // For local development, use a redis broadcast channel
-    if (Deno.env.get("DENO_BROADCAST_REDIS_URL") === "redis://redis:6379") {
+    // The redis channel has to subscribe before it can deliver anything
+    if (usingRedisBroadcastChannel) {
       await (this.channel as BroadcastChannelRedis).connect();
     }
 
@@ -1622,6 +1662,14 @@ export class BaseDockerJobQueue {
   }
 
   broadcastWorkersToChannel() {
+    // Nothing to say, and we already said it: skip. Queues are created on any
+    // request touching them and most never see a worker, so broadcasting an
+    // empty worker list on a timer forever is pure cost. The transition to
+    // empty is still broadcast, so other servers learn our workers went away.
+    if (this.workers.myWorkers.length === 0 && this.lastBroadcastWorkerCount === 0) {
+      return;
+    }
+    this.lastBroadcastWorkerCount = this.workers.myWorkers.length;
     // create a message for broadcasting to other servers
     const time = Date.now() + INTERVAL_UNTIL_WORKERS_ASSUMED_LOST;
     const message: BroadcastChannelMessage = {

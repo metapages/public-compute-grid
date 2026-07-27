@@ -54,6 +54,8 @@ dev +args="": _build_shared
 # Perform a deploy to https://dash.deno.com/projects/compute-queue-api
 @build: check
     just ../browser/build
+    # docs site → docs/dist/docs, served at /docs by handlerHono.ts
+    just ../../docs/build
 
 # Build, then run the server locally. TO skip the build: 'just _serve'
 serve: build _serve
@@ -85,6 +87,9 @@ deploy: build
     mkdir -p $deploy/app/browser
     cp -r ../browser/dist $deploy/app/browser/
     cp -r ../shared/src $deploy/shared
+    # the docs site, served at /docs (root "docs/dist" in handlerHono.ts)
+    mkdir -p $deploy/docs
+    cp -r ../../docs/dist $deploy/docs/
     jq --slurpfile src ../../deno.json '.imports = $src[0].imports' deno.json > $deploy/deno.json
     jq --slurpfile src ../../deno.json '.unstable = $src[0].unstable' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json
     jq --slurpfile src ../../deno.json '.nodeModulesDir = $src[0].nodeModulesDir' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json

@@ -18,6 +18,7 @@ cyan := "\\e[36m"
     echo -e "       {{ green }}browser{{ normal }}        -> just app/browser"
     echo -e "       {{ green }}worker{{ normal }}         -> just app/worker"
     echo -e "       {{ green }}api{{ normal }}            -> just app/api"
+    echo -e "       {{ green }}docs{{ normal }}           -> just docs"
     echo -e ""
     echo -e "    Current worker version: {{ cyan }}$(cat app/worker/mod.json | jq -r '.version'){{ normal }}"
     echo -e ""
@@ -159,6 +160,13 @@ alias shared := _shared
 
 @_shared +args="":
     just app/shared/{{ args }}
+
+# docs subdirectory commands (VitePress site served at /docs)
+
+alias docs := _docs
+
+@_docs +args="":
+    just docs/{{ args }}
 
 @logs mode service:
     just app/logs {{mode}} {{service}}

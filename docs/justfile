@@ -1,0 +1,41 @@
+set shell := ["bash", "-c"]
+set dotenv-load := true
+set export := true
+
+# minimal formatting, bold is very useful
+
+bold := '\033[1m'
+normal := '\033[0m'
+green := "\\e[32m"
+yellow := "\\e[33m"
+blue := "\\e[34m"
+magenta := "\\e[35m"
+grey := "\\e[90m"
+
+@_help:
+    just --list --unsorted
+    echo -e ""
+    echo -e "    Production docs 🔗    {{ green }}https://container.mtfm.io/docs/{{ normal }}"
+    echo -e "    Production API 🔗     {{ green }}https://container.mtfm.io/{{ normal }}"
+    echo -e "    Github URL 🔗         {{ green }}https://github.com/metapages/compute-queues{{ normal }}"
+    echo -e "    Deploy Console URL 🔗 {{ green }}https://dash.deno.com/projects/compute-queue-api{{ normal }}"
+    echo -e ""
+
+# Serve the docs locally with hot reload
+dev: _install
+    npm run dev
+
+# Build the static site into docs/dist/docs (served by the api at /docs)
+build: _install
+    npm run build
+
+# Preview the built site
+preview: _install
+    npm run preview
+
+# Delete generated assets
+clean:
+    rm -rf dist
+
+@_install:
+    npm install --no-audit --no-fund --silent

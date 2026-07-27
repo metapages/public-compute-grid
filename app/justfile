@@ -171,7 +171,6 @@ test mode="remote" +args="": _build_shared check (_validate_mode mode)
     fi
     export AWS_REGION="us-west-2"
     export AWS_S3_BUCKET="localbucket"
-    export DENO_BROADCAST_REDIS_URL="redis://localhost:6379"
 
     docker rm "${STACK}-worker-1" 2>/dev/null || true
     just shared/build
