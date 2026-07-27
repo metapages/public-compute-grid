@@ -8,6 +8,10 @@ export default withMermaid(
       "Open-source compute queues for the public internet. A queue is a URL, a job is a Docker container, and adding compute is one docker run. Submit from a browser, a Node/Deno backend, or the CLI.",
     base: "/docs/",
 
+    // The api rewrites extensionless /docs/* requests onto the built .html
+    // files, so links can drop the extension. See app/api/src/handlerHono.ts.
+    cleanUrls: true,
+
     // The api server serves this site with `serveStatic({ root: "docs/dist" })`,
     // so a request for /docs/x must resolve to docs/dist/docs/x — hence the
     // extra `docs` segment in outDir. See app/api/src/handlerHono.ts.
