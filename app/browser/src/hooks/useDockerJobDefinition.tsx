@@ -148,7 +148,7 @@ export const useDockerJobDefinition = () => {
     // definition already carries its own configFiles), keep the definition's
     // existing configFiles rather than wiping them.
     definition.configFiles = !jobInputsFromUrl
-      ? definition.configFiles ?? {}
+      ? (definition.configFiles ?? {})
       : Object.fromEntries(
           Object.keys(jobInputsFromUrl).map(key => {
             return [
