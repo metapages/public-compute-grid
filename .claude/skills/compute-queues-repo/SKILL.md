@@ -56,16 +56,18 @@ docs/       VitePress docs site, served at /docs (see docs/justfile).
 
 ### Files to open first
 
-| Question                        | File                                                         |
-| ------------------------------- | ------------------------------------------------------------ |
-| What routes exist?              | `app/api/src/handlerHono.ts` (the whole route table)         |
-| Job/state/message types         | `app/shared/src/shared/types.ts`                             |
-| The queue state machine         | `app/shared/src/shared/jobqueue.ts` (client+worker socket)   |
-| Enqueue / KV persistence        | `app/shared/src/shared/db.ts`                                |
-| Submission webhooks             | `app/shared/src/shared/webhooks.ts`                          |
-| Container creation, env, mounts | `app/worker/src/queue/DockerJob.ts`                          |
-| Inputs/outputs → datarefs       | `app/worker/src/queue/IO.ts`, `shared/src/shared/dataref.ts` |
-| Browser state                   | `app/browser/src/store.ts`                                   |
+| Question                        | File                                                                       |
+| ------------------------------- | -------------------------------------------------------------------------- |
+| What routes exist?              | `app/api/src/handlerHono.ts` (the whole route table)                       |
+| Job/state/message types         | `app/shared/src/shared/types.ts`                                           |
+| The queue state machine         | `app/shared/src/shared/jobqueue.ts` (client+worker socket)                 |
+| Enqueue / KV persistence        | `app/shared/src/shared/db.ts`                                              |
+| Submission webhooks             | `app/shared/src/shared/webhooks.ts`                                        |
+| Container creation, env, mounts | `app/worker/src/queue/DockerJob.ts`                                        |
+| Image build / context download  | `app/worker/src/queue/dockerImage.ts`                                      |
+| Inputs/outputs → datarefs       | `app/worker/src/queue/IO.ts`, `shared/src/shared/dataref.ts`               |
+| Build/run logs over HTTP        | `app/api/src/routes/api/v1/logs.ts`, `shared/src/shared/stream-handler.ts` |
+| Browser state                   | `app/browser/src/store.ts`                                                 |
 
 ## Job lifecycle
 
@@ -82,6 +84,16 @@ keep that page true if you change behaviour:
 3. **Webhook** `control.callbacks.queued` — fires when the job is **enqueued**, not when it finishes, and retries every
    minute via `Deno.cron` until 2xx. ⚠️ `control.callbacks.finished` exists in the type but **nothing reads it**; there
    is no finished webhook yet.
+4. **SSE** `GET /q/:queue/j/:jobId/stream` — one request follows one job (`build-log`, `run-log`, `state`, `final`) and
+   closes on a terminal state. Built for scripts and agents that want live logs without the stateful websocket.
+
+### Logs
+
+Logs stream from the worker as `JobStatusLogs` messages tagged with a `step`. `BaseDockerJobQueue` splits them into
+**build** (`docker build`, image pull/push, `cloning repo`) and **run** buffers, serves them live from memory, and
+flushes both to KV on `stateChangeJobFinished` (1 week TTL). Exposed as `build-logs.json` / `run-logs.json`
+(cursor-paged via `?since=`) and over SSE. Keep the two kinds separate — telling "the build broke" from "the program
+broke" is the whole point.
 
 ## Inputs and outputs
 
@@ -107,7 +119,14 @@ Always `just`. Root `justfile` delegates to `app/*/justfile`.
 
 ```sh
 just dev                 # whole local stack (api + browser + worker + minio + denokv)
+just app/worker/local    # ⚡ just the local-mode worker — it serves the same API on :8000
+                         #    (queue "local"), starts in seconds, no docker compose. Use this
+                         #    to test anything that doesn't need the cloud API or the browser.
 just test                # full suite against a fresh local stack
+just dev-install-skill   # symlink docs/public/skill/* into ~/.claude/skills so repo edits
+                         #    are live while iterating (just dev-uninstall-skill to undo)
+just test-skill          # compute-queues skill's API surface (needs a worker, see above)
+just test-skill-ai       # spawns real `claude -p` sessions; costs tokens, not in `just test`
 just check               # typescript compile checks
 just fmt / just lint-fix
 just worker dev|prod     # worker only, against local or prod api
@@ -134,4 +153,8 @@ Local stack is HTTPS via mkcert at `https://worker-metaframe.localhost`; run `mk
   means it.
 - Route handlers stay thin; logic belongs in `shared/`.
 - Anything user-facing about the queue protocol has a home in `docs/` and in the distributable skill under
-  `docs/public/skill/compute-queues/` — update both.
+  `docs/public/skill/compute-queues/` — update both. The skill is deliberately ONE skill covering both audiences
+  (building a container, and integrating submission into an app); splitting it caused the wrong half to be selected on
+  ambiguous prompts. See docs/guide/agent-skill.md § Why one skill and not two.
+- `docs/public/skill/compute-queues/scripts/cq.mjs` is shipped to users verbatim. It must stay dependency-free and run
+  under both node ≥ 18 and deno — no `Buffer`, no npm imports.

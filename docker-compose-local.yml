@@ -35,6 +35,7 @@ services:
     volumes:
       - ./deno.json:/app/deno.json
       - ./app/shared:/app/app/shared
+      - ./app/mcp:/app/app/mcp
       - ./app/worker:/app/app/worker
       - ./app/browser/dist:/app/app/browser/dist
       - /tmp:/tmp

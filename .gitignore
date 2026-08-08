@@ -5,3 +5,4 @@
 **/dist
 **/node_modules
 docs/.vitepress/cache
+docs/public/skill/compute-queues/scripts/dev-target.json

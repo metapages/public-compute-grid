@@ -18,12 +18,14 @@ import {
   type BroadcastJobDefinitions,
   type BroadcastJobStates,
   type BroadcastWorkers,
+  type ConsoleLogLine,
   DefaultNamespace,
   type DockerJobDefinitionInputRefs,
   DockerJobFinishedReason,
   DockerJobState,
   type EnqueueJob,
   type InMemoryDockerJob,
+  type JobsStateMap,
   type JobStates,
   type JobStatusPayload,
   type PayloadClearJobCache,
@@ -191,6 +193,68 @@ type BroadcastChannelMessage = {
 // only to make this in-memory queue durable
 export const userJobQueues: { [id in string]: BaseDockerJobQueue } = {};
 
+/**
+ * Observers of job logs and state, for consumers layered on top of the queue
+ * (currently the API server's MCP transport).
+ *
+ * This used to be a dynamic `import("/@/routes/mcp/websocket.ts")` from inside
+ * the queue. That is the API app's import alias, so it never resolved — in the
+ * worker the module does not exist at all, and in the API the alias is `@/`,
+ * not `/@/`. Both failures were swallowed by the attached `.catch()`, so the
+ * MCP log stream was silently dead. Inverting it means shared/ no longer
+ * reaches into another package's module graph, and a broken listener is loud.
+ */
+export type JobLogsListener = (logs: JobStatusPayload) => void;
+export type JobStateListener = (
+  jobId: string,
+  state: DockerJobState,
+  details: {
+    worker?: string;
+    finishedReason?: DockerJobFinishedReason;
+    time?: number;
+    queuedTime?: number;
+    namespaces?: string[];
+  },
+) => void;
+
+const jobLogsListeners = new Set<JobLogsListener>();
+const jobStateListeners = new Set<JobStateListener>();
+
+/** Returns an unsubscribe function. */
+export const onJobLogs = (listener: JobLogsListener): () => void => {
+  jobLogsListeners.add(listener);
+  return () => {
+    jobLogsListeners.delete(listener);
+  };
+};
+
+export const onJobStateChange = (listener: JobStateListener): () => void => {
+  jobStateListeners.add(listener);
+  return () => {
+    jobStateListeners.delete(listener);
+  };
+};
+
+const emitJobLogs: JobLogsListener = (logs) => {
+  for (const listener of jobLogsListeners) {
+    try {
+      listener(logs);
+    } catch (err) {
+      console.error("job logs listener threw:", err);
+    }
+  }
+};
+
+const emitJobStateChange: JobStateListener = (jobId, state, details) => {
+  for (const listener of jobStateListeners) {
+    try {
+      listener(jobId, state, details);
+    } catch (err) {
+      console.error("job state listener threw:", err);
+    }
+  }
+};
+
 interface NanoEventWorkerMessageEvents {
   message: (m: WebsocketMessageWorkerToServer) => void;
 }
@@ -216,6 +280,26 @@ export interface CollectedWorkersRegistration {
 }
 
 /**
+ * The worker tags every log batch with the `step` that produced it. These four
+ * steps happen before the container is executed, so they are the BUILD half of
+ * a job's lifecycle; everything else is a RUN log. Splitting them matters for
+ * anyone iterating on a Dockerfile: "the build failed" and "the program failed"
+ * are completely different problems and should not be interleaved in one blob.
+ */
+const BUILD_LOG_STEPS: Set<string> = new Set([
+  "docker build",
+  "docker image pull",
+  "docker image push",
+  "cloning repo",
+]);
+
+/**
+ * Cap on buffered log lines per job per kind. A runaway container can emit
+ * unbounded output; keep the tail, which is where the error is.
+ */
+const MAX_BUFFERED_LOG_LINES = 10000;
+
+/**
  * Base class for docker job queues with default implementations
  */
 export class BaseDockerJobQueue {
@@ -232,6 +316,15 @@ export class BaseDockerJobQueue {
   protected readonly debug: boolean;
   /** Local worker count at the last channel broadcast, see broadcastWorkersToChannel */
   protected lastBroadcastWorkerCount = 0;
+
+  /**
+   * Per-job build and run log buffers, accumulated as logs stream in from the
+   * worker and flushed to the db when the job finishes. While a job is live
+   * these are the only copy, so the SSE stream and the logs endpoints read
+   * through them first; afterwards the db is the source of truth.
+   */
+  private buildLogsBuffer: Map<string, ConsoleLogLine[]> = new Map();
+  private runLogsBuffer: Map<string, ConsoleLogLine[]> = new Map();
 
   // intervals
   protected _intervalWorkerBroadcast: ReturnType<typeof setInterval> | undefined;
@@ -475,6 +568,10 @@ export class BaseDockerJobQueue {
         case "job-logs": {
           // console.log(`⛈️ got job-logs from broadcast`);
           const logs = payload.value as JobStatusPayload;
+          // Buffer here too, so an SSE stream or logs request landing on an
+          // instance that is not the one holding the worker socket still sees
+          // live logs rather than waiting for the job to finish.
+          this.bufferLogs(logs);
           this.sendLogsToLocalClients(logs);
           break;
         }
@@ -496,9 +593,12 @@ export class BaseDockerJobQueue {
    * This is called by rest path /:queue/status
    */
   async status(): Promise<object> {
-    // First attach listener to broadcast channel
-    const remoteServersResponse = await this.getStatusFromRemoteWorkers();
-    const localWorkersResponse = await this.getStatusFromLocalWorkers();
+    // Independent collections over different transports — awaiting them in
+    // series made every status call cost the sum of both windows.
+    const [remoteServersResponse, localWorkersResponse] = await Promise.all([
+      this.getStatusFromRemoteWorkers(),
+      this.getStatusFromLocalWorkers(),
+    ]);
 
     const jobCount = Object.keys(this.state.jobs).length;
     const localWorkerCount = this.workers.myWorkers.length;
@@ -563,6 +663,15 @@ export class BaseDockerJobQueue {
 
     const result: Record<string, BroadcastChannelStatusResponse> = {};
 
+    // Without the redis bus the BroadcastChannel is in-isolate: this process is
+    // the only one on it, so the status-request below would be heard by nobody
+    // and the collection window would expire empty every single time. That is
+    // the local-mode worker's situation, where it costs 3s on every status call
+    // to learn nothing.
+    if (!usingRedisBroadcastChannel) {
+      return result;
+    }
+
     // First attach a listener to the broadcast channel
     const unbindChannelListener = this.channelEmitter.on(
       "message",
@@ -595,12 +704,84 @@ export class BaseDockerJobQueue {
   }
 
   broadcastAndSendLogsToLocalClients(logs: JobStatusPayload) {
+    this.bufferLogs(logs);
+
     this.channel.postMessage({
       type: "job-logs",
       value: logs,
     } as BroadcastChannelMessage);
 
     this.sendLogsToLocalClients(logs);
+  }
+
+  private bufferLogs(logs: JobStatusPayload) {
+    if (!logs.logs?.length) {
+      return;
+    }
+    const buffer = BUILD_LOG_STEPS.has(logs.step) ? this.buildLogsBuffer : this.runLogsBuffer;
+    const existing = buffer.get(logs.jobId) || [];
+    const combined = existing.concat(logs.logs);
+    buffer.set(
+      logs.jobId,
+      combined.length > MAX_BUFFERED_LOG_LINES ? combined.slice(-MAX_BUFFERED_LOG_LINES) : combined,
+    );
+  }
+
+  /**
+   * Live readers (the SSE stream, the *-logs.json endpoints) cannot wait for
+   * stateChangeJobFinished — a job that is still building has produced logs but
+   * nothing persisted. Read the buffer first, fall back to the db once flushed.
+   */
+  public async getCurrentBuildLogs(jobId: string): Promise<ConsoleLogLine[]> {
+    return this.buildLogsBuffer.get(jobId) ?? (await this.db.getBuildLogs(jobId)) ?? [];
+  }
+
+  public async getCurrentRunLogs(jobId: string): Promise<ConsoleLogLine[]> {
+    return this.runLogsBuffer.get(jobId) ?? (await this.db.getRunLogs(jobId)) ?? [];
+  }
+
+  public getCurrentJobState(jobId: string): InMemoryDockerJob | undefined {
+    return this.state.jobs[jobId];
+  }
+
+  /**
+   * Read-only views for callers outside the class (the MCP transports, and
+   * anything else that wants to describe the queue without mutating it).
+   * `state`, `workers` and `clients` are protected on purpose — these hand out
+   * copies so a caller cannot reach in and edit live queue state.
+   */
+  public getJobsSnapshot(): JobsStateMap {
+    return { ...this.state.jobs };
+  }
+
+  public getWorkerRegistrations(): WorkerRegistration[] {
+    return this.workers.myWorkers.map((w) => w.registration);
+  }
+
+  public getClientCount(): number {
+    return this.clients.length;
+  }
+
+  private async flushLogBuffer(
+    jobId: string,
+    buffer: Map<string, ConsoleLogLine[]>,
+    kind: "build" | "run",
+  ): Promise<void> {
+    const lines = buffer.get(jobId);
+    if (!lines?.length) {
+      buffer.delete(jobId);
+      return;
+    }
+    try {
+      if (kind === "build") {
+        await this.db.storeBuildLogs(jobId, lines);
+      } else {
+        await this.db.storeRunLogs(jobId, lines);
+      }
+    } catch (err) {
+      console.error(`Failed to persist ${kind} logs for job ${jobId}:`, err);
+    }
+    buffer.delete(jobId);
   }
 
   sendLogsToLocalClients(logs: JobStatusPayload) {
@@ -610,6 +791,9 @@ export class BaseDockerJobQueue {
       payload: logs,
     });
     this.broadcastToLocalClients(messageString);
+
+    // Anything layered on top of the queue (the MCP transport) hears it here.
+    emitJobLogs(logs);
   }
 
   async getStatusFromLocalWorkers(): Promise<
@@ -622,6 +806,18 @@ export class BaseDockerJobQueue {
     // Then return the responses
 
     const result: Record<string, WorkerStatusResponse> = {};
+
+    // Unlike the remote case, the number of responders is known exactly: it is
+    // the set of workers currently holding a socket to this server. So wait for
+    // *them* rather than for the clock, and treat the timeout as a ceiling for
+    // a worker whose socket is alive but which never answers. A local-mode
+    // worker is a singleton in this same process, so it replies over the
+    // loopback socket in under a millisecond.
+    const expectedResponders = this.workers.myWorkers.length;
+    if (expectedResponders === 0) {
+      return result;
+    }
+    const { promise: allResponded, resolve: markAllResponded } = Promise.withResolvers<void>();
 
     // First attach listeners to all the workers
     const eventUnbinds: (() => void)[] = [];
@@ -655,6 +851,9 @@ export class BaseDockerJobQueue {
             );
 
             result[status.id] = status;
+            if (Object.keys(result).length >= expectedResponders) {
+              markAllResponded();
+            }
           }
         },
       );
@@ -670,8 +869,9 @@ export class BaseDockerJobQueue {
       } as WebsocketMessageServerBroadcast),
     );
 
-    // Then wait a bit to collect the responses
-    await delay(ms("2 seconds") as number);
+    // Then collect the responses: done as soon as every worker has answered,
+    // or when the ceiling expires if one of them never does.
+    await Promise.race([allResponded, delay(ms("2 seconds") as number)]);
 
     // Then remove the listeners
     while (eventUnbinds.length > 0) {
@@ -854,6 +1054,17 @@ export class BaseDockerJobQueue {
   ): Promise<void> {
     await this.broadcastJobStatesToWebsockets([jobId]);
     this.broadcastJobStatesToChannel([jobId]);
+
+    const job = this.state.jobs[jobId];
+    if (job) {
+      emitJobStateChange(jobId, job.state, {
+        worker: job.worker,
+        finishedReason: job.finishedReason,
+        time: job.time,
+        queuedTime: job.queuedTime,
+        namespaces: job.namespaces,
+      });
+    }
   }
 
   public async stateChangeJobFinished(
@@ -897,6 +1108,14 @@ export class BaseDockerJobQueue {
       );
       return;
     }
+
+    // Persist whatever logs streamed through this server for the job. The two
+    // buffers are flushed independently: a job that failed while building
+    // produced build logs and no run logs, and that build output is exactly
+    // what the caller needs to see.
+    await this.flushLogBuffer(jobId, this.buildLogsBuffer, "build");
+    await this.flushLogBuffer(jobId, this.runLogsBuffer, "run");
+
     const { updatedInMemoryJob, subsequentStateChange } = await this.db.setJobFinished({
       queue: this.address,
       jobId,
@@ -1043,6 +1262,14 @@ export class BaseDockerJobQueue {
         }
         if (this.state.jobs[jobId] && isJobRemovableFromQueue(this.state.jobs[jobId])) {
           delete this.state.jobs[jobId];
+          // Drop the log buffers too. On the instance that owns the worker
+          // socket these were already flushed to the db by
+          // stateChangeJobFinished; on the other instances they were only ever
+          // a mirror fed by the broadcast channel, and the db copy the owning
+          // instance wrote is authoritative. Either way, nothing is lost and
+          // the map does not grow without bound.
+          this.buildLogsBuffer.delete(jobId);
+          this.runLogsBuffer.delete(jobId);
           sendBroadcast = true;
           console.log(`${this.addressShortString} ${getJobColorizedString(jobId)} 🪓 removed from queue`);
         }

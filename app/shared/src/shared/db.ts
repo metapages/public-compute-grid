@@ -6,6 +6,7 @@ import { ensureDir } from "std/fs";
 import { join } from "std/path";
 import { getKv } from "@shared/kv.ts";
 import {
+  type ConsoleLogLine,
   type DataRef,
   DefaultNamespace,
   type DockerJobDefinitionInputRefs,
@@ -19,7 +20,7 @@ import {
 } from "@shared/types.ts";
 import { addJobProcessSubmissionWebhook } from "@shared/webhooks.ts";
 
-import { JobDataCacheDurationMilliseconds } from "./constants.ts";
+import { JobDataCacheDurationMilliseconds, JobLogsDurationMilliseconds } from "./constants.ts";
 import {
   formatDefinitionS3Key,
   formatResultsS3Key,
@@ -823,5 +824,30 @@ export class DB {
       }
     }
     return count;
+  }
+
+  /**
+   * Build/run logs. These are streamed live over the websocket while a job
+   * runs, but agents and scripts driving the HTTP API need them after the
+   * fact too — especially build logs, which are the only way to diagnose a
+   * Dockerfile that failed to build. Written once, when the job reaches a
+   * terminal state (see BaseDockerJobQueue.flushLogBuffer).
+   */
+  async storeBuildLogs(jobId: string, logs: ConsoleLogLine[]): Promise<void> {
+    await this.kv.set(["build-logs", jobId], logs, { expireIn: JobLogsDurationMilliseconds });
+  }
+
+  async getBuildLogs(jobId: string): Promise<ConsoleLogLine[] | null> {
+    const entry = await this.kv.get<ConsoleLogLine[]>(["build-logs", jobId]);
+    return entry.value;
+  }
+
+  async storeRunLogs(jobId: string, logs: ConsoleLogLine[]): Promise<void> {
+    await this.kv.set(["run-logs", jobId], logs, { expireIn: JobLogsDurationMilliseconds });
+  }
+
+  async getRunLogs(jobId: string): Promise<ConsoleLogLine[] | null> {
+    const entry = await this.kv.get<ConsoleLogLine[]>(["run-logs", jobId]);
+    return entry.value;
   }
 }

@@ -102,4 +102,8 @@ deno run --allow-all src/cli.ts job add $QUEUE \
   --wait
 ```
 
-**AI agent** — install the [Agent Skill](/guide/agent-skill) so your coding agent knows this API without being told.
+**Build a container** — writing a Dockerfile and iterating until it runs is its own loop; see
+[Building containers](/guide/building-containers).
+
+**AI agent** — install the [Agent Skill](/guide/agent-skill) so your coding agent can build and debug a container on
+this API, and knows the protocol without being told.

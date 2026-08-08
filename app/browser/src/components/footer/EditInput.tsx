@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from "react";
 
-import { DockerJobDefinitionParamsInUrlHash, JobInputs } from "/@shared/client";
+import { useJobDefinitionParam } from "/@/hooks/useJobDefinitionParam";
+import { JobInputs } from "/@shared/client";
 import { useStore } from "/@/store";
 
 import { Button, HStack, Icon, Text, Tooltip } from "@chakra-ui/react";
@@ -9,7 +10,7 @@ import { PencilSimple, Terminal } from "@phosphor-icons/react";
 import { useOptionShowTerminalFirst } from "/@/hooks/useOptionShowTerminalFirst";
 
 export const EditInput: React.FC = () => {
-  const [jobDefinitionBlob] = useHashParamJson<DockerJobDefinitionParamsInUrlHash>("job");
+  const [jobDefinitionBlob] = useJobDefinitionParam();
   const [jobInputs] = useHashParamJson<JobInputs | undefined>("inputs");
 
   // only show the edit button if the command points to a script in the inputs

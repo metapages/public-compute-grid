@@ -44,10 +44,13 @@ export async function waitForJob(queue, jobId, { timeoutMs = 600_000 } = {}) {
 }
 
 export function assertOk(data) {
-  if (data.finishedReason !== "Success") throw new Error(`job ${data.finishedReason}`);
+  if (data.finishedReason !== "Success") {
+    throw new Error(`job ${data.finishedReason}`);
+  }
   const result = data.finished?.result;
   if (result?.StatusCode !== 0) {
-    const stderr = (result?.logs ?? []).filter((l) => l[2]).map((l) => l[0]).join("");
+    const stderr = (result?.logs ?? []).filter((l) => l[2]).map((l) => l[0])
+      .join("");
     throw new Error(`exit ${result?.StatusCode}: ${stderr.slice(0, 2000)}`);
   }
   return result;
@@ -58,7 +61,11 @@ export const stdout = (result) => (result.logs ?? []).filter((l) => !l[2]).map((
 export async function uploadInput(bytes) {
   const hash = createHash("sha256").update(bytes).digest("hex");
   if ((await fetch(`${API}/f/${hash}/exists`)).status !== 200) {
-    const put = await fetch(`${API}/f/${hash}`, { method: "PUT", body: bytes, redirect: "follow" });
+    const put = await fetch(`${API}/f/${hash}`, {
+      method: "PUT",
+      body: bytes,
+      redirect: "follow",
+    });
     if (!put.ok) throw new Error(`upload ${put.status}`);
   }
   return { type: "url", value: `${API}/f/${hash}` };
@@ -109,7 +116,11 @@ const report = await readOutput(result.outputs, "report.json");
 Node 22+ or Deno have a global `WebSocket`; on Node 18–20 use `npm i ws` and `import WebSocket from "ws"`.
 
 ```js
-export function waitForJobWs(queue, jobId, { timeoutMs = 600_000, onLog } = {}) {
+export function waitForJobWs(
+  queue,
+  jobId,
+  { timeoutMs = 600_000, onLog } = {},
+) {
   const API_WS = API.replace(/^http/, "ws");
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(`${API_WS}/q/${queue}/client`);
@@ -123,7 +134,10 @@ export function waitForJobWs(queue, jobId, { timeoutMs = 600_000, onLog } = {}) 
       fn(arg);
     };
 
-    socket.addEventListener("open", () => socket.send(JSON.stringify({ type: "QueryJob", payload: { jobId } })));
+    socket.addEventListener(
+      "open",
+      () => socket.send(JSON.stringify({ type: "QueryJob", payload: { jobId } })),
+    );
     socket.addEventListener("error", (e) => finish(reject, e));
 
     socket.addEventListener("message", async (event) => {
@@ -132,12 +146,17 @@ export function waitForJobWs(queue, jobId, { timeoutMs = 600_000, onLog } = {}) 
 
       if (msg.type === "JobStates" || msg.type === "JobStateUpdates") {
         if (msg.payload?.state?.jobs?.[jobId]?.state === "Finished") {
-          const { data } = await (await fetch(`${API}/q/${queue}/j/${jobId}/result.json`)).json();
+          const { data } = await (await fetch(`${API}/q/${queue}/j/${jobId}/result.json`))
+            .json();
           finish(resolve, data);
         }
       }
-      if (msg.type === "JobStatusPayload" && msg.payload?.jobId === jobId && onLog) {
-        for (const [line, , isErr] of msg.payload.logs ?? []) onLog(line, !!isErr);
+      if (
+        msg.type === "JobStatusPayload" && msg.payload?.jobId === jobId && onLog
+      ) {
+        for (const [line, , isErr] of msg.payload.logs ?? []) {
+          onLog(line, !!isErr);
+        }
       }
     });
   });
@@ -174,7 +193,9 @@ The shape to use for anything real:
 ```js
 // boot reconciliation
 for (const { jobId, queue } of await db.unfinishedJobs()) {
-  waitForJob(queue, jobId).then((data) => db.complete(jobId, data)).catch(() => {});
+  waitForJob(queue, jobId).then((data) => db.complete(jobId, data)).catch(
+    () => {},
+  );
 }
 ```
 
@@ -186,7 +207,9 @@ const API = Deno.env.get("COMPUTE_API") ?? "https://container.mtfm.io";
 const QUEUE = Deno.env.get("COMPUTE_QUEUE")!;
 
 Deno.serve({ port: 8080 }, async (req) => {
-  if (req.method !== "POST") return new Response("POST { script }", { status: 405 });
+  if (req.method !== "POST") {
+    return new Response("POST { script }", { status: 405 });
+  }
   const { script } = await req.json();
 
   const submit = await fetch(`${API}/q/${QUEUE}`, {
@@ -206,7 +229,8 @@ Deno.serve({ port: 8080 }, async (req) => {
   let data, interval = 500;
   const deadline = Date.now() + 300_000;
   while (Date.now() < deadline) {
-    ({ data } = await (await fetch(`${API}/q/${QUEUE}/j/${jobId}/result.json`)).json());
+    ({ data } = await (await fetch(`${API}/q/${QUEUE}/j/${jobId}/result.json`))
+      .json());
     if (data?.state === "Finished") break;
     await new Promise((r) => setTimeout(r, interval));
     interval = Math.min(interval * 1.5, 5000);
@@ -243,7 +267,10 @@ Only workers started with GPUs take it; the container always sees its device as 
 
 ```json
 {
-  "build": { "context": "https://github.com/me/tool#main", "filename": "Dockerfile" },
+  "build": {
+    "context": "https://github.com/me/tool#main",
+    "filename": "Dockerfile"
+  },
   "command": "tool --run"
 }
 ```
@@ -253,7 +280,11 @@ Build logs stream as `JobStatusPayload` with `step: "docker build"`. Images are 
 **Force a re-run** (defeat content-hash dedup)
 
 ```json
-{ "image": "alpine:3.19.1", "command": "date", "env": { "NONCE": "2026-07-24T09:14:22Z" } }
+{
+  "image": "alpine:3.19.1",
+  "command": "date",
+  "env": { "NONCE": "2026-07-24T09:14:22Z" }
+}
 ```
 
 **Cache model weights across jobs**

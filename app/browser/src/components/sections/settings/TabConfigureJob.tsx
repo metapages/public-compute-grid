@@ -7,7 +7,7 @@ import { useMaxJobDuration } from "/@/hooks/useMaxJobDuration";
 import { useOptionJobStartAutomatically } from "/@/hooks/useOptionJobStartAutomatically";
 import { useOptionResolveDataRefs } from "/@/hooks/useOptionResolveDataRefs";
 import { useOptionShowTerminalFirst } from "/@/hooks/useOptionShowTerminalFirst";
-import { DockerJobDefinitionParamsInUrlHash } from "/@shared/client";
+import { useJobDefinitionParam } from "/@/hooks/useJobDefinitionParam";
 
 import {
   Box,
@@ -25,7 +25,7 @@ import {
   Text,
   VStack,
 } from "@chakra-ui/react";
-import { useHashParamBoolean, useHashParamJson } from "@metapages/hash-query/react-hooks";
+import { useHashParamBoolean } from "@metapages/hash-query/react-hooks";
 import { Plus, TrashSimple } from "@phosphor-icons/react";
 import { useOptionAllowSetJob } from "/@/hooks/useOptionAllowSetJob";
 
@@ -59,7 +59,7 @@ const linkMap = {
 };
 
 export const TabConfigureJob: React.FC = () => {
-  const [jobDefinitionBlob, setJobDefinitionBlob] = useHashParamJson<DockerJobDefinitionParamsInUrlHash>("job");
+  const [jobDefinitionBlob, setJobDefinitionBlob] = useJobDefinitionParam();
   const [debug, setDebug] = useHashParamBoolean("debug");
   const [jobStartAutomatically, toggleJobStartAutomatically] = useOptionJobStartAutomatically();
   const [showTerminalFirst, toggleShowTerminalFirst, loading] = useOptionShowTerminalFirst();

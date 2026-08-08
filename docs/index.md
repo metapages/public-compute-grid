@@ -26,11 +26,14 @@ features:
   - title: Bring your own compute
     details: One `docker run` on a laptop, workstation, or cluster node joins that machine to your queue. Scale by starting more.
     link: /guide/workers
+  - title: Build it here, not locally
+    details: Ship a Dockerfile or a git repo and the worker builds it. Separate build and run logs tell you which half broke.
+    link: /guide/building-containers
   - title: Three ways to get results
     details: Poll, subscribe over a websocket, or register a callback. Same job, pick whichever fits your backend.
     link: /guide/backend-integration
   - title: Built for agents
-    details: An Agent Skill and an llms.txt so an AI can drive a queue correctly on the first try.
+    details: An Agent Skill and an llms.txt so an AI can build a container, debug it, and drive a queue correctly on the first try.
     link: /guide/agent-skill
 ---
 

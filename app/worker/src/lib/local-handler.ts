@@ -1,18 +1,23 @@
 import { config, getConfig } from "/@/config.ts";
+import { StreamableHTTPTransport } from "@hono/mcp";
+import { createMcpServer } from "@metapages/compute-queues-mcp/server-factory";
 import { type Context, Hono } from "hono";
 import { serveStatic } from "hono/middleware";
 import { createHandler } from "metapages/worker/routing/handlerDeno";
 import { join } from "std/path";
 import mime from "mime";
+import { nanoid } from "nanoid";
 
 import {
   BaseDockerJobQueue,
   DefaultNamespace,
+  type DockerJobDefinitionInputRefs,
   DockerJobFinishedReason,
   DockerJobState,
   type EnqueueJob,
   getJobColorizedString,
   type InMemoryDockerJob,
+  makeStreamHandler,
   shaDockerJob,
   type StateChange,
   userJobQueues,
@@ -245,6 +250,54 @@ export const getDefinitionHandler = async (c: Context) => {
   }
 };
 
+/**
+ * Build/run logs, mirroring the API server's routes (see
+ * app/api/src/routes/api/v1/logs.ts). Reads through the queue so a job that is
+ * still building surfaces its logs before it finishes.
+ */
+const makeLogsHandler = (kind: "build" | "run") => {
+  return async (c: Context) => {
+    try {
+      const jobId: string | undefined = c.req.param("jobId");
+      const queue: string = c.req.param("queue") || "local";
+      if (!jobId) {
+        c.status(404);
+        return c.json({ error: "No jobId specified" });
+      }
+      const sinceRaw = c.req.query("since");
+      const since = sinceRaw ? Number(sinceRaw) : 0;
+      if (Number.isNaN(since)) {
+        c.status(400);
+        return c.json({ error: "`since` must be a number" });
+      }
+
+      const jobQueue = await ensureQueue(queue);
+      const lines = kind === "build"
+        ? await jobQueue.getCurrentBuildLogs(jobId)
+        : await jobQueue.getCurrentRunLogs(jobId);
+      const isFinal = !!(await jobQueue.db.getFinishedJob(jobId));
+      const safeSince = Math.max(0, Math.floor(since));
+
+      return c.json({
+        data: lines.slice(safeSince),
+        sliceStart: safeSince,
+        nextCursor: lines.length,
+        isFinal,
+      });
+    } catch (err) {
+      console.error(`Error getting ${kind} logs`, err);
+      return c.text((err as Error).message, 500);
+    }
+  };
+};
+
+export const getBuildLogsHandler = makeLogsHandler("build");
+export const getRunLogsHandler = makeLogsHandler("run");
+
+export const streamJobHandler = makeStreamHandler({
+  resolveQueue: (c: Context) => ensureQueue(c.req.param("queue") || "local"),
+});
+
 export const getJobResultsHandler = async (c: Context) => {
   try {
     const jobId: string | undefined = c.req.param("jobId");
@@ -271,7 +324,8 @@ export const getJobResultsHandler = async (c: Context) => {
 
 export const getJobHandler = async (c: Context) => {
   try {
-    const jobId: string | undefined = c.req.param("jobId");
+    // Route matches /j/<jobId>.json — strip the suffix to get the bare id.
+    const jobId: string | undefined = c.req.param("jobId")?.replace(/\.json$/, "");
 
     if (!jobId) {
       c.status(404);
@@ -571,13 +625,18 @@ app.get("/healthz", (c: Context) => c.text("OK"));
 app.get("/f/:key", downloadHandler);
 app.get("/f/:key/exists", existsHandler);
 app.put("/f/:key", uploadHandler);
-app.get("/j/:jobId", getJobHandler);
+app.get("/j/:jobId/build-logs.json", getBuildLogsHandler);
+app.get("/j/:jobId/run-logs.json", getRunLogsHandler);
 app.get("/j/:jobId/definition.json", getDefinitionHandler);
 app.get("/j/:jobId/result.json", getJobResultsHandler);
 app.get("/j/:jobId/results.json", getJobResultsHandler);
 app.get("/j/:jobId/outputs/*", getJobOutputsHandler);
 app.get("/j/:jobId/inputs/*", getJobInputsHandler);
 app.post("/j/:jobId/copy", copyJobToQueueHandler);
+// JSON job-state lives at /j/<jobId>.json so the bare /j/<jobId> path can fall
+// through to the static SPA below, which loads the job by id from
+// /j/<jobId>/definition.json. That short path is what MCP clients hand to users.
+app.get("/j/:jobId{[^/]+\\.json}", getJobHandler);
 app.post("/q/:queue", submitJobToQueueHandler);
 app.post("/q/:queue/j", submitJobToQueueHandler);
 app.get("/q/:queue/j", getJobsHandler);
@@ -586,6 +645,10 @@ app.get("/q/:queue/j/:jobId", getQueueJobHandler);
 app.get("/q/:queue/j/:jobId/inputs/*", getJobInputsHandler);
 app.get("/q/:queue/j/:jobId/outputs/*", getJobOutputsHandler);
 // app.get("/q/:queue/j/:jobId/namespaces.json", getJobNamespacesHandler);
+app.get("/q/:queue/j/:jobId/build-logs.json", getBuildLogsHandler);
+app.get("/q/:queue/j/:jobId/run-logs.json", getRunLogsHandler);
+// Server-Sent Events: follow one job's build logs, run logs and state to completion
+app.get("/q/:queue/j/:jobId/stream", streamJobHandler);
 app.get("/q/:queue/j/:jobId/definition.json", getDefinitionHandler);
 app.get("/q/:queue/j/:jobId/result.json", getJobResultsHandler);
 app.get("/q/:queue/j/:jobId/results.json", getJobResultsHandler);
@@ -640,6 +703,30 @@ app.get("/q/:queue/status", async (c) => {
 
 app.get("/:queue/metrics", metricsHandler);
 
+/**
+ * index.html for a page served one directory down (`/j/<jobId>`). The built
+ * asset URLs are relative — vite's `base` is empty so the app can also be served
+ * from a subpath — which means `./assets/…` would resolve to `/j/assets/…` and
+ * 404. Giving the existing `<base>` tag an href repoints them at the origin root
+ * without touching the build. Read per request so a rebuilt dist is picked up.
+ */
+const serveSpaOneLevelDown = async (indexPath: string, c: Context): Promise<Response> => {
+  const html = await Deno.readTextFile(indexPath).catch(() => undefined);
+  if (!html) {
+    return c.notFound();
+  }
+  return c.html(
+    html.includes("<base ")
+      ? html.replace("<base ", '<base href="/" ')
+      : html.replace("<head>", '<head><base href="/">'),
+  );
+};
+
+// The bare /j/<jobId> is the browser page for a job (the SPA loads the
+// definition by id). It needs its own route: the static handler below answers a
+// missing file with 404 rather than falling through, so the index.html catch-all
+// at the end never runs. Registered after /j/<jobId>.json so that stays JSON.
+app.get("/j/:jobId", (c: Context) => serveSpaOneLevelDown("../browser/dist/index.html", c));
 app.get("/*", serveStatic({ root: "../browser/dist" }));
 app.get("/", serveStatic({ path: "../browser/dist/index.html" }));
 app.get("*", serveStatic({ path: "../browser/dist/index.html" }));
@@ -657,6 +744,553 @@ const ensureQueue = async (queue: string): Promise<BaseDockerJobQueue> => {
   }
   return userJobQueues[queue];
 };
+
+// MCP Types and Handlers
+type MCPRequest = {
+  jsonrpc: "2.0";
+  id: string | number;
+  method: string;
+  params?: Record<string, unknown>;
+};
+
+type MCPResponse = {
+  jsonrpc: "2.0";
+  id: string | number;
+  result?: unknown;
+  error?: {
+    code: number;
+    message: string;
+    data?: unknown;
+  };
+};
+
+type MCPTool = {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: "object";
+    properties: Record<string, unknown>;
+    required: string[];
+  };
+};
+
+const mcpTools: MCPTool[] = [
+  {
+    name: "submit_job",
+    description: "Submit a Docker job to a queue for execution. Returns the job ID for tracking.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        image: {
+          type: "string",
+          description: "Docker image to run (e.g., 'python:3.11', 'alpine:latest')",
+        },
+        command: {
+          type: "string",
+          description: "Command to execute in the container",
+          default: "echo 'Hello World'",
+        },
+        inputs: {
+          type: "object",
+          description: "Input files as key-value pairs where key is filename and value is file content",
+          additionalProperties: { type: "string" },
+          default: {},
+        },
+        env: {
+          type: "object",
+          description: "Environment variables as key-value pairs",
+          additionalProperties: { type: "string" },
+          default: {},
+        },
+        maxDuration: {
+          type: "string",
+          description: "Maximum job duration (e.g., '10m', '1h', '30s')",
+          default: "10m",
+        },
+      },
+      required: ["image"],
+    },
+  },
+  {
+    name: "get_job_status",
+    description:
+      "Get the status and details of a job by its ID. Returns job state, progress, and results if completed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        jobId: {
+          type: "string",
+          description: "The unique job ID to check status for",
+        },
+        includeResult: {
+          type: "boolean",
+          description: "Whether to include job results if the job is finished",
+          default: true,
+        },
+      },
+      required: ["jobId"],
+    },
+  },
+  {
+    name: "list_jobs",
+    description: "List all jobs in the local queue with their current status and basic information.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: {
+          type: "number",
+          description: "Maximum number of jobs to return",
+          default: 50,
+          minimum: 1,
+          maximum: 200,
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "cancel_job",
+    description: "Cancel a running or queued job in the local queue.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        jobId: {
+          type: "string",
+          description: "The unique job ID to cancel",
+        },
+      },
+      required: ["jobId"],
+    },
+  },
+];
+
+const handleMCPSubmitJob = async (args: any): Promise<any> => {
+  try {
+    const { image, command = "echo 'Hello World'", inputs = {}, env = {}, maxDuration = "10m" } = args;
+    const queue = "local"; // Always use local queue in local mode
+
+    // Convert inputs to DataRef format
+    const inputsRefs = Object.keys(inputs).length > 0
+      ? Object.fromEntries(
+        Object.entries(inputs).map(([key, value]) => [
+          key,
+          {
+            value,
+            type: "utf8",
+          },
+        ]),
+      )
+      : undefined;
+
+    const jobId = nanoid();
+    const jobToQueue: EnqueueJob = {
+      id: jobId,
+      definition: {
+        image,
+        command,
+        inputs: inputsRefs as any,
+        env,
+        maxDuration,
+      },
+      control: {},
+    };
+
+    const jobQueue = await ensureQueue(queue);
+    await jobQueue.stateChangeJobEnqueue(jobToQueue);
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify(
+          {
+            success: true,
+            jobId,
+            queue,
+            message: `Job submitted successfully to queue '${queue}' with ID: ${jobId}`,
+          },
+          null,
+          2,
+        ),
+      }],
+    };
+  } catch (error: unknown) {
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify(
+          {
+            success: false,
+            error: (error as Error).message,
+            tool: "submit_job",
+          },
+          null,
+          2,
+        ),
+      }],
+      isError: true,
+    };
+  }
+};
+
+const handleMCPGetJobStatus = async (args: any): Promise<any> => {
+  try {
+    const { jobId, includeResult = true } = args;
+
+    // Try to find the job in any queue (since we don't know which queue)
+    let foundJob = null;
+    let foundQueue = "";
+
+    for (const queueName of Object.keys(userJobQueues)) {
+      const queue = userJobQueues[queueName];
+      const job = await queue.db.queueJobGet({ queue: queueName, jobId });
+      if (job) {
+        foundJob = job;
+        foundQueue = queueName;
+        break;
+      }
+    }
+
+    if (!foundJob) {
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(
+            {
+              success: false,
+              error: "Job not found",
+              jobId,
+            },
+            null,
+            2,
+          ),
+        }],
+        isError: true,
+      };
+    }
+
+    let result = null;
+    if (includeResult && foundJob.state === DockerJobState.Finished) {
+      const jobQueue = userJobQueues[foundQueue];
+      result = await jobQueue.db.getJobFinishedResults(jobId);
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify(
+          {
+            success: true,
+            jobId,
+            queue: foundQueue,
+            job: foundJob,
+            result,
+          },
+          null,
+          2,
+        ),
+      }],
+    };
+  } catch (error: unknown) {
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify(
+          {
+            success: false,
+            error: (error as Error).message,
+            tool: "get_job_status",
+          },
+          null,
+          2,
+        ),
+      }],
+      isError: true,
+    };
+  }
+};
+
+const handleMCPListJobs = async (args: any): Promise<any> => {
+  try {
+    const { limit = 50 } = args;
+    const queue = "local"; // Always use local queue in local mode
+
+    const jobQueue = await ensureQueue(queue);
+    const jobs = await jobQueue.db.queueGetJobs(queue);
+
+    const jobList = Object.entries(jobs)
+      .slice(0, limit)
+      .map(([jobId, job]) => ({
+        jobId,
+        state: job.state,
+        queuedTime: job.queuedTime,
+        image: (job as any).definition?.image,
+        command: (job as any).definition?.command,
+      }));
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify(
+          {
+            success: true,
+            queue,
+            totalJobs: Object.keys(jobs).length,
+            jobs: jobList,
+          },
+          null,
+          2,
+        ),
+      }],
+    };
+  } catch (error: unknown) {
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify(
+          {
+            success: false,
+            error: (error as Error).message,
+            queue: args.queue,
+          },
+          null,
+          2,
+        ),
+      }],
+      isError: true,
+    };
+  }
+};
+
+const handleMCPCancelJob = async (args: any): Promise<any> => {
+  try {
+    const { jobId } = args;
+    const queue = "local"; // Always use local queue in local mode
+
+    const jobQueue = await ensureQueue(queue);
+    const job = await jobQueue.db.queueJobGet({ queue, jobId });
+
+    if (!job) {
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(
+            {
+              success: false,
+              error: "Job not found",
+              jobId,
+            },
+            null,
+            2,
+          ),
+        }],
+        isError: true,
+      };
+    }
+
+    if (job.state === DockerJobState.Finished) {
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(
+            {
+              success: true,
+              message: "Job already finished",
+              jobId,
+            },
+            null,
+            2,
+          ),
+        }],
+      };
+    }
+
+    const stateChange = {
+      job: jobId,
+      tag: "mcp",
+      state: DockerJobState.Finished,
+      value: {
+        type: DockerJobState.Finished,
+        reason: DockerJobFinishedReason.Cancelled,
+        message: "Job cancelled via MCP",
+        time: Date.now(),
+        namespace: DefaultNamespace,
+      },
+    };
+
+    await jobQueue.stateChange(stateChange);
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify(
+          {
+            success: true,
+            jobId,
+            message: "Job cancelled successfully",
+          },
+          null,
+          2,
+        ),
+      }],
+    };
+  } catch (error: unknown) {
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify(
+          {
+            success: false,
+            error: (error as Error).message,
+            tool: "cancel_job",
+          },
+          null,
+          2,
+        ),
+      }],
+      isError: true,
+    };
+  }
+};
+
+const handleMCPToolCall = async (toolName: string, args: any): Promise<any> => {
+  switch (toolName) {
+    case "submit_job":
+      return await handleMCPSubmitJob(args);
+    case "get_job_status":
+      return await handleMCPGetJobStatus(args);
+    case "list_jobs":
+      return await handleMCPListJobs(args);
+    case "cancel_job":
+      return await handleMCPCancelJob(args);
+    default:
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(
+            {
+              success: false,
+              error: `Unknown tool: ${toolName}`,
+            },
+            null,
+            2,
+          ),
+        }],
+        isError: true,
+      };
+  }
+};
+
+const handleMCPRequest = async (c: Context): Promise<Response> => {
+  try {
+    const request: MCPRequest = await c.req.json();
+
+    let response: MCPResponse = {
+      jsonrpc: "2.0",
+      id: request.id,
+    };
+
+    switch (request.method) {
+      case "initialize":
+        response.result = {
+          protocolVersion: "2024-11-05",
+          capabilities: {
+            tools: {
+              listChanged: false,
+            },
+          },
+          serverInfo: {
+            name: "worker-metapage-local",
+            version: "1.0.0",
+          },
+        };
+        break;
+
+      case "tools/list":
+        response.result = { tools: mcpTools };
+        break;
+
+      case "tools/call":
+        const { name, arguments: args } = request.params as { name: string; arguments: any };
+        response.result = await handleMCPToolCall(name, args);
+        break;
+
+      default:
+        response.error = {
+          code: -32601,
+          message: `Method not found: ${request.method}`,
+        };
+    }
+
+    return c.json(response);
+  } catch (error: unknown) {
+    const response: MCPResponse = {
+      jsonrpc: "2.0",
+      id: "unknown",
+      error: {
+        code: -32700,
+        message: "Parse error",
+        data: (error as Error).message,
+      },
+    };
+    return c.json(response, 400);
+  }
+};
+
+const handleMCPHealth = (c: Context): Response => {
+  return c.json({
+    status: "healthy",
+    server: "worker-metapage-local",
+    version: "1.0.0",
+    capabilities: ["tools"],
+    timestamp: new Date().toISOString(),
+  });
+};
+
+const handleMCPInfo = (c: Context): Response => {
+  return c.json({
+    server: {
+      name: "worker-metapage-local",
+      version: "1.0.0",
+      description: "Local MCP server for worker.metapage.io job queue system",
+    },
+    capabilities: {
+      tools: {
+        count: mcpTools.length,
+        names: mcpTools.map((t) => t.name),
+      },
+    },
+    endpoints: {
+      http: "/mcp",
+      health: "/mcp/health",
+      info: "/mcp/info",
+    },
+    documentation: {
+      tools: mcpTools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        required: tool.inputSchema.required,
+        properties: Object.keys(tool.inputSchema.properties),
+      })),
+    },
+  });
+};
+
+// MCP (Model Context Protocol) endpoints
+// MCP over Streamable HTTP, the same mount the API server uses — one route for
+// POST (messages), GET (the notification stream carrying live logs) and DELETE.
+// In local mode this worker IS the API, so the tools loop back to this origin.
+app.all("/mcp", async (c: Context) => {
+  const origin = new URL(c.req.url).origin;
+  const server = createMcpServer({ baseUrl: origin });
+  const transport = new StreamableHTTPTransport({ sessionIdGenerator: undefined });
+  await server.connect(transport);
+  // Cross-copy hono Context (see app/api/src/routes/mcp/streamable.ts).
+  // deno-lint-ignore no-explicit-any
+  const response = await transport.handleRequest(c as any);
+  return response ?? c.body(null, 204);
+});
+app.get("/mcp/health", handleMCPHealth);
+app.get("/mcp/info", handleMCPInfo);
 
 const handleWebsocket = async (socket: WebSocket, request: Request) => {
   const url = new URL(request.url);

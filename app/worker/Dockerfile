@@ -43,8 +43,8 @@ COPY ./deno.json ./deno.json
 COPY ./deno.lock ./deno.lock
 
 # Deno will otherwise complain about missing workspace files
-RUN mkdir -p ./app/api ./app/cli ./app/test
-RUN touch ./app/api/deno.json ./app/cli/deno.json ./app/test/deno.json
+RUN mkdir -p ./app/api ./app/cli ./app/mcp ./app/test
+RUN touch ./app/api/deno.json ./app/cli/deno.json ./app/mcp/deno.json ./app/test/deno.json
 
 # Copy worker files
 COPY ./app/worker/src ./app/worker/src

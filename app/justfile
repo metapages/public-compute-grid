@@ -26,6 +26,9 @@ green := "\\e[32m"
 down mode="remote" +args="": (_validate_mode mode)
     docker compose --project-name=dev -f ../docker-compose.yml -f ../docker-compose-{{ mode }}.yml down {{ args }}
 
+build: _ensure-all _build_shared
+    docker compose --project-name=dev -f ../docker-compose.yml -f ../docker-compose-remote.yml build
+
 # Bump the version, commit, CI will deploy and publish artifacts
 deploy version="":
     #!/usr/bin/env bash
@@ -61,6 +64,7 @@ deploy version="":
     cd test && deno fmt --check {{ args }}
     cd cli && deno fmt --check {{ args }}
     cd shared && deno fmt --check {{ args }}
+    cd mcp && deno fmt --check {{ args }}
     find */justfile -exec just --fmt --check --unstable -f {} {{ args }} \;
     just browser/fmt-check
 
@@ -231,6 +235,8 @@ open mode="remote": _ensure-all
     just browser/check
     echo -n "test check..."
     just test/check
+    echo -n "mcp check..."
+    just mcp/check
     echo -n "shared check..."
     just shared/check
     echo -n "cli check..."
@@ -244,6 +250,7 @@ open mode="remote": _ensure-all
     cd test && deno fmt {{ args }}
     cd cli && deno fmt {{ args }}
     cd shared && deno fmt {{ args }}
+    cd mcp && deno fmt {{ args }}
     find . -name justfile -exec just --fmt --unstable -f {} {{ args }} \;
 
 # Calls the status endpoint of the local dev stack

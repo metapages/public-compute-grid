@@ -26,8 +26,29 @@ dev: _install
     npm run dev
 
 # Build the static site into docs/dist/docs (served by the api at /docs)
+# Format the distributable Agent Skill (shipped to users verbatim).
+#
+# Only the skill, NOT the guide markdown: `deno fmt` reflows paragraphs, which
+# collapses VitePress `::: tip` / `::: warning` containers onto one line and
+# breaks them. That is why `docs` is excluded in the root deno.json. The skill
+
+# is plain markdown plus a plain .mjs, so it formats safely.
+@fmt +args="":
+    deno fmt --line-width=120 {{ args }} public/skill
+
+# Format check for the distributable skill
+@fmt-check +args="":
+    deno fmt --check --line-width=120 {{ args }} public/skill
+
 build: _install
+    #!/usr/bin/env bash
+    set -euo pipefail
     npm run build
+    # VitePress copies public/ verbatim, which would publish a developer's local
+    # `just dev-install-skill` redirect and point every installer's cq at their
+    # laptop. It is gitignored so CI never has it, but a manual deploy from a dev
+    # machine would. Strip it from the build output regardless.
+    find dist -name dev-target.json -delete -print | sed 's/^/  removed dev-only file: /'
 
 # Preview the built site
 preview: _install

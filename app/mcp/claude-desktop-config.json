@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "worker-metapage": {
+      "command": "deno",
+      "args": [
+        "run",
+        "--allow-net",
+        "--allow-env", 
+        "--allow-read",
+        "--allow-write",
+        "/Users/dion/dev/git/metapages/worker.metapage.io/app/mcp/src/server.ts"
+      ],
+      "env": {
+        "WORKER_METAPAGE_URL": "https://container.mtfm.io"
+      }
+    }
+  }
+}

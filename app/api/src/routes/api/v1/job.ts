@@ -30,7 +30,8 @@ export const getQueueJobHandler = async (c: Context) => {
 
 export const getJobHandler = async (c: Context) => {
   try {
-    const jobId: string | undefined = c.req.param("jobId");
+    // Route matches /j/<jobId>.json — strip the suffix to get the bare id.
+    const jobId: string | undefined = c.req.param("jobId")?.replace(/\.json$/, "");
     if (!jobId) {
       c.status(404);
       return c.json({ error: "No job provided" });

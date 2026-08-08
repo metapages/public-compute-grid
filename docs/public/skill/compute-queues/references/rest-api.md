@@ -16,10 +16,47 @@ auth. CORS open.
 | `GET`  | `/j/:jobId/definition.json`            | Definition.                             |
 | `GET`  | `/j/:jobId/outputs/*`                  | Raw output bytes.                       |
 | `GET`  | `/j/:jobId/inputs/*`                   | Raw input bytes.                        |
+| `GET`  | `/q/:queue/j/:jobId/build-logs.json`   | Build/pull/clone logs. `?since=N`.      |
+| `GET`  | `/q/:queue/j/:jobId/run-logs.json`     | Container stdout/stderr. `?since=N`.    |
+| `GET`  | `/q/:queue/j/:jobId/stream`            | SSE: logs + state until finished.       |
 | `GET`  | `/q/:queue/j/:jobId/namespaces.json`   | Namespaces waiting on the job.          |
 | `POST` | `/q/:queue/j/:jobId/cancel`            | Cancel → `finishedReason: "Cancelled"`. |
 | `POST` | `/q/:queue/j/:jobId/:namespace/cancel` | Cancel for one namespace.               |
 | `POST` | `/j/:jobId/copy`                       | Copy into another queue.                |
+
+Every path above returns JSON — none is a page to send a person to. For that, see the browser URL below. Note the
+job-state endpoint is `/j/:jobId.json`, **with** the suffix: the bare `/j/:jobId` is the browser page.
+
+## Browser view URL
+
+The base URL also serves the browser client, which renders live logs, outputs and an editable definition. Two forms:
+
+```
+<base>/j/<jobId>#?queue=<queue>                                          # short
+<base>/#?job=<base64(encodeURIComponent(JSON.stringify(definition)))>&queue=<queue>   # self-contained
+```
+
+```js
+const shortViewUrl = (base, jobId, queue) => `${base}/j/${jobId}#?queue=${encodeURIComponent(queue)}`;
+
+const viewUrl = (base, definition, queue) =>
+  `${base}/#?job=${btoa(encodeURIComponent(JSON.stringify(definition)))}` +
+  `&queue=${encodeURIComponent(queue)}`;
+```
+
+**Short** — ~100 chars, so it pastes into a terminal. The SPA is served at that path and fetches the definition from
+`/j/<jobId>/definition.json` at boot, so it only works once the job has been submitted, and stops working when the
+stored data expires.
+
+**Self-contained** — the client re-derives `jobId = sha256(definition)` from the hash, so it opens the run that
+definition produced; the empty `env`/`configFiles` the client adds are dropped from the hash blob and do not change the
+id. Needs no server lookup, so it links to jobs that were never submitted and outlives data expiry. Large inline inputs
+make it unusable — upload those (`PUT /f/:key`) and reference them instead.
+
+Editing a short-URL page rewrites it to the self-contained form, so the edited job stays shareable.
+
+Omit `queue` and the client watches the default queue instead of yours. Other hash params: `inputs` (a `{name: string}`
+map, surfaced in the container as `configFiles`), `control`, `maxJobDuration`, `autostart`, `terminal`, `debug`.
 
 ## Files
 
@@ -127,6 +164,32 @@ not only at `/f/…`.
 ## Job states
 
 `Queued → Running → Finished` (`Removed` is a short-lived tombstone). A lost worker returns the job to `Queued`.
+
+## Logs over HTTP
+
+Two separate streams: **build** logs (`docker build`, image pull/push, repo cloning) and **run** logs (the container's
+own stdout/stderr). A build failure and a program failure are different problems, so do not conflate them.
+
+```
+GET /q/:queue/j/:jobId/build-logs.json?since=28
+→ {"data": [[text, timestampMs, isStderr?]], "sliceStart": 28, "nextCursor": 31, "isFinal": true}
+```
+
+Poll with `since=<previous nextCursor>`; `isFinal: true` means no more lines are coming.
+
+For live following without the websocket, one SSE request follows a job to completion:
+
+```
+GET /q/:queue/j/:jobId/stream
+
+event: build-log   data: {"lines":[[...]],"cursor":28}
+event: run-log     data: {"lines":[[...]],"cursor":1}
+event: state       data: {"state":"Running"}
+event: final       data: {"state":"Finished","reason":"Success"}
+```
+
+Everything already known is replayed on connect, so a stream opened against a finished job returns its whole history and
+`final` immediately. Logs are retained about a week — much less than results.
 
 ## WebSocket
 

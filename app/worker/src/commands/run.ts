@@ -405,7 +405,10 @@ export async function connectToServer(
 
   // const logGotJobStatesEvery = 10;
   // let currentGotJobStates = 0;
-  let timeSinceLastJobStates = 0;
+  // Liveness, not activity: this tracks when the socket last carried a
+  // JobStates message, so it must start at "now" — starting at 0 makes the
+  // watchdog below see ~56 years of silence and reconnect immediately.
+  let timeSinceLastJobStates = Date.now();
 
   const twentySeconds = ms("20s") as number;
   setInterval(() => {
@@ -466,14 +469,11 @@ export async function connectToServer(
           const allJobsStatesPayload = possibleMessage
             .payload as BroadcastJobStates;
 
-          // there's a bug where we get this message, but no job states, is
-          // this a production bug, a failure in broadcasting, or something else?
-          // we are going to only count job states with actual jobs.
-          const jobCount = Object.keys(allJobsStatesPayload?.state?.jobs || {}).length;
-          if (jobCount > 0) {
-            timeSinceLastJobStates = Date.now();
-            // currentGotJobStates++;
-          }
+          // Receiving the broadcast at all is the liveness signal, even when it
+          // carries no jobs — an idle queue broadcasts `{jobs:{}}` steadily, and
+          // only counting non-empty ones left the watchdog reconnecting forever
+          // whenever nothing was running.
+          timeSinceLastJobStates = Date.now();
 
           // if (Object.keys(allJobsStatesPayload?.state?.jobs || {}).length > 0) {
           //   console.log(
@@ -507,14 +507,9 @@ export async function connectToServer(
         case WebsocketMessageTypeServerBroadcast.JobStateUpdates: {
           const someJobsPayload = possibleMessage.payload as BroadcastJobStates;
 
-          // there's a bug where we get this message, but no job states, is
-          // this a production bug, a failure in broadcasting, or something else?
-          // we are going to only count job states with actual jobs.
-          const jobCount = Object.keys(someJobsPayload?.state?.jobs || {}).length;
-          if (jobCount > 0) {
-            timeSinceLastJobStates = Date.now();
-            // currentGotJobStates++;
-          }
+          // See the note in the JobStates case: any broadcast means the socket
+          // is alive, empty payload included.
+          timeSinceLastJobStates = Date.now();
 
           if (!someJobsPayload) {
             console.log({
