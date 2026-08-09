@@ -268,17 +268,24 @@ export async function waitForJobCompletion(
 ): Promise<McpJobStatus> {
   const startTime = Date.now();
 
+  let lastState: string | undefined;
   while (Date.now() - startTime < timeoutMs) {
     const status = await mcpGetJobStatus({ queue, jobId });
+    lastState = status.status?.state;
 
-    if (status.status?.state === "Finished" || status.status?.state === "Cancelled") {
+    if (lastState === "Finished" || lastState === "Cancelled") {
       return status;
     }
 
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
 
-  throw new Error(`Job ${jobId} did not complete within ${timeoutMs}ms`);
+  // Report the state it was stuck in: "Queued" means it never got a worker
+  // slot, "Running" means the container itself was slow, and undefined means
+  // the job is not on the queue at all. Without this a CI timeout says nothing.
+  throw new Error(
+    `Job ${jobId} did not complete within ${timeoutMs}ms (last state: ${lastState ?? "not on queue"})`,
+  );
 }
 
 /**

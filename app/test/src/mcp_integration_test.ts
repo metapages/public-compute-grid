@@ -105,7 +105,9 @@ Deno.test("MCP Integration: build from git repository", async () => {
   const finalStatus = await waitForJobCompletion(
     QUEUE_ID,
     result.jobId,
-    180000, // 3 minutes for git clone
+    // The heaviest test in the suite: downloads a repo tarball and then builds
+    // an image from it. 3 minutes was not enough on a loaded CI runner.
+    300000,
   );
 
   console.log(`Job state: ${finalStatus.status?.state}`);
