@@ -8,10 +8,14 @@ export interface JobQueueClient {
 }
 
 export class WorkerMetapageClient implements JobQueueClient {
+  /** Where this process sends its own HTTP requests. */
   public baseUrl: string;
+  /** Origin for URLs shown to a user; equals baseUrl unless overridden. */
+  public publicUrl: string;
 
-  constructor(baseUrl: string = "https://container.mtfm.io") {
+  constructor(baseUrl: string = "https://container.mtfm.io", publicUrl?: string) {
     this.baseUrl = baseUrl;
+    this.publicUrl = publicUrl || baseUrl;
   }
 
   async submitJob(queue: string, jobDefinition: any): Promise<{ jobId: string }> {
@@ -98,8 +102,15 @@ export class WorkerMetapageClient implements JobQueueClient {
     return await response.json();
   }
 
-  async cancelJob(queue: string, jobId: string): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/q/${queue}/j/${jobId}/cancel`, {
+  /**
+   * `namespace` matters: submit_job always attaches one (default "dev"), and the
+   * API cancels within a single namespace, defaulting to "_". Cancelling
+   * without it therefore never matched the job, which kept running and held a
+   * worker slot. "*" cancels across every namespace the job is in.
+   */
+  async cancelJob(queue: string, jobId: string, namespace: string = "*"): Promise<void> {
+    const url = `${this.baseUrl}/q/${queue}/j/${jobId}/cancel?namespace=${encodeURIComponent(namespace)}`;
+    const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

@@ -60,13 +60,18 @@ export async function handleListJobs(
       jobs = jobs.filter((job: any) => job.state === state);
     }
 
-    // Apply limit
+    // Newest first, then limit. The map comes back in no useful order, so
+    // slicing it directly drops whichever jobs happen to sort late — including
+    // the one just submitted, which is the one a caller usually wants.
+    jobs.sort((a: any, b: any) => (b.queuedTime ?? 0) - (a.queuedTime ?? 0));
+    const totalMatching = jobs.length;
     jobs = jobs.slice(0, limit);
 
     const response = {
       success: true,
       queue,
       totalJobs: jobs.length,
+      totalMatchingJobs: totalMatching,
       filters: { state, limit },
       jobs,
     };

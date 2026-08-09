@@ -14,7 +14,9 @@ Deno.test("MCP: monitor job status from queued to finished", async () => {
   const result = await mcpSubmitJob({
     queue: QUEUE_ID,
     image: "alpine:3.18.5",
-    command: "echo 'Test complete' && sleep 1",
+    // `&&` needs an explicit shell (see mcp_integration_test); without it the
+    // container fails to exec and the job finishes with reason Error.
+    command: "sh -c 'echo Test complete && sleep 1'",
     namespace: "mcp-test",
   });
 
@@ -42,6 +44,9 @@ Deno.test("MCP: monitor job status from queued to finished", async () => {
   assertEquals(finalStatus.status?.state, "Finished");
   assertEquals(finalStatus.jobId, result.jobId);
   assertExists(finalStatus.result);
+  // Assert the program succeeded too — checking only that a result exists let
+  // this pass while the container was failing to exec at all.
+  assertEquals(finalStatus.result?.statusCode, 0);
 
   closeKv();
 });
@@ -82,14 +87,14 @@ Deno.test("MCP: list jobs in queue", async () => {
     queue: QUEUE_ID,
     image: "alpine:3.18.5",
     command: "sleep 10",
-    namespace: "mcp-test-list",
+    namespace: "mcp-test-list-1",
   });
 
   const job2 = await mcpSubmitJob({
     queue: QUEUE_ID,
     image: "alpine:3.18.5",
     command: "sleep 10",
-    namespace: "mcp-test-list",
+    namespace: "mcp-test-list-2",
   });
 
   console.log("Jobs submitted:", job1.jobId, job2.jobId);
@@ -112,8 +117,8 @@ Deno.test("MCP: list jobs in queue", async () => {
   assertEquals(ourJobs.length >= 1, true, "At least one of our jobs should be in the list");
 
   // Clean up
-  await mcpCancelJob({ queue: QUEUE_ID, jobId: job1.jobId, namespace: "mcp-test-list" });
-  await mcpCancelJob({ queue: QUEUE_ID, jobId: job2.jobId, namespace: "mcp-test-list" });
+  await mcpCancelJob({ queue: QUEUE_ID, jobId: job1.jobId, namespace: "mcp-test-list-1" });
+  await mcpCancelJob({ queue: QUEUE_ID, jobId: job2.jobId, namespace: "mcp-test-list-2" });
 
   closeKv();
 });
@@ -162,12 +167,15 @@ Deno.test("MCP: cancel a running job", async () => {
 
   console.log("Status after cancellation:", statusAfter.status?.state);
 
-  // Should be Cancelled or Finished
+  // Cancelling strips the job's namespaces, and a job left with none is removed
+  // from the queue (see namespace_star_is_all_test) — so "no longer reported"
+  // is a terminal outcome here, not just Finished.
   const terminalStates = ["Cancelled", "Finished"];
+  const stateAfter = statusAfter.status?.state;
   assertEquals(
-    terminalStates.includes(statusAfter.status?.state ?? ""),
+    stateAfter === undefined || terminalStates.includes(stateAfter),
     true,
-    `Job should be in terminal state, got: ${statusAfter.status?.state}`,
+    `Job should be cancelled or terminal, got: ${stateAfter}`,
   );
 
   closeKv();
@@ -193,8 +201,13 @@ Deno.test("MCP: monitor job with failure", async () => {
   assertExists(finalStatus.result);
   assertEquals(finalStatus.result.statusCode, 1, "Job should have exit code 1");
 
-  // Check failure reason
-  assertEquals(finalStatus.finishedReason, "Failure", "Job should be marked as failed");
+  // Two separate verdicts: the JOB completed (finishedReason Success) while the
+  // PROGRAM failed (statusCode 1). A crashed container is not a failed job.
+  assertEquals(
+    finalStatus.status?.finishedReason,
+    "Success",
+    "The job itself completed; only the program exited non-zero",
+  );
 
   closeKv();
 });
@@ -212,8 +225,9 @@ Deno.test("MCP: poll job status multiple times", async () => {
 
   const states: string[] = [];
 
-  // Poll status multiple times
-  for (let i = 0; i < 5; i++) {
+  // Poll until it finishes. The job sleeps 3s, and scheduling plus image
+  // startup can push it past a 5-poll window, so allow room rather than racing.
+  for (let i = 0; i < 30; i++) {
     const status = await mcpGetJobStatus({
       queue: QUEUE_ID,
       jobId: result.jobId,

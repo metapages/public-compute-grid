@@ -166,9 +166,9 @@ export async function handleSubmitJob(
     // Short form for humans; the embedded form is the fallback for anywhere the
     // definition has not been persisted, and stays useful because it is
     // self-contained and survives the job data expiring.
-    const viewUrl = buildShortViewUrl(client.baseUrl, result.jobId, queue);
-    const selfContainedUrl = buildViewUrl(client.baseUrl, jobDefinition, queue);
-    const resultUrl = `${client.baseUrl.replace(/\/$/, "")}/q/${
+    const viewUrl = buildShortViewUrl(client.publicUrl, result.jobId, queue);
+    const selfContainedUrl = buildViewUrl(client.publicUrl, jobDefinition, queue);
+    const resultUrl = `${client.publicUrl.replace(/\/$/, "")}/q/${
       encodeURIComponent(queue)
     }/j/${result.jobId}/result.json`;
 

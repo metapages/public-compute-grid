@@ -33,11 +33,19 @@ import {
 export const createMcpServer = (opts?: {
   /** API to talk to. Defaults to $WORKER_METAPAGE_URL, then production. */
   baseUrl?: string;
+  /**
+   * Origin to put in URLs handed back to the user, when it differs from the one
+   * the server calls. Mounted inside the API, `baseUrl` has to be an address
+   * the server can reach itself on — behind a proxy the public origin is not
+   * (its hostname may not even resolve in the container), which made every
+   * tool's self-call fail. Links still need the public origin to be clickable.
+   */
+  publicUrl?: string;
 }): Server => {
   const baseUrl = opts?.baseUrl ||
     Deno.env.get("WORKER_METAPAGE_URL") ||
     "https://container.mtfm.io";
-  const client = new WorkerMetapageClient(baseUrl);
+  const client = new WorkerMetapageClient(baseUrl, opts?.publicUrl);
 
   const server = new Server(
     { name: "worker-metapage-io", version: "1.0.0" },

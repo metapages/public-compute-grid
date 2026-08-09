@@ -48,7 +48,8 @@ Deno.test("MCP: submit job with inputs and env vars", async () => {
   assertEquals(result.success, true);
   assertExists(result.jobId);
   assertEquals(result.definition.filesCount, 1);
-  assertEquals(result.definition.envCount, 1);
+  // +1 for the nonce mcpSubmitJob injects to keep the job id unique per run
+  assertEquals(result.definition.envCount, 2);
 
   // Clean up
   await mcpCancelJob({

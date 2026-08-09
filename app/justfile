@@ -90,6 +90,18 @@ test mode="remote" +args="": _build_shared check (_validate_mode mode)
     export STACK
     echo -e "Using STACK=${STACK}"
 
+    # Give each test stack its own worker data directory, and start it empty.
+    #
+    # The worker's data directory is a host bind mount under /tmp, so it
+    # outlives `docker compose down` and is shared with the dev stack. Job ids
+    # are sha256(definition), so a rerun resolves identical definitions to the
+    # previous run's jobs — including ones left Running, which hold worker slots
+    # and stall everything behind them. Self-hosted runners keep /tmp between
+    # jobs, so this bites CI as much as a laptop.
+    export WORKER_DATA_DIRECTORY="/tmp/worker-metapage-io-${STACK}"
+    echo -e "Using WORKER_DATA_DIRECTORY=${WORKER_DATA_DIRECTORY}"
+    rm -rf "${WORKER_DATA_DIRECTORY}" 2>/dev/null || true
+
     # `timeout` is GNU coreutils and is not guaranteed on every self-hosted runner
     timeout_cmd=""
     for candidate in timeout gtimeout; do

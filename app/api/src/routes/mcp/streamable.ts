@@ -22,10 +22,18 @@ import { createMcpServer } from "@metapages/compute-queues-mcp/server-factory";
 export const handleMCPStreamableHttp = async (c: Context): Promise<Response> => {
   const origin = new URL(c.req.url).origin;
 
-  // The MCP tools talk to the job API over HTTP. Pointing them back at this
-  // same origin keeps everything on one deployment rather than reaching out to
-  // production from a local stack.
-  const server = createMcpServer({ baseUrl: origin });
+  // The MCP tools talk to the job API over HTTP. Two different origins are
+  // needed: this process must call itself on an address it can actually reach,
+  // while the URLs it hands back have to be the ones the caller used.
+  //
+  // Behind a proxy those differ — in the test stack the request arrives as
+  // https://worker-metaframe.localhost:4405, a hostname that does not resolve
+  // inside the container, so every self-call failed. Loopback plus $PORT is
+  // always reachable; the public origin stays on the links.
+  const server = createMcpServer({
+    baseUrl: `http://localhost:${Deno.env.get("PORT") || "8000"}`,
+    publicUrl: origin,
+  });
   const transport = new StreamableHTTPTransport({ sessionIdGenerator: undefined });
   await server.connect(transport);
 

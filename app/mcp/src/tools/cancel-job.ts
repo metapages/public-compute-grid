@@ -16,6 +16,12 @@ export const cancelJobTool: Tool = {
         type: "string",
         description: "The unique job ID to cancel",
       },
+      namespace: {
+        type: "string",
+        description:
+          "Cancel only within this namespace. Defaults to '*', which cancels the job in every namespace it belongs to.",
+        default: "*",
+      },
     },
     required: ["jobId"],
   },
@@ -27,9 +33,9 @@ export async function handleCancelJob(
 ): Promise<CallToolResult> {
   try {
     const args = request.params.arguments as any;
-    const { queue = "public1", jobId } = args;
+    const { queue = "public1", jobId, namespace = "*" } = args;
 
-    await client.cancelJob(queue, jobId);
+    await client.cancelJob(queue, jobId, namespace);
 
     const response = {
       success: true,

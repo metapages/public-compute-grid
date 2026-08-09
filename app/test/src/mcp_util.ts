@@ -178,7 +178,16 @@ export async function mcpSubmitJob(args: {
   };
   [key: string]: unknown;
 }> {
-  const result = await callMCPTool("submit_job", args);
+  // jobId = sha256(definition), and the worker's data directory outlives a test
+  // run, so an identical definition resolves to a previous run's job. Once that
+  // job's record has been pruned the id is a ghost: not on the queue, and with
+  // no stored result — get_job_status then reports nothing and the test hangs
+  // or fails. Give every submission a nonce, the same way the functional tests
+  // randomise their sleeps.
+  const result = await callMCPTool("submit_job", {
+    ...args,
+    env: { ...(args.env ?? {}), MCP_TEST_NONCE: crypto.randomUUID() },
+  });
 
   // Parse the result
   const content = result.content?.[0];

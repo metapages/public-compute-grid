@@ -134,8 +134,8 @@ export async function handleFollowJob(
 
   const exitCode = result?.StatusCode as number | undefined;
 
-  const viewUrl = buildShortViewUrl(client.baseUrl, jobId, queue);
-  const resultUrl = `${client.baseUrl.replace(/\/$/, "")}/q/${encodeURIComponent(queue)}/j/${jobId}/result.json`;
+  const viewUrl = buildShortViewUrl(client.publicUrl, jobId, queue);
+  const resultUrl = `${client.publicUrl.replace(/\/$/, "")}/q/${encodeURIComponent(queue)}/j/${jobId}/result.json`;
 
   return {
     content: [

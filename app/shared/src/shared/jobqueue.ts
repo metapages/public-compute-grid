@@ -960,9 +960,16 @@ export class BaseDockerJobQueue {
     clearInterval(this._intervalJobsBroadcast);
     // clearInterval(this._intervalFullJobSync);
     clearInterval(this._intervalCheckForDuplicateJobsSameSource);
+    if (this._sourceConflictRecheckTimer !== undefined) {
+      clearTimeout(this._sourceConflictRecheckTimer);
+      this._sourceConflictRecheckTimer = undefined;
+    }
     delete userJobQueues[this.address];
     console.log(`${this.addressShortString} ➖ 🗑️ 🎾 UserDockerJobQueue `);
   }
+
+  /** At most one pending checkForSourceConflicts re-check; see that method. */
+  _sourceConflictRecheckTimer: ReturnType<typeof setTimeout> | undefined;
 
   jobsStateChangesInternalQueue: Map<string, StateChange[]> = new Map();
   public async stateChange(change: StateChange): Promise<void> {
@@ -2159,10 +2166,17 @@ export class BaseDockerJobQueue {
             jobAge,
           );
           if (deletionDelay > 0) {
-            // check again in a bit
-            setTimeout(() => {
-              this.checkForSourceConflicts();
-            }, deletionDelay);
+            // Check again in a bit — but keep at most one re-check pending.
+            // checkForSourceConflicts runs on every state change, and each
+            // deferred job used to arm its own timer, whose run armed more
+            // still. With a superseded job older than 20s the timers compounded
+            // until the worker died of "Fatal JavaScript out of memory".
+            if (this._sourceConflictRecheckTimer === undefined) {
+              this._sourceConflictRecheckTimer = setTimeout(() => {
+                this._sourceConflictRecheckTimer = undefined;
+                this.checkForSourceConflicts();
+              }, deletionDelay);
+            }
             continue;
           }
           // kill it

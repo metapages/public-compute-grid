@@ -10,7 +10,7 @@ services:
       "--unstable-cron",
       "src/cli.ts",
     ]
-    command: run --id=test-worker-local --mode=local --cpus=2 --gpus=0 --data-directory=/tmp/worker-metapage-io-dev local
+    command: run --id=test-worker-local --mode=local --cpus=2 --gpus=0 --data-directory=${WORKER_DATA_DIRECTORY:-/tmp/worker-metapage-io-dev} local
     working_dir: /app/app/worker
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]

@@ -88,11 +88,14 @@ print(f"Python version: {sys.version}")
 Deno.test("MCP Integration: build from git repository", async () => {
   console.log("\n=== Testing Git Repository Build ===\n");
 
-  // This is a simple example repository
+  // octocat/Hello-World contains only a README, so the build needs a Dockerfile
+  // supplied inline — without one `docker build` fails with
+  // "failed to read dockerfile: open Dockerfile: no such file or directory".
   const result = await mcpSubmitJob({
     queue: QUEUE_ID,
     gitRepo: "https://github.com/octocat/Hello-World.git",
-    command: "ls -la && echo 'Repository cloned successfully'",
+    dockerfile: "FROM alpine:3.18.5\nWORKDIR /repo\nCOPY . /repo\n",
+    command: "sh -c 'ls -la /repo && echo Repository cloned successfully'",
     namespace: "mcp-integration-git",
     maxDuration: "10m",
   });
@@ -184,8 +187,12 @@ Deno.test("MCP Integration: test concurrent job submission", async () => {
     const promise = mcpSubmitJob({
       queue: QUEUE_ID,
       image: "alpine:3.18.5",
-      command: `echo "Job ${i + 1}" && sleep ${i + 1}`,
-      namespace: "mcp-integration-concurrent",
+      // `&&` needs an explicit shell: a command with operators is passed to
+      // docker as a single argv element, not parsed by one.
+      command: `sh -c 'echo "Job ${i + 1}" && sleep ${i + 1}'`,
+      // One namespace holds one job: a second submission supersedes the first
+      // (JobReplacedByClient), so jobs meant to run concurrently need their own.
+      namespace: `mcp-integration-concurrent-${i + 1}`,
     });
     jobPromises.push(promise);
   }
@@ -209,7 +216,9 @@ Deno.test("MCP Integration: test concurrent job submission", async () => {
 
   // Wait for all to complete
   console.log("\nWaiting for all jobs to complete...");
-  const completionPromises = results.map((r) => waitForJobCompletion(QUEUE_ID, r.jobId, 60000));
+  // Generous: the worker runs 2 jobs at a time, so under a full-suite run these
+  // queue behind other tests' containers rather than starting immediately.
+  const completionPromises = results.map((r) => waitForJobCompletion(QUEUE_ID, r.jobId, 180000));
 
   const finalStatuses = await Promise.all(completionPromises);
 

@@ -67,7 +67,7 @@ export async function handleUploadFile(
       contentType,
       encoding,
       size: encoding === "base64" ? Math.ceil(content.length * 3 / 4) : content.length,
-      downloadUrl: `${client.baseUrl}/f/${uploadedKey}`,
+      downloadUrl: `${client.publicUrl}/f/${uploadedKey}`,
       message: `File '${filename}' uploaded successfully with key: ${uploadedKey}`,
     };
 

@@ -67,7 +67,7 @@ export async function handleGetJobStatus(
     // The browser client needs a queue to connect to. Without one we can still
     // report status, just not link to it — better than emitting a link that
     // silently watches the wrong queue.
-    const viewUrl = queue ? buildShortViewUrl(client.baseUrl, jobId, queue) : undefined;
+    const viewUrl = queue ? buildShortViewUrl(client.publicUrl, jobId, queue) : undefined;
 
     const response = {
       success: true,
