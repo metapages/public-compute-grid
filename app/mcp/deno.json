@@ -1,0 +1,31 @@
+{
+  "name": "@metapages/compute-queues-mcp",
+  "exports": {
+    ".": "./src/mod.ts",
+    "./server-factory": "./src/server-factory.ts",
+    "./view-url": "./src/util/view-url.ts"
+  },
+  "tasks": {
+    "start": "deno run --allow-net --allow-env --allow-read --allow-write src/server.ts",
+    "dev": "deno run --watch --allow-net --allow-env --allow-read --allow-write src/server.ts"
+  },
+  "imports": {
+    "/@/": "./src/",
+    "@metapages/compute-queues-shared": "../shared/src/mod.ts"
+  },
+  "fmt": {
+    "exclude": [
+      "dist",
+      "README.md",
+      "*.json",
+      "*.lock"
+    ],
+    "lineWidth": 120,
+    "indentWidth": 2,
+    "semiColons": true,
+    "singleQuote": false
+  },
+  "compilerOptions": {
+    "strict": true
+  }
+}

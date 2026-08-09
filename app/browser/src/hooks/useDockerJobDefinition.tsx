@@ -11,7 +11,6 @@ import {
   DockerJobControlConfig,
   DockerJobDefinitionInputRefs,
   DockerJobDefinitionMetadata,
-  DockerJobDefinitionParamsInUrlHash,
   isDataRef,
   isParentInjectedHashParamKey,
   JobInputs,
@@ -25,6 +24,7 @@ import { useMetaframeAndInput } from "@metapages/metapage-react";
 
 import { getIOBaseUrl } from "../config";
 import { useStore } from "../store";
+import { useJobDefinitionParam } from "./useJobDefinitionParam";
 import { useOptionAllowSetJob } from "./useOptionAllowSetJob";
 import { useQueue } from "./useQueue";
 
@@ -75,10 +75,10 @@ export const useDockerJobDefinition = () => {
   // TODO: unclear if this does anything anymore
   const [debug] = useHashParamBoolean("debug");
   const [maxJobDuration] = useHashParam("maxJobDuration");
-  // we listen to the job parameters embedded in the URL changing
-  const [definitionParamsInUrl, setDefinitionParamsInUrl] = useHashParamJson<
-    DockerJobDefinitionParamsInUrlHash | undefined
-  >("job");
+  // we listen to the job parameters changing. This reads from either the
+  // embedded hash (`#?job=`) or a short URL (`/j/<id>`); the setter reverts a
+  // short URL to the embedded form on edit. See useJobDefinitionParam.
+  const [definitionParamsInUrl, setDefinitionParamsInUrl] = useJobDefinitionParam();
 
   // input text files are stored in the URL hash
   const [jobInputsFromUrl] = useHashParamJson<JobInputs | undefined>("inputs");
@@ -142,9 +142,12 @@ export const useDockerJobDefinition = () => {
     }
 
     // These are inputs set in the metaframe and stored in the url hash params. They
-    // are always type: DataRefType.utf8 because they come from the text editor
+    // are always type: DataRefType.utf8 because they come from the text editor.
+    // When there is no `inputs` hash param (e.g. a short URL, where the loaded
+    // definition already carries its own configFiles), keep the definition's
+    // existing configFiles rather than wiping them.
     definition.configFiles = !jobInputsFromUrl
-      ? {}
+      ? (definition.configFiles ?? {})
       : Object.fromEntries(
           Object.keys(jobInputsFromUrl).map(key => {
             return [

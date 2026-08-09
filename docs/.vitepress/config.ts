@@ -28,6 +28,7 @@ export default withMermaid(
 
       nav: [
         { text: "Docs", link: "/quickstart" },
+        { text: "Building containers", link: "/guide/building-containers" },
         { text: "Backend integration", link: "/guide/backend-integration" },
         { text: "AI skill", link: "/guide/agent-skill" },
         { text: "Client", link: "https://container.mtfm.io" },
@@ -41,6 +42,7 @@ export default withMermaid(
             { text: "How it works", link: "/guide/overview" },
             { text: "Queues, jobs & ids", link: "/guide/queues-and-jobs" },
             { text: "Job definition", link: "/guide/job-definition" },
+            { text: "Building containers", link: "/guide/building-containers" },
             { text: "Running workers", link: "/guide/workers" },
             { text: "Backend integration", link: "/guide/backend-integration" },
             { text: "Files in & out", link: "/guide/files" },

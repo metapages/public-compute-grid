@@ -54,6 +54,41 @@ try {
   console.error("Error finding docker binary:", error);
 }
 
+/**
+ * Docker's pull/push progress events are objects like
+ * `{status, id, progress, progressDetail}`. Template-stringifying one yields
+ * "[object Object]" and JSON.stringify yields unreadable noise — neither is
+ * useful to someone (or something) reading the build log to work out why an
+ * image failed. Render them the way the docker CLI does.
+ */
+export const formatDockerProgressEvent = (event: unknown): string => {
+  if (typeof event === "string") {
+    return event;
+  }
+  if (!event || typeof event !== "object") {
+    return `${event}`;
+  }
+  const e = event as {
+    status?: string;
+    id?: string;
+    progress?: string;
+    error?: string;
+    stream?: string;
+  };
+  if (e.error) {
+    return `💥 ${e.error}`;
+  }
+  if (e.stream) {
+    return e.stream.replace(/\n$/, "");
+  }
+  if (e.status) {
+    return [e.id ? `${e.id}:` : undefined, e.status, e.progress]
+      .filter(Boolean)
+      .join(" ");
+  }
+  return JSON.stringify(event);
+};
+
 export const clearCache = async (args: { build?: DockerJobImageBuild }) => {
   const buildSha = await getBuildSha(args);
   const image = getDockerImageName(buildSha);
@@ -319,7 +354,7 @@ export const ensureDockerImage = async (args: {
                       payload: {
                         jobId,
                         step: "docker image push",
-                        logs: [[`${progressEvent}`, Date.now()]],
+                        logs: [[formatDockerProgressEvent(progressEvent), Date.now()]],
                       } as JobStatusPayload,
                     });
                   },
@@ -381,7 +416,7 @@ export const ensureDockerImage = async (args: {
           payload: {
             jobId,
             step: "docker image pull",
-            logs: [[`${JSON.stringify(event)}`, Date.now()]],
+            logs: [[formatDockerProgressEvent(event), Date.now()]],
           } as JobStatusPayload,
         });
       }
@@ -464,7 +499,7 @@ const checkForDockerImage = async (args: {
             payload: {
               jobId,
               step: "docker image pull",
-              logs: [[`${JSON.stringify(event)}`, Date.now()]],
+              logs: [[formatDockerProgressEvent(event), Date.now()]],
             } as JobStatusPayload,
           });
           console.log("pull event", event);
@@ -576,6 +611,33 @@ export const removeCredentialsFromContext = (context: string): string => {
   );
 };
 
+/**
+ * Pull owner/repo/ref out of a GitHub URL, with or without a
+ * `/tree/<branch-or-tag>` or `/commit/<sha>` suffix. `ref` defaults to `main`
+ * only when the URL genuinely names no ref.
+ *
+ * Exported and pure so the ref can be regression-tested without the network:
+ * this previously read the wrong capture group and silently resolved EVERY
+ * pinned URL to "main", so a job that asked for a specific commit built the
+ * default branch instead — no error, and a jobId that looked correctly distinct.
+ */
+export const parseGithubContextUrl = (
+  context: string,
+): { userPat?: string; owner: string; repo: string; ref: string } => {
+  const matches = new RegExp(
+    /https:\/\/(?:([^@]+)@)?github\.com\/([-\w]{1,39})\/([-\w.]{1,100})(?:\/(tree|commit)\/([-\/\w.{}$]{1,100}))?/,
+  ).exec(context);
+  if (!matches) {
+    throw new Error(`Invalid GitHub URL: ${context}`);
+  }
+  return {
+    userPat: matches[1],
+    owner: matches[2],
+    repo: matches[3].replace(".git", ""),
+    ref: matches[5] || "main",
+  };
+};
+
 const getDownloadLinkFromContext = async (context: string): Promise<string> => {
   // https://docs.github.com/en/repositories/working-with-files/using-files/downloading-source-code-archives#source-code-archive-urls
   if (context.endsWith(".tar.gz") || context.endsWith(".zip")) {
@@ -583,17 +645,7 @@ const getDownloadLinkFromContext = async (context: string): Promise<string> => {
   } else if (context.startsWith("https://") && context.includes("github.com")) {
     // Create a personal access token at https://github.com/settings/tokens/new?scopes=repo
     // const octokit = new Octokit({ auth: `personal-access-token123` });
-    const matches = new RegExp(
-      /https:\/\/(?:([^@]+)@)?github\.com\/([-\w]{1,39})\/([-\w.]{1,100})(?:\/(tree|commit)\/([-\/\w.{}$]{1,100}))?/,
-    ).exec(context);
-    if (!matches) {
-      throw new Error(`Invalid GitHub URL: ${context}`);
-    }
-
-    const userPat = matches[1];
-    const owner = matches[2];
-    const repo = matches[3];
-    const ref = matches[6] || "main";
+    const { userPat, owner, repo, ref } = parseGithubContextUrl(context);
 
     let pat = userPat?.includes(":") ? userPat.split(":")[1] : userPat;
     if (pat) {
@@ -609,13 +661,13 @@ const getDownloadLinkFromContext = async (context: string): Promise<string> => {
     }
 
     const possibleArchiveUrls = [
-      `https://${pat}github.com/${owner}/${repo.replace(".git", "")}/archive/refs/heads/${ref}.zip`,
-      `https://${pat}github.com/${owner}/${repo.replace(".git", "")}/archive/${ref}.zip`,
+      `https://${pat}github.com/${owner}/${repo}/archive/refs/heads/${ref}.zip`,
+      `https://${pat}github.com/${owner}/${repo}/archive/${ref}.zip`,
     ];
     if (ref === "main") {
       // check if the repo has a master branch instead of main
       possibleArchiveUrls.push(
-        `https://${pat}github.com/${owner}/${repo.replace(".git", "")}/archive/refs/heads/master.zip`,
+        `https://${pat}github.com/${owner}/${repo}/archive/refs/heads/master.zip`,
       );
     }
 
@@ -667,6 +719,37 @@ const getFilePathForDownload = (url: string): string => {
   url = urlBlob.href;
   const path = url.replace("https://", "").replace("http://", "");
   return `${getDockerImageBuildDownloadDirectory()}/${path}`;
+};
+
+/**
+ * Sniff an archive's format from its magic bytes: gzip is 1f 8b, zip is
+ * "PK\x03\x04". Returns undefined when the file is too short or matches
+ * neither, so the caller can fall back to the filename.
+ */
+export const detectArchiveFormat = async (
+  filePath: string,
+): Promise<"gzip" | "zip" | undefined> => {
+  let file: Deno.FsFile | undefined;
+  try {
+    file = await Deno.open(filePath, { read: true });
+    const header = new Uint8Array(4);
+    const bytesRead = await file.read(header);
+    if (bytesRead === null || bytesRead < 2) {
+      return undefined;
+    }
+    if (header[0] === 0x1f && header[1] === 0x8b) {
+      return "gzip";
+    }
+    if (bytesRead >= 4 && header[0] === 0x50 && header[1] === 0x4b && header[2] === 0x03 && header[3] === 0x04) {
+      return "zip";
+    }
+    return undefined;
+  } catch (err) {
+    console.error(`detectArchiveFormat failed for ${filePath}:`, err);
+    return undefined;
+  } finally {
+    file?.close();
+  }
 };
 
 const downloadContextIntoDirectory = async (args: {
@@ -805,12 +888,21 @@ const downloadContextIntoDirectory = async (args: {
     // recreate destination
     Deno.removeSync(destination, { recursive: true });
     await ensureDir(destination);
-    if (
-      filePathForDownload.endsWith(".tar.gz") ||
-      filePathForDownload.endsWith(".tgz") ||
-      // https://docs.github.com/en/rest/repos/contents?apiVersion=2022-11-28#download-a-repository-archive-tar
-      downloadUrl.includes("tarball")
-    ) {
+
+    // Detect the archive format from its magic bytes rather than the URL
+    // suffix. A context uploaded to blob storage is addressed by content hash
+    // and carries no extension, and redirects can rewrite the visible URL —
+    // the bytes are the only thing that is always right. Fall back to the
+    // suffix if the file is too short to sniff.
+    const archiveFormat = (await detectArchiveFormat(filePathForDownload)) ??
+      (filePathForDownload.endsWith(".zip") ? "zip" : (filePathForDownload.endsWith(".tar.gz") ||
+          filePathForDownload.endsWith(".tgz") ||
+          // https://docs.github.com/en/rest/repos/contents?apiVersion=2022-11-28#download-a-repository-archive-tar
+          downloadUrl.includes("tarball"))
+        ? "gzip"
+        : undefined);
+
+    if (archiveFormat === "gzip") {
       console.log(`tgz.uncompress ${filePathForDownload} into ${destination}`);
       sender({
         type: WebsocketMessageTypeWorkerToServer.JobStatusLogs,
@@ -822,7 +914,7 @@ const downloadContextIntoDirectory = async (args: {
       });
       await tgz.uncompress(filePathForDownload, destination);
       console.log(`tgz.uncompressed`);
-    } else if (filePathForDownload.endsWith(".zip")) {
+    } else if (archiveFormat === "zip") {
       sender({
         type: WebsocketMessageTypeWorkerToServer.JobStatusLogs,
         payload: {
@@ -837,7 +929,9 @@ const downloadContextIntoDirectory = async (args: {
       await decompress(filePathForDownload, destination);
     } else {
       throw new Error(
-        `Downloaded context as ${downloadUrl} but do not know how to convert to a context folder`,
+        `Downloaded context from ${
+          removeCredentialsFromContext(downloadUrl)
+        } but it is neither a gzip nor a zip archive, so it cannot be turned into a build context folder`,
       );
     }
     sender({
@@ -849,17 +943,23 @@ const downloadContextIntoDirectory = async (args: {
       } as JobStatusPayload,
     });
 
-    // github downloads create a parent folder with the repo name and branch/tag/commit
-    // move the contents of that folder to the destination
-    const tempDirectory = `/tmp/${Math.random().toString(36).substring(7)}`;
-    const dir = [...Deno.readDirSync(destination)].filter((e) => e.isDirectory)[0].name;
-
-    await Deno.rename(join(destination, dir), tempDirectory);
-    await Deno.remove(destination, { recursive: true });
-    await Deno.rename(tempDirectory, destination);
-    console.log(
-      `Moved ${join(destination, dir)} => ${tempDirectory} => ${destination}`,
-    );
+    // GitHub archives wrap everything in one parent folder named for the repo
+    // and ref, so the real context is one level down. An archive built by hand
+    // (say, of a local directory) usually has no such wrapper. Hoist only when
+    // there is exactly one entry and it is a directory — otherwise the archive
+    // root already IS the context, and hoisting would throw or pick a random
+    // subdirectory.
+    const entries = [...Deno.readDirSync(destination)];
+    const soleDirectory = entries.length === 1 && entries[0].isDirectory ? entries[0].name : undefined;
+    if (soleDirectory) {
+      const tempDirectory = `/tmp/${Math.random().toString(36).substring(7)}`;
+      await Deno.rename(join(destination, soleDirectory), tempDirectory);
+      await Deno.remove(destination, { recursive: true });
+      await Deno.rename(tempDirectory, destination);
+      console.log(
+        `Moved ${join(destination, soleDirectory)} => ${tempDirectory} => ${destination}`,
+      );
+    }
 
     sender({
       type: WebsocketMessageTypeWorkerToServer.JobStatusLogs,

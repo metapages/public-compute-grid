@@ -14,12 +14,16 @@ No authentication. CORS is open, so browsers can call it directly.
 | `GET`  | `/q/:queue`                            | List jobs in the queue.                     |
 | `GET`  | `/q/:queue/j`                          | Alias of the above.                         |
 | `GET`  | `/q/:queue/j/:jobId`                   | Definition + results.                       |
-| `GET`  | `/j/:jobId`                            | Definition + results, without the queue.    |
+| `GET`  | `/j/:jobId.json`                       | Definition + results, without the queue.    |
 | `GET`  | `/j/:jobId/definition.json`            | Just the definition.                        |
+| `GET`  | `/j/:jobId`                            | Browser page for the job (not JSON).        |
 | `GET`  | `/j/:jobId/result.json`                | Just the result. `results.json` also works. |
 | `GET`  | `/q/:queue/j/:jobId/result.json`       | Queue-scoped result — includes queue state. |
 | `GET`  | `/j/:jobId/inputs/*`                   | Raw input file bytes.                       |
 | `GET`  | `/j/:jobId/outputs/*`                  | Raw output file bytes.                      |
+| `GET`  | `/q/:queue/j/:jobId/build-logs.json`   | Image build / pull / clone logs.             |
+| `GET`  | `/q/:queue/j/:jobId/run-logs.json`     | The container's own stdout/stderr.            |
+| `GET`  | `/q/:queue/j/:jobId/stream`            | SSE: logs and state, live, until finished.   |
 | `GET`  | `/q/:queue/j/:jobId/namespaces.json`   | Namespaces waiting on this job.             |
 | `POST` | `/q/:queue/j/:jobId/cancel`            | Cancel.                                     |
 | `POST` | `/q/:queue/j/:jobId/:namespace/cancel` | Cancel for one namespace only.              |
@@ -74,6 +78,50 @@ No authentication. CORS is open, so browsers can call it directly.
 
 The unscoped `/j/:jobId/result.json` returns `{"data": {definition, results}}` instead; prefer the queue-scoped form
 when you have the queue.
+
+### `GET /q/:queue/j/:jobId/build-logs.json` · `run-logs.json`
+
+Logs, split by which half of the job produced them. **Build logs** cover `docker build`, image pull/push and repo
+cloning; **run logs** are the container's own stdout/stderr. Keeping them apart is what lets a caller tell "the image
+failed to build" from "the program failed".
+
+```
+GET /q/:queue/j/:jobId/build-logs.json?since=28
+
+{"data": [["#6 DONE 0.1s", 1785940953827, true]], "sliceStart": 28, "nextCursor": 31, "isFinal": true}
+```
+
+Poll with `since=<the previous nextCursor>` to follow a running job without re-reading what you already have.
+`isFinal: true` means the job has finished and no more lines are coming.
+
+These read the live in-memory buffer while a job runs and the persisted copy afterwards, so they work during and after
+execution. Logs are retained about a week — much less than results.
+
+An unqueued `/j/:jobId/build-logs.json` also exists, but it can only see persisted logs, so it returns nothing until the
+job finishes.
+
+### `GET /q/:queue/j/:jobId/stream`
+
+Server-Sent Events: one request that follows a single job to completion. Useful when you want live logs without the
+stateful, per-queue websocket protocol.
+
+```
+event: build-log
+data: {"lines":[["#5 DONE 1.3s",1785940953488,true]],"cursor":28}
+
+event: run-log
+data: {"lines":[["hello\n",1785940954287]],"cursor":1}
+
+event: state
+data: {"state":"Running"}
+
+event: final
+data: {"state":"Finished","reason":"Success"}
+```
+
+Everything already known is replayed on connect, so opening the stream against a job that has already finished returns
+its full history and `final` in one short read. `cursor` is the running count of lines emitted for that kind. The server
+sends `final` and closes on a terminal state, or after 30 minutes.
 
 ## Files
 

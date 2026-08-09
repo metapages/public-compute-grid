@@ -19,14 +19,32 @@ const config = {
   },
 };
 
+const httpsConfig = {
+  ...config,
+  onListen: ({ hostname, port }: { hostname: string; port: number }) => {
+    console.log(
+      `🔒 HTTPS Server listening on APP_FQDN=${APP_FQDN} hostname=${hostname} port=${port}`,
+    );
+  },
+};
+
+const httpConfig = {
+  ...config,
+  onListen: ({ hostname, port }: { hostname: string; port: number }) => {
+    console.log(
+      `🌐 HTTP Server listening on APP_FQDN=${APP_FQDN} hostname=${hostname} port=${port}`,
+    );
+  },
+};
+
 Deno.serve({
   port: 3001,
   cert: Deno.readTextFileSync("../.traefik/certs/local-cert.pem"),
   key: Deno.readTextFileSync("../.traefik/certs/local-key.pem"),
-  ...config,
+  ...httpsConfig,
 }, requestHandler);
 
 Deno.serve({
   port: 3002,
-  ...config,
+  ...httpConfig,
 }, requestHandler);

@@ -4,7 +4,7 @@ import { useFormik } from "formik";
 import * as yup from "yup";
 import { ButtonModalEditor } from "/@/components/generic/ButtonModalEditor";
 import { FormLink } from "/@/components/generic/FormLink";
-import { DockerJobDefinitionParamsInUrlHash } from "/@shared/client";
+import { useJobDefinitionParam } from "/@/hooks/useJobDefinitionParam";
 
 import {
   Box,
@@ -20,7 +20,6 @@ import {
   Text,
   VStack,
 } from "@chakra-ui/react";
-import { useHashParamJson } from "@metapages/hash-query/react-hooks";
 import { TrashSimple } from "@phosphor-icons/react";
 
 const validationSchema = yup.object({
@@ -65,7 +64,7 @@ type TabType = "useExisting" | "fromRepo";
 export const TabConfigureImage: React.FC<{
   onSave?: () => void;
 }> = ({ onSave }) => {
-  const [jobDefinitionBlob, setJobDefinitionBlob] = useHashParamJson<DockerJobDefinitionParamsInUrlHash>("job");
+  const [jobDefinitionBlob, setJobDefinitionBlob] = useJobDefinitionParam();
   const [tab, setTab] = useState<TabType>(jobDefinitionBlob?.image ? "useExisting" : "fromRepo");
 
   useEffect(() => {

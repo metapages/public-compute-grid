@@ -4,7 +4,6 @@ set export := true
 set quiet := true
 
 APP_PORT := env_var_or_default("APP_PORT", "443")
-
 normal := '\033[0m'
 green := "\\e[32m"
 cyan := "\\e[36m"
@@ -23,7 +22,7 @@ cyan := "\\e[36m"
     echo -e "    Current worker version: {{ cyan }}$(cat app/worker/mod.json | jq -r '.version'){{ normal }}"
     echo -e ""
     echo -e "    Quick links:"
-    echo -e "       api local:             {{ green }}https://worker-metaframe.localhost:{{APP_PORT}}/{{ normal }}"
+    echo -e "       api local:             {{ green }}https://worker-metaframe.localhost:{{ APP_PORT }}/{{ normal }}"
     echo -e "       api production:        {{ green }}https://container.mtfm.io{{ normal }}"
     echo -e "       github repo:           {{ green }}https://github.com/metapages/public-compute-grid{{ normal }}"
     echo -e "       api deployment config: {{ green }}https://dash.deno.com/projects/compute-queue-api{{ normal }}"
@@ -43,6 +42,155 @@ cyan := "\\e[36m"
 # Runs All Functional Tests and checks code
 test-all:
     just app test-all
+
+# target: worker (local-mode worker on :8000, queue "local" — the default) |
+# stack (the full compose stack, queue "local1") | prod (no redirect).
+# Symlinked, not copied, so edits are live; cq is pointed at the local stack so
+# an agent using it cannot submit to the shared production queue.
+# Symlink the Agent Skill into your skills dir, aimed at a local stack
+dev-install-skill target="worker" dir="~/.claude/skills":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dest="${dir/#\~/$HOME}"
+    src="{{ justfile_directory() }}/docs/public/skill/compute-queues"
+    [ -f "$src/SKILL.md" ] || { echo "No SKILL.md at $src" >&2; exit 1; }
+
+    case "$target" in
+        worker) api="http://localhost:8000"; queue="local"
+                hint="just app/worker/local" ;;
+        stack)  api="https://worker-metaframe.localhost:${APP_PORT:-443}"; queue="local1"
+                hint="just dev" ;;
+        prod)   api=""; queue="" ;;
+        *) echo "Unknown target: $target (expected worker, stack or prod)" >&2; exit 1 ;;
+    esac
+
+    # cq reads dev-target.json next to itself. It is gitignored, so it never
+    # reaches a published release — for installed users the defaults stay
+    # production.
+    if [ -n "$api" ]; then
+        cat > "$src/scripts/dev-target.json" <<JSON
+    {
+      "api": "$api",
+      "queue": "$queue",
+      "source": "just dev-install-skill $target"
+    }
+    JSON
+        echo -e "  {{ green }}dev target{{ normal }} $api (queue $queue)"
+        if ! curl -fsS --max-time 3 "$api/healthz" >/dev/null 2>&1; then
+            echo -e "  {{ cyan }}note{{ normal }} nothing answering there yet — start it with: $hint"
+        fi
+    else
+        rm -f "$src/scripts/dev-target.json"
+        echo -e "  {{ cyan }}dev target cleared{{ normal }} — cq will use production defaults"
+    fi
+
+    mkdir -p "$dest"
+    # Replace whatever is there: a stale symlink, or a copy left by install.sh.
+    # Say so when it's a real directory being replaced — that is a curl-installed
+    # release quietly disappearing.
+    if [ -d "$dest/compute-queues" ] && [ ! -L "$dest/compute-queues" ]; then
+        echo -e "  {{ cyan }}replacing{{ normal }} the installed copy at $dest/compute-queues with a link to this repo"
+    fi
+    rm -rf "$dest/compute-queues"
+    ln -s "$src" "$dest/compute-queues"
+    echo -e "  {{ green }}linked{{ normal }} $dest/compute-queues -> $src"
+    echo -e "Restart your agent so it reloads SKILL.md."
+
+# Only unlinks a symlink, so a real (curl-installed) skill dir is never deleted.
+# Undo dev-install-skill
+dev-uninstall-skill dir="~/.claude/skills":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    target="${dir/#\~/$HOME}"
+    rm -f "{{ justfile_directory() }}/docs/public/skill/compute-queues/scripts/dev-target.json"
+    if [ -L "$target/compute-queues" ]; then
+        rm "$target/compute-queues"
+        echo -e "  {{ green }}unlinked{{ normal }} $target/compute-queues"
+    elif [ -e "$target/compute-queues" ]; then
+        echo -e "  {{ cyan }}skipped{{ normal }} $target/compute-queues (a real directory, not a symlink)"
+    else
+        echo "Nothing linked at $target/compute-queues"
+    fi
+
+# Needs a local-mode worker, which serves the API too: just app/worker/local
+# Test the compute-queues skill's API surface (no LLM)
+test-skill queue="local" api="http://localhost:8000":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! curl -fsS --max-time 3 "{{ api }}/healthz" > /dev/null 2>&1; then
+        echo "❌ Nothing answering at {{ api }}" >&2
+        echo "   Start a local-mode worker (it serves the API too):" >&2
+        echo "     just app/worker/local" >&2
+        exit 1
+    fi
+    cd app/test
+    QUEUE_ID={{ queue }} API_URL={{ api }} deno test \
+        --unsafely-ignore-certificate-errors --allow-all \
+        --unstable-broadcast-channel --unstable-cron --unstable-kv \
+        src/skill_compute_queues_test.ts
+    echo "✅ compute-queues skill API tests"
+
+# Spawns real `claude -p` sessions: costs tokens, not deterministic, needs
+# `claude` on PATH and a local-mode worker first: just app/worker/local
+# Test that an LLM with the compute-queues skill really builds a working container
+test-skill-ai +args="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    deno run --allow-all app/test/skill-ai/run.ts {{ args }}
+
+# Test MCP server (requires local dev stack to be running)
+test-mcp:
+    #!/usr/bin/env bash
+    set -e
+
+    # Try to find the MCP health endpoint
+    echo "Checking if local dev stack is running..."
+
+    # Try localhost:8000 (common local worker port)
+    MCP_HEALTH_URL=""
+    if curl -f -s http://localhost:8000/mcp/health > /dev/null 2>&1; then
+        MCP_HEALTH_URL="http://localhost:8000"
+        echo "✅ MCP server detected at http://localhost:8000"
+    # Try localhost on other common ports
+    elif curl -f -s http://localhost:443/mcp/health > /dev/null 2>&1; then
+        MCP_HEALTH_URL="http://localhost:443"
+        echo "✅ MCP server detected at http://localhost:443"
+    else
+        echo ""
+        echo "❌ Error: MCP server health endpoint not responding!"
+        echo ""
+        echo "Tried:"
+        echo "  - http://localhost:8000/mcp/health"
+        echo "  - http://localhost:443/mcp/health"
+        echo ""
+        echo "Please start the local stack first:"
+        echo "  just dev local"
+        echo ""
+        echo "Then verify it's running:"
+        echo "  curl http://localhost:8000/mcp/health"
+        echo ""
+        exit 1
+    fi
+
+    echo ""
+
+    # Set environment for local mode
+    # Tests run on host machine, so use localhost
+    export QUEUE_ID="local"
+    export API_URL="http://localhost:8000"
+
+    echo "Running MCP tests..."
+    echo "  QUEUE_ID: $QUEUE_ID"
+    echo "  API_URL: $API_URL"
+    echo "  Health check: $MCP_HEALTH_URL/mcp/health"
+    echo ""
+
+    # Run the MCP tests with --no-check to bypass AWS SDK type errors
+    cd app/test
+    deno test --allow-all --no-check --unstable-broadcast-channel --unstable-kv --unstable-cron src/mcp_*.ts
+
+    echo ""
+    echo "✅ MCP tests completed successfully!"
 
 # Watch the local dev stack, running the tests when files change
 @watch mode="remote" +args="":
@@ -115,13 +263,17 @@ run-local-workers: publish-versioned-artifacts
 @fmt +args="":
     deno fmt {{ args }} 
     find app/*/justfile -exec just --fmt --unstable -f {} {{ args }} \;
+    just --fmt --unstable -f docs/justfile {{ args }}
     just app/browser/fmt
+    just docs/fmt {{ args }}
 
 # Format all supported files
 @fmt-check +args="":
     deno fmt --check {{ args }} 
     find app/*/justfile -exec just --fmt --check --unstable -f {} {{ args }} \;
+    just --fmt --check --unstable -f docs/justfile {{ args }}
     just app/browser/fmt-check
+    just docs/fmt-check {{ args }}
 
 # Run CI
 @ci: fmt-check lint
@@ -169,4 +321,4 @@ alias docs := _docs
     just docs/{{ args }}
 
 @logs mode service:
-    just app/logs {{mode}} {{service}}
+    just app/logs {{ mode }} {{ service }}

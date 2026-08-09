@@ -1,0 +1,35 @@
+#!/usr/bin/env just --justfile
+
+# Start the MCP server
+start:
+    deno task start
+
+# Start the MCP server in development mode with auto-reload
+dev:
+    deno task dev
+
+# Format
+@fmt +args="":
+    deno fmt {{ args }}
+
+# Format check
+@fmt-check +args="":
+    deno fmt --check {{ args }}
+
+# Lint
+@lint:
+    deno lint
+
+# Lint and fix issues
+@lint-fix:
+    deno lint --fix
+
+# Quick compilation check
+@check:
+    deno check src
+    echo "✅ mcp typescript compilation"
+
+# Test the MCP server
+test:
+    echo "Testing MCP server..."
+    deno run --allow-net --allow-env --allow-read src/test.ts

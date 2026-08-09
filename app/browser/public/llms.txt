@@ -104,7 +104,7 @@ Containers automatically receive environment variables:
 - `POST /q/:queue` - Submit job to queue (creates queue if needed)
 - `GET /q/:queue` - List jobs in queue
 - `GET /q/:queue/j/:jobId` - Get job definition + results + queue status
-- `GET /j/:jobId` - Get job (global lookup)
+- `GET /j/:jobId.json` - Get job (global lookup). The bare `/j/:jobId` serves the browser page instead.
 - `GET /j/:jobId/definition.json` - Job definition
 - `GET /j/:jobId/result.json` - Job results
 - `GET /j/:jobId/inputs/:file` - Job input file
@@ -261,7 +261,8 @@ docker run --rm \
 ## Example: Submitting a Job
 
 Via browser client:
-https://container.mtfm.io/#?job=<base64-encoded-job-definition>&queue=my-queue
+https://container.mtfm.io/j/<jobId>#?queue=my-queue                          (short, after submitting)
+https://container.mtfm.io/#?job=<base64-encoded-job-definition>&queue=my-queue  (self-contained)
 
 Via CLI:
 ```bash

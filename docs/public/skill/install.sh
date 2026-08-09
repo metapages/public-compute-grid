@@ -13,15 +13,19 @@ SKILLS_DIR="${SKILLS_DIR:-$HOME/.claude/skills}"
 TARGET="$SKILLS_DIR/compute-queues"
 SRC="$BASE/docs/skill/compute-queues"
 
-FILES="SKILL.md references/rest-api.md references/backend-patterns.md"
+FILES="SKILL.md
+references/build-and-iterate.md
+references/job-definition.md
+references/backend-patterns.md
+references/rest-api.md
+scripts/cq.mjs"
 
 echo "Installing the compute-queues skill"
 echo "  from: $SRC"
 echo "  into: $TARGET"
 
-mkdir -p "$TARGET/references"
-
 for f in $FILES; do
+  mkdir -p "$(dirname "$TARGET/$f")"
   if ! curl -fsSL "$SRC/$f" -o "$TARGET/$f"; then
     echo "failed to download $SRC/$f" >&2
     exit 1
@@ -29,11 +33,15 @@ for f in $FILES; do
   echo "  ✓ $f"
 done
 
+# The helper is executed directly by the agent.
+chmod +x "$TARGET/scripts/cq.mjs"
+
 cat <<EOF
 
 Installed. Restart your agent so it picks up the new skill.
 
-Try: "run 'echo hello' in an alpine container on a compute queue"
+Try: "build me a container that runs this script and show me the output"
+     "add a job queue to this app so uploads get processed in a container"
 
 Docs: $BASE/docs/
 EOF

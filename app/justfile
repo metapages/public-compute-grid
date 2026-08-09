@@ -26,6 +26,9 @@ green := "\\e[32m"
 down mode="remote" +args="": (_validate_mode mode)
     docker compose --project-name=dev -f ../docker-compose.yml -f ../docker-compose-{{ mode }}.yml down {{ args }}
 
+build: _ensure-all _build_shared
+    docker compose --project-name=dev -f ../docker-compose.yml -f ../docker-compose-remote.yml build
+
 # Bump the version, commit, CI will deploy and publish artifacts
 deploy version="":
     #!/usr/bin/env bash
@@ -61,6 +64,7 @@ deploy version="":
     cd test && deno fmt --check {{ args }}
     cd cli && deno fmt --check {{ args }}
     cd shared && deno fmt --check {{ args }}
+    cd mcp && deno fmt --check {{ args }}
     find */justfile -exec just --fmt --check --unstable -f {} {{ args }} \;
     just browser/fmt-check
 
@@ -85,6 +89,18 @@ test mode="remote" +args="": _build_shared check (_validate_mode mode)
         | sed -E 's/-+$//')"
     export STACK
     echo -e "Using STACK=${STACK}"
+
+    # Give each test stack its own worker data directory, and start it empty.
+    #
+    # The worker's data directory is a host bind mount under /tmp, so it
+    # outlives `docker compose down` and is shared with the dev stack. Job ids
+    # are sha256(definition), so a rerun resolves identical definitions to the
+    # previous run's jobs — including ones left Running, which hold worker slots
+    # and stall everything behind them. Self-hosted runners keep /tmp between
+    # jobs, so this bites CI as much as a laptop.
+    export WORKER_DATA_DIRECTORY="/tmp/worker-metapage-io-${STACK}"
+    echo -e "Using WORKER_DATA_DIRECTORY=${WORKER_DATA_DIRECTORY}"
+    rm -rf "${WORKER_DATA_DIRECTORY}" 2>/dev/null || true
 
     # `timeout` is GNU coreutils and is not guaranteed on every self-hosted runner
     timeout_cmd=""
@@ -177,8 +193,19 @@ test mode="remote" +args="": _build_shared check (_validate_mode mode)
     # tests don't need the browser but dir needs to exist
     mkdir -p browser/dist
     docker compose --project-name="${STACK}" -f ../docker-compose.yml -f ../docker-compose-{{ mode }}.yml -f ../docker-compose-test-{{ mode }}.yml up --build --remove-orphans --detach
-        # functional tests
-    just test/test-in-docker {{ mode }} "${STACK}"
+        # functional tests. On failure dump the server-side logs before the
+        # trap tears the stack down: the test output alone shows only what the
+        # client saw, which is not enough to tell a slow job from a lost one.
+    if ! just test/test-in-docker {{ mode }} "${STACK}"; then
+        echo "::group::worker logs (${STACK})"
+        docker compose --project-name="${STACK}" \
+            -f ../docker-compose.yml \
+            -f ../docker-compose-{{ mode }}.yml \
+            -f ../docker-compose-test-{{ mode }}.yml \
+            logs --tail=400 --no-color worker 2>&1 | tail -400 || true
+        echo "::endgroup::"
+        exit 1
+    fi
     just worker/test
     just shared/test
     just cli/test
@@ -231,6 +258,8 @@ open mode="remote": _ensure-all
     just browser/check
     echo -n "test check..."
     just test/check
+    echo -n "mcp check..."
+    just mcp/check
     echo -n "shared check..."
     just shared/check
     echo -n "cli check..."
@@ -244,6 +273,7 @@ open mode="remote": _ensure-all
     cd test && deno fmt {{ args }}
     cd cli && deno fmt {{ args }}
     cd shared && deno fmt {{ args }}
+    cd mcp && deno fmt {{ args }}
     find . -name justfile -exec just --fmt --unstable -f {} {{ args }} \;
 
 # Calls the status endpoint of the local dev stack

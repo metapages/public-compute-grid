@@ -42,7 +42,10 @@ WORKDIR /app
 COPY ./deno.json ./deno.json
 COPY ./deno.lock ./deno.lock
 
-# Deno will otherwise complain about missing workspace files
+# Deno will otherwise complain about missing workspace files.
+# app/mcp is NOT stubbed here: local mode serves the MCP server from it, so the
+# real package is copied below. An empty deno.json would satisfy the workspace
+# but leave `@metapages/compute-queues-mcp/*` unresolvable.
 RUN mkdir -p ./app/api ./app/cli ./app/test
 RUN touch ./app/api/deno.json ./app/cli/deno.json ./app/test/deno.json
 
@@ -54,6 +57,10 @@ COPY ./app/worker/mod.json ./app/worker/mod.json
 # Copy shared files
 COPY ./app/shared/src ./app/shared/src
 COPY ./app/shared/deno.json ./app/shared/deno.json
+
+# Copy mcp files: local mode (src/lib/local-handler.ts) serves /mcp from here
+COPY ./app/mcp/src ./app/mcp/src
+COPY ./app/mcp/deno.json ./app/mcp/deno.json
 
 # Copy assets
 # COPY ./app/browser/dist ./app/browser/dist
