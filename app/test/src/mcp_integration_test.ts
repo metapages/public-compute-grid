@@ -62,17 +62,17 @@ print(f"Python version: {sys.version}")
   );
 
   console.log("\nJob completed!");
-  console.log(`Final state: ${finalStatus.state}`);
-  console.log(`Exit code: ${finalStatus.result?.StatusCode}`);
+  console.log(`Final state: ${finalStatus.status?.state}`);
+  console.log(`Exit code: ${finalStatus.result?.statusCode}`);
 
   // Step 3: Verify the results
   console.log("\nStep 3: Verifying results...");
 
-  assertEquals(finalStatus.state, "Finished");
-  assertEquals(finalStatus.result?.StatusCode, 0);
+  assertEquals(finalStatus.status?.state, "Finished");
+  assertEquals(finalStatus.result?.statusCode, 0);
 
   // Check logs contain expected output
-  const logs = finalStatus.result?.logs?.map((l: any) => l[0]).join("") || "";
+  const logs = finalStatus.result?.logs?.map((l) => l[0]).join("") || "";
   console.log("\nJob output:");
   console.log(logs);
 
@@ -105,10 +105,10 @@ Deno.test("MCP Integration: build from git repository", async () => {
     180000, // 3 minutes for git clone
   );
 
-  console.log(`Job state: ${finalStatus.state}`);
-  assertEquals(finalStatus.state, "Finished");
+  console.log(`Job state: ${finalStatus.status?.state}`);
+  assertEquals(finalStatus.status?.state, "Finished");
 
-  const logs = finalStatus.result?.logs?.map((l: any) => l[0]).join("") || "";
+  const logs = finalStatus.result?.logs?.map((l) => l[0]).join("") || "";
   console.log("\nRepository contents:");
   console.log(logs);
 
@@ -156,10 +156,10 @@ cat /outputs/result.txt
 
   const finalStatus = await waitForJobCompletion(QUEUE_ID, result.jobId, 60000);
 
-  assertEquals(finalStatus.state, "Finished");
-  assertEquals(finalStatus.result?.StatusCode, 0);
+  assertEquals(finalStatus.status?.state, "Finished");
+  assertEquals(finalStatus.result?.statusCode, 0);
 
-  const logs = finalStatus.result?.logs?.map((l: any) => l[0]).join("") || "";
+  const logs = finalStatus.result?.logs?.map((l) => l[0]).join("") || "";
   console.log("\nWorkflow output:");
   console.log(logs);
 
@@ -205,7 +205,7 @@ Deno.test("MCP Integration: test concurrent job submission", async () => {
 
   // List jobs to see them all
   const jobsList = await mcpListJobs({ queue: QUEUE_ID });
-  console.log(`\nTotal jobs in queue: ${jobsList.total}`);
+  console.log(`\nTotal jobs in queue: ${jobsList.totalJobs}`);
 
   // Wait for all to complete
   console.log("\nWaiting for all jobs to complete...");
@@ -215,9 +215,9 @@ Deno.test("MCP Integration: test concurrent job submission", async () => {
 
   console.log("\nAll jobs completed:");
   finalStatuses.forEach((status, i) => {
-    console.log(`  Job ${i + 1}: ${status.state} (exit code: ${status.result?.StatusCode})`);
-    assertEquals(status.state, "Finished");
-    assertEquals(status.result?.StatusCode, 0);
+    console.log(`  Job ${i + 1}: ${status.status?.state} (exit code: ${status.result?.statusCode})`);
+    assertEquals(status.status?.state, "Finished");
+    assertEquals(status.result?.statusCode, 0);
   });
 
   console.log("\n=== Concurrent Job Test Complete ===\n");
@@ -239,9 +239,9 @@ Deno.test("MCP Integration: iterative container development simulation", async (
   });
 
   const result1 = await waitForJobCompletion(QUEUE_ID, attempt1.jobId, 60000);
-  console.log(`Result: ${result1.finishedReason} (exit code: ${result1.result?.StatusCode})`);
+  console.log(`Result: ${result1.finishedReason} (exit code: ${result1.result?.statusCode})`);
 
-  assertEquals(result1.result?.StatusCode !== 0, true, "First attempt should fail");
+  assertEquals(result1.result?.statusCode !== 0, true, "First attempt should fail");
 
   // Iteration 2: Fix by using Python image
   console.log("\nIteration 2: Using correct base image...");
@@ -257,9 +257,9 @@ Deno.test("MCP Integration: iterative container development simulation", async (
   });
 
   const result2 = await waitForJobCompletion(QUEUE_ID, attempt2.jobId, 60000);
-  console.log(`Result: ${result2.finishedReason} (exit code: ${result2.result?.StatusCode})`);
+  console.log(`Result: ${result2.finishedReason} (exit code: ${result2.result?.statusCode})`);
 
-  assertEquals(result2.result?.StatusCode !== 0, true, "Second attempt should fail");
+  assertEquals(result2.result?.statusCode !== 0, true, "Second attempt should fail");
 
   // Iteration 3: Fix the script
   console.log("\nIteration 3: Fixed script...");
@@ -275,12 +275,12 @@ Deno.test("MCP Integration: iterative container development simulation", async (
   });
 
   const result3 = await waitForJobCompletion(QUEUE_ID, attempt3.jobId, 60000);
-  console.log(`Result: ${result3.finishedReason} (exit code: ${result3.result?.StatusCode})`);
+  console.log(`Result: ${result3.finishedReason} (exit code: ${result3.result?.statusCode})`);
 
-  assertEquals(result3.state, "Finished");
-  assertEquals(result3.result?.StatusCode, 0);
+  assertEquals(result3.status?.state, "Finished");
+  assertEquals(result3.result?.statusCode, 0);
 
-  const logs = result3.result?.logs?.map((l: any) => l[0]).join("") || "";
+  const logs = result3.result?.logs?.map((l) => l[0]).join("") || "";
   assertEquals(logs.includes("Success! Container is working correctly"), true);
 
   console.log("\n=== Iterative Development Simulation Complete ===");

@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import type { MCPRequest, MCPResponse } from "./types.ts";
-import { getDefaultQueue, handleToolCall, setDefaultQueue, tools } from "./tools.ts";
+import { getDefaultQueue, handleToolCall, tools } from "./tools.ts";
 import { readResource, resources } from "./resources.ts";
 
 /**
@@ -37,7 +37,11 @@ export async function handleMCPRequest(c: Context): Promise<Response> {
 }
 
 async function processMCPRequest(request: MCPRequest): Promise<MCPResponse> {
-  const { method, params, id } = request;
+  const { method, id } = request;
+  // `params` is untyped JSON on the wire; each case checks what it needs.
+  const params = request.params as
+    | { name?: string; arguments?: Record<string, unknown>; uri?: string }
+    | undefined;
 
   console.log(`[MCP] Processing method: "${method}" (type: ${typeof method})`);
 
@@ -72,14 +76,14 @@ async function processMCPRequest(request: MCPRequest): Promise<MCPResponse> {
           result: { tools },
         };
 
-      case "tools/call":
+      case "tools/call": {
         if (!params || typeof params !== "object" || !params.name) {
           throw new Error("Invalid tool call parameters");
         }
 
         const toolResult = await handleToolCall({
-          name: params.name as string,
-          arguments: params.arguments as Record<string, unknown> || {},
+          name: params.name,
+          arguments: params.arguments || {},
         });
 
         return {
@@ -87,6 +91,7 @@ async function processMCPRequest(request: MCPRequest): Promise<MCPResponse> {
           id,
           result: toolResult,
         };
+      }
 
       case "resources/list":
         return {
@@ -95,17 +100,18 @@ async function processMCPRequest(request: MCPRequest): Promise<MCPResponse> {
           result: { resources },
         };
 
-      case "resources/read":
+      case "resources/read": {
         if (!params || typeof params !== "object" || !params.uri) {
           throw new Error("Invalid resource read parameters");
         }
 
-        const resourceResult = await readResource(params.uri as string);
+        const resourceResult = await readResource(params.uri);
         return {
           jsonrpc: "2.0",
           id,
           result: resourceResult,
         };
+      }
 
       default:
         console.log(`[MCP DEBUG] Unknown method received: "${method}" (length: ${method?.length})`);
@@ -125,7 +131,7 @@ async function processMCPRequest(request: MCPRequest): Promise<MCPResponse> {
 }
 
 // Health check endpoint for MCP server
-export async function handleMCPHealth(c: Context): Promise<Response> {
+export function handleMCPHealth(c: Context): Response {
   return c.json({
     status: "healthy",
     server: "worker-metapage-mcp",
@@ -137,7 +143,7 @@ export async function handleMCPHealth(c: Context): Promise<Response> {
 }
 
 // MCP server info endpoint
-export async function handleMCPInfo(c: Context): Promise<Response> {
+export function handleMCPInfo(c: Context): Response {
   return c.json({
     server: {
       name: "worker-metapage-mcp",

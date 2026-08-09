@@ -63,7 +63,7 @@ Timestamp: ${Date.now()}`;
       const maxAttempts = 60; // 60 seconds timeout
 
       while (!jobCompleted && attempts < maxAttempts) {
-        const jobResponse = await fetch(`${API_URL}/j/${jobId}`);
+        const jobResponse = await fetch(`${API_URL}/j/${jobId}.json`);
         assertEquals(jobResponse.status, 200);
         const jobData = await jobResponse.json();
         const state = jobData.data?.results?.state;

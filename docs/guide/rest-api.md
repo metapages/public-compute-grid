@@ -14,8 +14,9 @@ No authentication. CORS is open, so browsers can call it directly.
 | `GET`  | `/q/:queue`                            | List jobs in the queue.                     |
 | `GET`  | `/q/:queue/j`                          | Alias of the above.                         |
 | `GET`  | `/q/:queue/j/:jobId`                   | Definition + results.                       |
-| `GET`  | `/j/:jobId`                            | Definition + results, without the queue.    |
+| `GET`  | `/j/:jobId.json`                       | Definition + results, without the queue.    |
 | `GET`  | `/j/:jobId/definition.json`            | Just the definition.                        |
+| `GET`  | `/j/:jobId`                            | Browser page for the job (not JSON).        |
 | `GET`  | `/j/:jobId/result.json`                | Just the result. `results.json` also works. |
 | `GET`  | `/q/:queue/j/:jobId/result.json`       | Queue-scoped result — includes queue state. |
 | `GET`  | `/j/:jobId/inputs/*`                   | Raw input file bytes.                       |

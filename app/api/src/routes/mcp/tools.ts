@@ -3,11 +3,13 @@ import { buildShortViewUrl, buildViewUrl } from "@metapages/compute-queues-mcp/v
 import { userJobQueues } from "@metapages/compute-queues-shared";
 import {
   type ConsoleLogLine,
+  DataRefType,
   type DockerJobDefinitionInputRefs,
   DockerJobState,
   type DockerRunResultWithOutputs,
   type EnqueueJob,
   type InMemoryDockerJob,
+  type InputsRefs,
   shaDockerJob,
 } from "@metapages/compute-queues-shared";
 
@@ -25,6 +27,19 @@ export function setDefaultQueue(queue: string) {
 export function getDefaultQueue(): string {
   return defaultQueue;
 }
+
+/**
+ * `files` arrives as {name: contents}, but a job definition wants
+ * {name: DataRef}. Passing the raw map through produced definitions the worker
+ * could not read — the previous `any` typing hid the mismatch.
+ */
+const filesToInputsRefs = (files?: Record<string, string>): InputsRefs =>
+  Object.fromEntries(
+    Object.entries(files || {}).map(([name, value]) => [
+      name,
+      { value, type: DataRefType.utf8 },
+    ]),
+  );
 
 export const tools: Tool[] = [
   {
@@ -327,7 +342,16 @@ export async function handleToolCall(request: CallToolRequest): Promise<CallTool
 }
 
 async function handleCreateJob(request: CallToolRequest): Promise<CallToolResult> {
-  const args = request.arguments || {};
+  const args = (request.arguments || {}) as {
+    image?: string;
+    dockerfile?: string;
+    command?: string;
+    files?: Record<string, string>;
+    env?: Record<string, string>;
+    maxDuration?: string;
+    namespace?: string;
+    queue?: string;
+  };
   const { image, dockerfile, command, files, env, maxDuration, namespace, queue: queueArg } = args;
 
   // Validate mutually exclusive options
@@ -343,7 +367,7 @@ async function handleCreateJob(request: CallToolRequest): Promise<CallToolResult
     image: image || undefined,
     build: dockerfile ? { dockerfile } : undefined,
     command: command || "echo 'Hello World'",
-    inputs: files || {},
+    inputs: filesToInputsRefs(files),
     env: env || {},
     maxDuration: maxDuration || "30m",
   };
@@ -405,7 +429,11 @@ async function handleCreateJob(request: CallToolRequest): Promise<CallToolResult
 }
 
 async function handleExecuteJob(request: CallToolRequest): Promise<CallToolResult> {
-  const { jobId, timeout = 300, streamLogs = true } = request.arguments;
+  const { jobId, timeout = 300, streamLogs = true } = (request.arguments || {}) as {
+    jobId: string;
+    timeout?: number;
+    streamLogs?: boolean;
+  };
 
   // Find the job across all queues
   let foundJob = null;
@@ -421,7 +449,7 @@ async function handleExecuteJob(request: CallToolRequest): Promise<CallToolResul
         queueInstance = queue;
         break;
       }
-    } catch (error) {
+    } catch {
       // Job not found in this queue, continue
     }
   }
@@ -578,7 +606,7 @@ async function handleInspectOutputs(request: CallToolRequest): Promise<CallToolR
         }
         break;
       }
-    } catch (error) {
+    } catch {
       // Job not found in this queue, continue
     }
   }
@@ -728,11 +756,21 @@ async function handleInspectOutputs(request: CallToolRequest): Promise<CallToolR
 }
 
 async function handleModifyJob(request: CallToolRequest): Promise<CallToolResult> {
-  const { baseJobId, changes, description = "Modified job" } = request.arguments;
+  const { baseJobId, changes, description = "Modified job" } = (request.arguments || {}) as {
+    baseJobId: string;
+    changes: {
+      image?: string;
+      dockerfile?: string;
+      command?: string;
+      files?: Record<string, string>;
+      env?: Record<string, string>;
+      removeFiles?: string[];
+    };
+    description?: string;
+  };
 
   // Find the base job
   let baseJob = null;
-  let baseJobResult = null;
   let foundQueue = null;
 
   for (const [queueName, queue] of Object.entries(userJobQueues)) {
@@ -741,18 +779,9 @@ async function handleModifyJob(request: CallToolRequest): Promise<CallToolResult
       if (job) {
         baseJob = job;
         foundQueue = queueName;
-        // Try to get the job results from the database
-        try {
-          const finishedJob = await queue.db.getFinishedJob(baseJobId);
-          if (finishedJob) {
-            baseJobResult = (await queue.db.getJobFinishedResults(baseJobId))?.finished?.result;
-          }
-        } catch (error) {
-          // Job might not be finished, that's ok
-        }
         break;
       }
-    } catch (error) {
+    } catch {
       // Job not found in this queue, continue
     }
   }
@@ -786,7 +815,7 @@ async function handleModifyJob(request: CallToolRequest): Promise<CallToolResult
     build: changes.dockerfile ? { dockerfile: changes.dockerfile } : originalDefinition.build,
     command: changes.command || originalDefinition.command,
     maxDuration: originalDefinition.maxDuration,
-    inputs: { ...(originalDefinition.inputs || {}), ...(changes.files || {}) },
+    inputs: { ...(originalDefinition.inputs || {}), ...filesToInputsRefs(changes.files) },
     env: { ...(originalDefinition.env || {}), ...(changes.env || {}) },
   };
 
@@ -858,10 +887,26 @@ async function handleModifyJob(request: CallToolRequest): Promise<CallToolResult
 }
 
 async function handleListIterations(request: CallToolRequest): Promise<CallToolResult> {
-  const { namespace = "dev", limit = 20, includeResults = false } = request.arguments;
+  const { namespace = "dev", limit = 20, includeResults = false } = (request.arguments || {}) as {
+    namespace?: string;
+    limit?: number;
+    includeResults?: boolean;
+  };
 
   // Collect all development jobs from all queues
-  const iterations: any[] = [];
+  type Iteration = {
+    jobId: string;
+    queue: string;
+    state: string;
+    createdAt: string;
+    worker?: string;
+    finishedReason?: string;
+    isIteration: boolean;
+    baseJobId: string | undefined;
+    description: string;
+    result: Record<string, unknown> | undefined;
+  };
+  const iterations: Iteration[] = [];
 
   for (const [queueName, queue] of Object.entries(userJobQueues)) {
     try {
@@ -899,7 +944,7 @@ async function handleListIterations(request: CallToolRequest): Promise<CallToolR
                   };
                 }
               }
-            } catch (error) {
+            } catch {
               iteration.result = { error: "Could not fetch results" };
             }
           }
@@ -917,8 +962,8 @@ async function handleListIterations(request: CallToolRequest): Promise<CallToolR
   const limitedIterations = iterations.slice(0, limit);
 
   // Group by base job for better visualization
-  const iterationGroups: { [baseJobId: string]: any[] } = {};
-  const standaloneJobs: any[] = [];
+  const iterationGroups: { [baseJobId: string]: Iteration[] } = {};
+  const standaloneJobs: Iteration[] = [];
 
   for (const iteration of limitedIterations) {
     if (iteration.baseJobId) {
@@ -966,7 +1011,11 @@ async function handleListIterations(request: CallToolRequest): Promise<CallToolR
 }
 
 async function handleGetJobUrl(request: CallToolRequest): Promise<CallToolResult> {
-  const { jobId, includeInputs = true, includeResults = true } = request.arguments;
+  const { jobId, includeInputs = true, includeResults = true } = (request.arguments || {}) as {
+    jobId: string;
+    includeInputs?: boolean;
+    includeResults?: boolean;
+  };
 
   // Find the job
   let foundJob = null;
@@ -991,7 +1040,7 @@ async function handleGetJobUrl(request: CallToolRequest): Promise<CallToolResult
         }
         break;
       }
-    } catch (error) {
+    } catch {
       // Job not found in this queue, continue
     }
   }
@@ -1001,7 +1050,8 @@ async function handleGetJobUrl(request: CallToolRequest): Promise<CallToolResult
   }
 
   const baseUrl = "https://container.mtfm.io"; // or use current server URL
-  const jobUrl = `${baseUrl}/j/${jobId}`;
+  // `.json`: the bare /j/<jobId> path is the browser page, listed as `view` below.
+  const jobUrl = `${baseUrl}/j/${jobId}.json`;
   const queueUrl = `${baseUrl}/q/${foundQueue}/j/${jobId}`;
 
   // The only URLs here a person can open. Every other one serves JSON.

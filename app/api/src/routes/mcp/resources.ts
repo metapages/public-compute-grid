@@ -1,5 +1,5 @@
 import type { Resource } from "./types.ts";
-import { userJobQueues } from "@metapages/compute-queues-shared";
+import { userJobQueues, type WorkerRegistration } from "@metapages/compute-queues-shared";
 
 /**
  * MCP Resources for job queue data
@@ -74,12 +74,12 @@ export async function readResource(uri: string): Promise<{
   }
 }
 
-async function readQueueResource(uri: string): Promise<{
+function readQueueResource(uri: string): {
   contents: Array<{
     type: "text";
     text: string;
   }>;
-}> {
+} {
   // Parse: queue://queueName/jobs
   const parts = uri.replace("queue://", "").split("/");
   const queueName = parts[0];
@@ -198,12 +198,12 @@ async function readJobResource(uri: string): Promise<{
   throw new Error(`Unknown job resource: ${resource}`);
 }
 
-async function readSystemResource(uri: string): Promise<{
+function readSystemResource(uri: string): {
   contents: Array<{
     type: "text";
     text: string;
   }>;
-}> {
+} {
   const resource = uri.replace("system://", "");
 
   if (resource === "queues") {
@@ -231,7 +231,7 @@ async function readSystemResource(uri: string): Promise<{
   }
 
   if (resource === "workers") {
-    const allWorkers: any[] = [];
+    const allWorkers: (WorkerRegistration & { queue: string })[] = [];
 
     for (const [queueName, queue] of Object.entries(userJobQueues)) {
       const workers = queue.getWorkerRegistrations().map((registration) => ({

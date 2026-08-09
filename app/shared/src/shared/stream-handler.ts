@@ -41,7 +41,7 @@ export interface StreamHandlerOpts {
   maxDurationMs?: number;
 }
 
-export function makeStreamHandler(opts: StreamHandlerOpts) {
+export function makeStreamHandler(opts: StreamHandlerOpts): (c: Context) => Promise<Response> {
   const pollIntervalMs = opts.pollIntervalMs ?? 500;
   const maxDurationMs = opts.maxDurationMs ?? 30 * 60 * 1000;
 

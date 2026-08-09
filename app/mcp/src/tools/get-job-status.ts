@@ -36,17 +36,33 @@ export async function handleGetJobStatus(
     const args = request.params.arguments as any;
     const { jobId, queue, includeResult = true } = args;
 
-    const status = await client.getJobStatus(jobId);
-
-    let result = null;
-    if (includeResult && status.state === "Finished") {
+    // Live state (Queued/Running) only exists in the queue's job map — the
+    // job's own endpoints carry a definition and, once finished, a result, but
+    // no state. `/j/<id>.json` in particular returns {definition, results},
+    // which is why reading `.state` off it always yielded undefined.
+    let job: Record<string, any> | undefined;
+    if (queue) {
       try {
-        result = await client.getJobResult(jobId);
+        const jobs = (await client.listJobs(queue))?.data as Record<string, any> | undefined;
+        job = jobs?.[jobId];
+      } catch (listError: unknown) {
+        console.warn(`Could not list queue ${queue}:`, (listError as Error).message);
+      }
+    }
+
+    // Finished jobs are also persisted with their state, so this covers both a
+    // job that has aged out of the queue map and the no-queue-argument case.
+    let finished: Record<string, any> | undefined;
+    if (!job || job.state === "Finished") {
+      try {
+        finished = (await client.getJobResult(jobId))?.data as Record<string, any> | undefined;
       } catch (resultError: unknown) {
-        // Result might not be available yet, continue without it
         console.warn(`Could not fetch result for job ${jobId}:`, (resultError as Error).message);
       }
     }
+
+    const status = job ?? finished ?? {};
+    const result = includeResult ? finished?.finished?.result : undefined;
 
     // The browser client needs a queue to connect to. Without one we can still
     // report status, just not link to it — better than emitting a link that

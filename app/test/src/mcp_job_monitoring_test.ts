@@ -31,7 +31,7 @@ Deno.test("MCP: monitor job status from queued to finished", async () => {
   assertExists(initialStatus.jobId);
   assertEquals(initialStatus.jobId, result.jobId);
   // State should be Queued or Running
-  assertExists(initialStatus.state);
+  assertExists(initialStatus.status?.state);
 
   // Wait for job to complete
   console.log("Waiting for job completion...");
@@ -39,7 +39,7 @@ Deno.test("MCP: monitor job status from queued to finished", async () => {
 
   console.log("Final job status:", finalStatus);
 
-  assertEquals(finalStatus.state, "Finished");
+  assertEquals(finalStatus.status?.state, "Finished");
   assertEquals(finalStatus.jobId, result.jobId);
   assertExists(finalStatus.result);
 
@@ -68,10 +68,10 @@ Deno.test("MCP: get detailed job result with logs", async () => {
   assertExists(finalStatus.result.logs);
 
   // Check if logs contain our message
-  const logsText = finalStatus.result.logs.map((l: any) => l[0]).join("");
+  const logsText = finalStatus.result.logs.map((l) => l[0]).join("");
   console.log("Job logs:", logsText);
 
-  assertEquals(finalStatus.result.StatusCode, 0, "Job should complete successfully");
+  assertEquals(finalStatus.result.statusCode, 0, "Job should complete successfully");
 
   closeKv();
 });
@@ -102,11 +102,11 @@ Deno.test("MCP: list jobs in queue", async () => {
   console.log("Jobs in queue:", jobsList);
 
   assertExists(jobsList.jobs);
-  assertExists(jobsList.total);
+  assertExists(jobsList.totalJobs);
 
-  // Find our jobs in the list
-  const ourJobs = Object.keys(jobsList.jobs).filter(
-    (id) => id === job1.jobId || id === job2.jobId,
+  // `jobs` is an array of {jobId, state, ...}, per app/mcp/src/tools/list-jobs.ts
+  const ourJobs = (jobsList.jobs as Array<{ jobId: string }>).filter(
+    (job) => job.jobId === job1.jobId || job.jobId === job2.jobId,
   );
 
   assertEquals(ourJobs.length >= 1, true, "At least one of our jobs should be in the list");
@@ -138,7 +138,7 @@ Deno.test("MCP: cancel a running job", async () => {
     jobId: result.jobId,
   });
 
-  console.log("Status before cancellation:", statusBefore.state);
+  console.log("Status before cancellation:", statusBefore.status?.state);
 
   // Cancel it
   const cancelResult = await mcpCancelJob({
@@ -160,14 +160,14 @@ Deno.test("MCP: cancel a running job", async () => {
     jobId: result.jobId,
   });
 
-  console.log("Status after cancellation:", statusAfter.state);
+  console.log("Status after cancellation:", statusAfter.status?.state);
 
   // Should be Cancelled or Finished
   const terminalStates = ["Cancelled", "Finished"];
   assertEquals(
-    terminalStates.includes(statusAfter.state),
+    terminalStates.includes(statusAfter.status?.state ?? ""),
     true,
-    `Job should be in terminal state, got: ${statusAfter.state}`,
+    `Job should be in terminal state, got: ${statusAfter.status?.state}`,
   );
 
   closeKv();
@@ -189,9 +189,9 @@ Deno.test("MCP: monitor job with failure", async () => {
 
   console.log("Final status:", JSON.stringify(finalStatus, null, 2));
 
-  assertEquals(finalStatus.state, "Finished");
+  assertEquals(finalStatus.status?.state, "Finished");
   assertExists(finalStatus.result);
-  assertEquals(finalStatus.result.StatusCode, 1, "Job should have exit code 1");
+  assertEquals(finalStatus.result.statusCode, 1, "Job should have exit code 1");
 
   // Check failure reason
   assertEquals(finalStatus.finishedReason, "Failure", "Job should be marked as failed");
@@ -218,10 +218,10 @@ Deno.test("MCP: poll job status multiple times", async () => {
       queue: QUEUE_ID,
       jobId: result.jobId,
     });
-    states.push(status.state);
-    console.log(`Poll ${i + 1}: ${status.state}`);
+    states.push(status.status?.state ?? "unknown");
+    console.log(`Poll ${i + 1}: ${status.status?.state}`);
 
-    if (status.state === "Finished") {
+    if (status.status?.state === "Finished") {
       break;
     }
 

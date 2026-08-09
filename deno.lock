@@ -3174,6 +3174,7 @@
       "jsr:@korkje/wsi@~0.3.2",
       "jsr:@luca/esbuild-deno-loader@0.11.1",
       "jsr:@metapages/deno-redis-broadcastchannel@0.4",
+      "jsr:@std/cli@1",
       "jsr:@std/crypto@1.0.3",
       "jsr:@std/encoding@1.0.3",
       "jsr:@std/http@^1.0.12",

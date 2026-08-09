@@ -125,7 +125,7 @@ Deno.test(
     );
 
     // Check the local API endpoint
-    const localJob = await fetch(`${API_URL}/j/${jobId}`);
+    const localJob = await fetch(`${API_URL}/j/${jobId}.json`);
     const localJobJson: { data: { results: unknown; definition: DockerJobDefinitionInputRefs } } = await localJob
       .json();
 

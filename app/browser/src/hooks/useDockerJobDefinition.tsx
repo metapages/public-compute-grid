@@ -11,7 +11,6 @@ import {
   DockerJobControlConfig,
   DockerJobDefinitionInputRefs,
   DockerJobDefinitionMetadata,
-  DockerJobDefinitionParamsInUrlHash,
   isDataRef,
   isParentInjectedHashParamKey,
   JobInputs,

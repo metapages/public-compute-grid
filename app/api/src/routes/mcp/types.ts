@@ -6,24 +6,24 @@ export interface MCPRequest {
   jsonrpc: "2.0";
   id?: string | number;
   method: string;
-  params?: any;
+  params?: unknown;
 }
 
 export interface MCPResponse {
   jsonrpc: "2.0";
   id?: string | number | undefined | null;
-  result?: any;
+  result?: unknown;
   error?: {
     code: number;
     message: string;
-    data?: any;
+    data?: unknown;
   };
 }
 
 export interface MCPNotification {
   jsonrpc: "2.0";
   method: string;
-  params?: any;
+  params?: unknown;
 }
 
 export interface Tool {
@@ -31,7 +31,7 @@ export interface Tool {
   description: string;
   inputSchema: {
     type: "object";
-    properties: Record<string, any>;
+    properties: Record<string, unknown>;
     required?: string[];
   };
 }
@@ -45,7 +45,8 @@ export interface Resource {
 
 export interface CallToolRequest {
   name: string;
-  arguments?: any;
+  /** Untyped JSON from the client; each handler narrows what it needs. */
+  arguments?: Record<string, unknown>;
 }
 
 export interface CallToolResult {
@@ -68,5 +69,5 @@ export interface JobSubscription {
 export interface JobNotification {
   type: "job/logs" | "job/status_changed" | "job/completed";
   jobId: string;
-  data: any;
+  data: unknown;
 }

@@ -32,7 +32,8 @@ export class WorkerMetapageClient implements JobQueueClient {
   }
 
   async getJobStatus(jobId: string): Promise<any> {
-    const response = await fetch(`${this.baseUrl}/j/${jobId}`, {
+    // `.json` suffix: the bare /j/<jobId> path serves the browser page.
+    const response = await fetch(`${this.baseUrl}/j/${jobId}.json`, {
       method: "GET",
       headers: {
         "Content-Type": "application/json",

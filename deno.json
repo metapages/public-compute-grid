@@ -17,6 +17,7 @@
     "@metapages/metapage": "npm:@metapages/metapage@1.0.21",
     "@hono/mcp": "npm:@hono/mcp@^0.3.1",
     "@modelcontextprotocol/sdk": "npm:@modelcontextprotocol/sdk@^1.17.1",
+    "@std/cli": "jsr:@std/cli@^1.0.0",
     "@std/crypto": "jsr:@std/crypto@1.0.3",
     "@std/encoding": "jsr:@std/encoding@1.0.3",
     "@std/http": "jsr:@std/http@^1.0.12",

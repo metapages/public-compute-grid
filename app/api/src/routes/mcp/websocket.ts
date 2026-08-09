@@ -1,6 +1,5 @@
 import { userJobQueues } from "@metapages/compute-queues-shared";
 import type { JobStatusPayload } from "@metapages/compute-queues-shared";
-import type { Context } from "hono";
 
 import { readResource, resources } from "./resources.ts";
 import { handleToolCall, tools } from "./tools.ts";
@@ -123,7 +122,13 @@ async function handleMCPMessage(
   connection: MCPWebSocketConnection,
   message: MCPRequest,
 ): Promise<MCPResponse | null> {
-  const { method, params, id } = message;
+  const { method, id } = message;
+  // `params` is untyped JSON on the wire; each case checks what it needs.
+  const params = message.params as {
+    name?: string;
+    arguments?: Record<string, unknown>;
+    uri?: string;
+  } | undefined;
 
   try {
     switch (method) {
@@ -157,8 +162,14 @@ async function handleMCPMessage(
       case "tools/call": {
         // Streaming subscriptions are connection-scoped, so they are served
         // here rather than by the transport-agnostic tool dispatcher.
+        if (!params?.name) {
+          throw new Error("Invalid tool call parameters");
+        }
         if (params.name === "subscribe_to_job") {
-          const result = await handleJobSubscription(connection, params.arguments);
+          const result = await handleJobSubscription(
+            connection,
+            (params.arguments || {}) as { jobId: string; events?: JobSubscription["events"] },
+          );
           return { jsonrpc: "2.0", id, result };
         }
 
@@ -181,6 +192,9 @@ async function handleMCPMessage(
         };
 
       case "resources/read": {
+        if (!params?.uri) {
+          throw new Error("Invalid resource read parameters");
+        }
         const resourceResult = await readResource(params.uri);
         return {
           jsonrpc: "2.0",
@@ -273,11 +287,11 @@ async function handleJobSubscription(
   };
 }
 
-async function setupJobForwarding(jobId: string): Promise<void> {
+function setupJobForwarding(jobId: string): void {
   // Find which queue contains this job
   let targetQueue = null;
 
-  for (const [queueName, queue] of Object.entries(userJobQueues)) {
+  for (const queue of Object.values(userJobQueues)) {
     if (queue.getCurrentJobState(jobId)) {
       targetQueue = queue;
       break;
@@ -328,7 +342,11 @@ export function broadcastJobLogsToMCPClients(logs: JobStatusPayload): void {
 }
 
 // Function to be called when job status changes
-export function broadcastJobStatusToMCPClients(jobId: string, newState: string, data?: any): void {
+export function broadcastJobStatusToMCPClients(
+  jobId: string,
+  newState: string,
+  data?: Record<string, unknown>,
+): void {
   const subscribedConnections = jobSubscriptions.get(jobId);
   if (!subscribedConnections || subscribedConnections.size === 0) {
     return;
@@ -397,7 +415,7 @@ function cleanup(connectionId: string): void {
   const connection = connections.get(connectionId);
   if (connection) {
     // Remove all job subscriptions for this connection
-    for (const [jobId, subscription] of connection.subscriptions) {
+    for (const jobId of connection.subscriptions.keys()) {
       const jobSubs = jobSubscriptions.get(jobId);
       if (jobSubs) {
         jobSubs.delete(connectionId);

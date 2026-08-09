@@ -21,7 +21,7 @@
  *
  *   just app/worker/local          # API on :8000, queue "local"
  */
-import { parseArgs } from "jsr:@std/cli@1/parse-args";
+import { parseArgs } from "@std/cli/parse-args";
 import { dirname, fromFileUrl, join, resolve } from "std/path";
 
 const HERE = dirname(fromFileUrl(import.meta.url));

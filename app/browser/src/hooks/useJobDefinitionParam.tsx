@@ -70,7 +70,7 @@ export const hydrateShortJobFromPath = async (): Promise<boolean> => {
     }
     useShortJobStore.getState().setShortJob(jobId, definition);
     return true;
-  } catch (_err) {
+  } catch {
     // Job not found / network error: fall back to the empty app state.
     return false;
   }

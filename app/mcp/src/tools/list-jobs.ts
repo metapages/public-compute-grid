@@ -39,10 +39,12 @@ export async function handleListJobs(
 
     const jobsData = await client.listJobs(queue);
 
-    // Extract jobs from the response
+    // GET /q/<queue> answers {data: {jobId: InMemoryDockerJob}}. Reading
+    // `.jobs` off that is always undefined, which is why this listed nothing.
     let jobs: any[] = [];
-    if (jobsData.jobs) {
-      jobs = Object.entries(jobsData.jobs).map(([jobId, job]: [string, any]) => ({
+    const jobMap = jobsData?.data as Record<string, any> | undefined;
+    if (jobMap) {
+      jobs = Object.entries(jobMap).map(([jobId, job]: [string, any]) => ({
         jobId,
         state: job.state,
         worker: job.worker,
@@ -67,7 +69,6 @@ export async function handleListJobs(
       totalJobs: jobs.length,
       filters: { state, limit },
       jobs,
-      workers: jobsData.workers || [],
     };
 
     return {
