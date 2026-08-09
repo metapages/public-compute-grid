@@ -193,8 +193,19 @@ test mode="remote" +args="": _build_shared check (_validate_mode mode)
     # tests don't need the browser but dir needs to exist
     mkdir -p browser/dist
     docker compose --project-name="${STACK}" -f ../docker-compose.yml -f ../docker-compose-{{ mode }}.yml -f ../docker-compose-test-{{ mode }}.yml up --build --remove-orphans --detach
-        # functional tests
-    just test/test-in-docker {{ mode }} "${STACK}"
+        # functional tests. On failure dump the server-side logs before the
+        # trap tears the stack down: the test output alone shows only what the
+        # client saw, which is not enough to tell a slow job from a lost one.
+    if ! just test/test-in-docker {{ mode }} "${STACK}"; then
+        echo "::group::worker logs (${STACK})"
+        docker compose --project-name="${STACK}" \
+            -f ../docker-compose.yml \
+            -f ../docker-compose-{{ mode }}.yml \
+            -f ../docker-compose-test-{{ mode }}.yml \
+            logs --tail=400 --no-color worker 2>&1 | tail -400 || true
+        echo "::endgroup::"
+        exit 1
+    fi
     just worker/test
     just shared/test
     just cli/test
