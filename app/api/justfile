@@ -87,6 +87,8 @@ deploy: build
     mkdir -p $deploy/app/browser
     cp -r ../browser/dist $deploy/app/browser/
     cp -r ../shared/src $deploy/shared
+    # the mcp package: /mcp routes import its server factory and view-url helpers
+    cp -r ../mcp/src $deploy/mcp
     # the docs site, served at /docs (root "docs/dist" in handlerHono.ts)
     mkdir -p $deploy/docs
     cp -r ../../docs/dist $deploy/docs/
@@ -96,6 +98,10 @@ deploy: build
     jq '.imports["@/"] = "./src/"' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json
     jq '.imports["@metapages/compute-queues-shared"] = "./shared/mod.ts"' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json
     jq '.imports["@shared/"] = "./shared/shared/"' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json
+    # mirror the exports map in app/mcp/deno.json, which the workspace normally resolves
+    jq '.imports["@metapages/compute-queues-mcp"] = "./mcp/mod.ts"' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json
+    jq '.imports["@metapages/compute-queues-mcp/server-factory"] = "./mcp/server-factory.ts"' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json
+    jq '.imports["@metapages/compute-queues-mcp/view-url"] = "./mcp/util/view-url.ts"' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json
     cd $deploy/
     du -sh .
     deno deploy --prod
