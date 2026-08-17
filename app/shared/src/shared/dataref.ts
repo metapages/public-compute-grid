@@ -8,6 +8,49 @@ import type { DataRefSerializedBlob, MetaframeInputMap } from "@metapages/metapa
 
 export const ENV_VAR_DATA_ITEM_LENGTH_MAX = 200;
 
+/**
+ * v2 datarefs (@metapages/dataref) are data URL strings, not {type,value}
+ * objects. metapage.io emits these now, so convert them into the v1 DataRef
+ * shape the job pipeline uses.
+ *
+ * A `text/x-uri` dataref becomes a `url` DataRef rather than being downloaded
+ * here: only the worker should pull the bytes, never the browser.
+ *
+ * Returns undefined if the value is not a v2 dataref.
+ */
+export const dataUrlToDataRef = (value: unknown): DataRef | undefined => {
+  if (typeof value !== "string" || !value.startsWith("data:")) {
+    return undefined;
+  }
+  const commaIndex = value.indexOf(",");
+  if (commaIndex === -1) {
+    return undefined;
+  }
+  const [mimeType, ...params] = value
+    .substring("data:".length, commaIndex)
+    .split(";");
+  const payload = value.substring(commaIndex + 1);
+
+  if (mimeType === "text/x-uri") {
+    // the payload is a URL-encoded URL
+    return { type: DataRefType.url, value: decodeURIComponent(payload) };
+  }
+
+  if (params.includes("base64")) {
+    return { type: DataRefType.base64, value: payload };
+  }
+
+  const text = payload ? decodeURIComponent(payload) : "";
+  if (mimeType === "application/json") {
+    try {
+      return { type: DataRefType.json, value: JSON.parse(text) } as DataRef;
+    } catch {
+      return { type: DataRefType.utf8, value: text };
+    }
+  }
+  return { type: DataRefType.utf8, value: text };
+};
+
 export const dataRefToDownloadLink = async (ref: DataRef): Promise<string> => {
   const buffer = await dataRefToBuffer(ref);
   return URL.createObjectURL(

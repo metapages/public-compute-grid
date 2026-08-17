@@ -16,7 +16,7 @@ services:
       redis:
         condition: service_healthy
     image: denoland/deno:alpine-2.9.3
-    command: deno run --unsafely-ignore-certificate-errors --watch --allow-all --unstable-broadcast-channel --unstable-kv --unstable-cron app/api/src/server.ts
+    command: deno run --minimum-dependency-age=0 --unsafely-ignore-certificate-errors --watch --allow-all --unstable-broadcast-channel --unstable-kv --unstable-cron app/api/src/server.ts
     working_dir: /app
     healthcheck:
       test: sh -c 'PORT=8081 deno run --allow-net --allow-env app/api/src/util/healthcheck.ts'
@@ -71,7 +71,7 @@ services:
       api1:
         condition: service_healthy
     image: denoland/deno:alpine-2.9.3
-    command: deno run --unsafely-ignore-certificate-errors --watch --allow-all --unstable-broadcast-channel --unstable-kv --unstable-cron app/api/src/server.ts
+    command: deno run --minimum-dependency-age=0 --unsafely-ignore-certificate-errors --watch --allow-all --unstable-broadcast-channel --unstable-kv --unstable-cron app/api/src/server.ts
     working_dir: /app
     healthcheck:
       test: sh -c 'PORT=8082 deno run --allow-net --allow-env app/api/src/util/healthcheck.ts'
@@ -126,7 +126,7 @@ services:
       api1:
         condition: service_healthy
     image: denoland/deno:alpine-2.9.3
-    command: deno run --unsafely-ignore-certificate-errors --watch --allow-all --unstable-broadcast-channel --unstable-kv --unstable-cron app/api/src/server.ts
+    command: deno run --minimum-dependency-age=0 --unsafely-ignore-certificate-errors --watch --allow-all --unstable-broadcast-channel --unstable-kv --unstable-cron app/api/src/server.ts
     working_dir: /app
     healthcheck:
       test: sh -c 'PORT=8083 deno run --allow-net --allow-env app/api/src/util/healthcheck.ts'
@@ -183,6 +183,7 @@ services:
     entrypoint: [
       "deno",
       "run",
+      "--minimum-dependency-age=0",
       "--unsafely-ignore-certificate-errors",
       "--watch",
       "--allow-all",
@@ -239,6 +240,7 @@ services:
     entrypoint: [
       "deno",
       "run",
+      "--minimum-dependency-age=0",
       "--unsafely-ignore-certificate-errors",
       "--watch",
       "--allow-all",
@@ -315,7 +317,7 @@ services:
       minio:
         condition: service_healthy
     image: denoland/deno:alpine-2.9.3
-    command: deno run --watch --allow-all ./src/s3/create-bucket-development.ts
+    command: deno run --minimum-dependency-age=0 --watch --allow-all ./src/s3/create-bucket-development.ts
     working_dir: /app/app/api
     environment:
       - NPM_CONFIG_REGISTRY=${NPM_CONFIG_REGISTRY:-}
