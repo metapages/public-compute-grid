@@ -22,7 +22,7 @@ type Fixture = {
   stop: () => Promise<void>;
 };
 
-const startFileServer = async (): Promise<Fixture> => {
+const startFileServer = (): Fixture => {
   const requested: string[] = [];
   const server = Deno.serve(
     { port: 0, onListen: () => {} },
@@ -56,7 +56,7 @@ const startFileServer = async (): Promise<Fixture> => {
 };
 
 Deno.test("e2e: a metapage.io url dataref reaches the container as file contents", async () => {
-  const fixture = await startFileServer();
+  const fixture = startFileServer();
   try {
     // Exactly what metapage.io's fs metaframe emits (urlToDataUrl)
     const metaframeInput = `data:text/x-uri;charset=utf-8,${encodeURIComponent(fixture.url)}`;
@@ -104,7 +104,7 @@ Deno.test("e2e: the pre-fix path is what produced the broken input", async () =>
 });
 
 Deno.test("e2e: the browser never downloads the blob, the worker does", async () => {
-  const fixture = await startFileServer();
+  const fixture = startFileServer();
   try {
     const metaframeInput = `data:text/x-uri;charset=utf-8,${encodeURIComponent(fixture.url)}`;
     const inputs: InputsRefs = {
