@@ -1,7 +1,3 @@
-Deno.cron("Check for webhooks to retry", "* * * * *", () => {
-  retryUnsuccessfulWebhooks();
-});
-
 import { JobDataCacheDurationMilliseconds } from "./constants.ts";
 import { getKv } from "@shared/kv.ts";
 import type { DockerJobControlConfig } from "@shared/types.ts";
@@ -78,7 +74,7 @@ export const callJobWebhook = async (
   }
 };
 
-const retryUnsuccessfulWebhooks = async (): Promise<void> => {
+export const retryUnsuccessfulWebhooks = async (): Promise<void> => {
   const kv = await getKv();
   const iter = kv.list<DockerJobControlConfig>({
     prefix: ["submission-hook"],

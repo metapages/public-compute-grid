@@ -65,7 +65,7 @@ COPY ./app/mcp/deno.json ./app/mcp/deno.json
 # Copy assets
 # COPY ./app/browser/dist ./app/browser/dist
 
-RUN deno cache .
+RUN deno cache --minimum-dependency-age=0  .
 
 WORKDIR /app/app/worker
 

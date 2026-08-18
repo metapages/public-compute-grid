@@ -1,3 +1,7 @@
+// Side-effect import: registers the webhook retry cron. See webhooks-cron.ts
+// for why this is a module import and not a function call.
+import "../../shared/src/shared/webhooks-cron.ts";
+
 import type { DockerJobQueue } from "./queue/DockerJobQueue.ts";
 import { runCommand } from "/@/commands/run.ts";
 import { testCommand } from "/@/commands/test.ts";

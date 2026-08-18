@@ -7,6 +7,7 @@ import { useEffect } from "react";
 import {
   copyLargeBlobsToCloud,
   DataRefType,
+  dataUrlToDataRef,
   DefaultNamespace,
   DockerJobControlConfig,
   DockerJobDefinitionInputRefs,
@@ -200,9 +201,16 @@ export const useDockerJobDefinition = () => {
             type: DataRefType.base64,
           };
         } else {
+          // metapage.io sends v2 datarefs: data URL strings, not {type,value}
+          // objects. `isDataRef` only matches the v1 object shape, so without
+          // this the string falls through to the utf8 branch below and the
+          // container gets the literal "data:text/x-uri;..." text as its input.
+          const dataRefFromDataUrl = dataUrlToDataRef(value);
           // If it's a DataRef, just use it, then there's
           // no need to serialize it, or further process
-          if (isDataRef(value)) {
+          if (dataRefFromDataUrl) {
+            definition.inputs![fixedName] = dataRefFromDataUrl;
+          } else if (isDataRef(value)) {
             definition.inputs![fixedName] = value;
           } else if (typeof value === "object") {
             // assume object is a json object
