@@ -3,13 +3,19 @@
     "org": "metapage",
     "app": "container"
   },
+  "minimumDependencyAge": "0",
   "name": "@metapages/compute-queues-api",
   "exports": {},
   "tasks": {
     "start": "deno run -A --config deno.json src/server.ts"
   },
   "fmt": {
-    "exclude": ["dist", "README.md", "*.json", "*.lock"],
+    "exclude": [
+      "dist",
+      "README.md",
+      "*.json",
+      "*.lock"
+    ],
     "lineWidth": 120,
     "indentWidth": 2,
     "semiColons": true,

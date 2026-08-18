@@ -7,7 +7,12 @@
     "app/test",
     "app/worker"
   ],
-  "unstable": ["kv", "broadcast-channel", "cron", "sloppy-imports"],
+  "unstable": [
+    "kv",
+    "broadcast-channel",
+    "cron",
+    "sloppy-imports"
+  ],
   "imports": {
     "@cliffy/command": "jsr:@cliffy/command@^1.0.0-rc.7",
     "@korkje/wsi": "jsr:@korkje/wsi@^0.3.2",
@@ -73,6 +78,9 @@
     "indentWidth": 2,
     "semiColons": true,
     "singleQuote": false,
-    "exclude": ["app/browser", "docs"]
+    "exclude": [
+      "app/browser",
+      "docs"
+    ]
   }
 }
