@@ -34,6 +34,7 @@ services:
       - DENO_INSTALL_ROOT=/deno
     volumes:
       - ./deno.json:/app/deno.json
+      - ./deno.lock:/app/deno.lock:ro
       - ./app/shared:/app/app/shared
       - ./app/mcp:/app/app/mcp
       - ./app/worker:/app/app/worker

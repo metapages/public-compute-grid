@@ -3,7 +3,6 @@
     "org": "metapage",
     "app": "container"
   },
-  "minimumDependencyAge": "0",
   "name": "@metapages/compute-queues-api",
   "exports": {},
   "tasks": {

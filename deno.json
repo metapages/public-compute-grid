@@ -1,4 +1,5 @@
 {
+  "minimumDependencyAge": "0",
   "workspace": [
     "app/api",
     "app/cli",
@@ -27,14 +28,14 @@
     "@std/encoding": "jsr:@std/encoding@1.0.3",
     "@std/http": "jsr:@std/http@^1.0.12",
     "@types/dockerode": "npm:@types/dockerode@^3.3.42",
-    "aws-sdk/client-s3": "npm:@aws-sdk/client-s3@3.582.0",
-    "aws-sdk/s3-request-presigner": "npm:@aws-sdk/s3-request-presigner@3.717.0",
+    "aws-sdk/client-s3": "npm:@aws-sdk/client-s3@3.1146.0",
+    "aws-sdk/s3-request-presigner": "npm:@aws-sdk/s3-request-presigner@3.1146.0",
     "bytes": "npm:bytes@3.1.2",
     "compare-versions": "https://deno.land/x/compare_versions@0.4.0/mod.ts",
     "compress": "https://deno.land/x/compress@v0.4.5/mod.ts",
     "crypto-random-string": "https://deno.land/x/crypto_random_string@1.0.0/mod.ts",
     "deno-machine-id": "https://deno.land/x/deno_machine_id@1.0.0/mod.ts",
-    "dockerode": "npm:dockerode@^4.0.7",
+    "dockerode": "npm:dockerode@^5.0.1",
     "esbuild": "npm:esbuild@0.25.5",
     "fast-deep-equal/es6": "npm:fast-deep-equal/es6/index.js",
     "fetch-retry": "npm:fetch-retry@^6.0.0",
@@ -69,7 +70,6 @@
     "std/node/stream": "https://deno.land/std@0.177.0/node/stream.ts",
     "std/path": "https://deno.land/std@0.224.0/path/mod.ts",
     "ts-custom-error": "npm:ts-custom-error@3.3.1",
-    "uuid": "npm:uuid@9.0.1",
     "zip": "https://deno.land/x/zip@v1.2.5/mod.ts"
   },
   "nodeModulesDir": "auto",
@@ -81,6 +81,15 @@
     "exclude": [
       "app/browser",
       "docs"
+    ]
+  },
+  "allowScripts": {
+    "allow": [
+      "npm:protobufjs"
+    ],
+    "deny": [
+      "npm:ssh2",
+      "npm:cpu-features"
     ]
   }
 }

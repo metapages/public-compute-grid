@@ -1,6 +1,6 @@
 import { config, getConfig } from "/@/config.ts";
-import { StreamableHTTPTransport } from "@hono/mcp";
 import { createMcpServer } from "@metapages/compute-queues-mcp/server-factory";
+import { serveMcpStreamableHttp } from "@metapages/compute-queues-mcp/streamable-http";
 import { type Context, Hono } from "hono";
 import { serveStatic } from "hono/middleware";
 import { createHandler } from "metapages/worker/routing/handlerDeno";
@@ -720,29 +720,6 @@ const serveSpaOneLevelDown = async (indexPath: string, c: Context): Promise<Resp
   );
 };
 
-// The bare /j/<jobId> is the browser page for a job (the SPA loads the
-// definition by id). It needs its own route: the static handler below answers a
-// missing file with 404 rather than falling through, so the index.html catch-all
-// at the end never runs. Registered after /j/<jobId>.json so that stays JSON.
-app.get("/j/:jobId", (c: Context) => serveSpaOneLevelDown("../browser/dist/index.html", c));
-app.get("/*", serveStatic({ root: "../browser/dist" }));
-app.get("/", serveStatic({ path: "../browser/dist/index.html" }));
-app.get("*", serveStatic({ path: "../browser/dist/index.html" }));
-
-const ensureQueue = async (queue: string): Promise<BaseDockerJobQueue> => {
-  // Initialize queue if it doesn't exist
-  if (!userJobQueues[queue]) {
-    userJobQueues[queue] = new LocalDockerJobQueue({
-      serverId: "local",
-      address: queue,
-      dataDirectory: getConfig().dataDirectory,
-      debug: config.debug,
-    });
-    await userJobQueues[queue].setup();
-  }
-  return userJobQueues[queue];
-};
-
 // MCP Types and Handlers
 type MCPTool = {
   name: string;
@@ -886,20 +863,55 @@ const handleMCPInfo = (c: Context): Response => {
 // MCP (Model Context Protocol) endpoints
 // MCP over Streamable HTTP, the same mount the API server uses — one route for
 // POST (messages), GET (the notification stream carrying live logs) and DELETE.
-// In local mode this worker IS the API, so the tools loop back to this origin.
-app.all("/mcp", async (c: Context) => {
-  const origin = new URL(c.req.url).origin;
-  const server = createMcpServer({ baseUrl: origin });
-  const transport = new StreamableHTTPTransport({ sessionIdGenerator: undefined });
-  await server.connect(transport);
-  // Cross-copy hono Context (see app/api/src/routes/mcp/streamable.ts).
-  // deno-lint-ignore no-explicit-any
-  const response = await transport.handleRequest(c as any);
-  return response ?? c.body(null, 204);
-});
+// In local mode this worker IS the API, so the tools loop back to this process.
+//
+// Two origins, for the same reason the API route needs them (see
+// app/api/src/routes/mcp/streamable.ts): the tools call the job API over HTTP,
+// so `baseUrl` has to be an address this process can reach itself on, while the
+// URLs handed back to the caller have to be the ones the caller used. Those
+// differ whenever the published port is not the port being listened on — run
+// the dev stack with WORKER_LOCAL_PORT=8099 and the request origin is
+// localhost:8099, which resolves nowhere inside the container, so every
+// self-call fails. Loopback plus the configured port is always reachable; the
+// public origin stays on the links.
+//
+// These have to be registered before the static handlers further down: those
+// are catch-alls, and a GET that passes through them first makes serveStatic
+// probe for (and log a miss on) ../browser/dist/mcp on its way to the real
+// route.
+app.all("/mcp", (c: Context) =>
+  serveMcpStreamableHttp(
+    c,
+    createMcpServer({
+      baseUrl: `http://localhost:${getConfig().port}`,
+      publicUrl: new URL(c.req.url).origin,
+    }),
+  ));
 app.get("/mcp/health", handleMCPHealth);
 app.get("/mcp/info", handleMCPInfo);
 
+// The bare /j/<jobId> is the browser page for a job (the SPA loads the
+// definition by id). It needs its own route: the static handler below answers a
+// missing file with 404 rather than falling through, so the index.html catch-all
+// at the end never runs. Registered after /j/<jobId>.json so that stays JSON.
+app.get("/j/:jobId", (c: Context) => serveSpaOneLevelDown("../browser/dist/index.html", c));
+app.get("/*", serveStatic({ root: "../browser/dist" }));
+app.get("/", serveStatic({ path: "../browser/dist/index.html" }));
+app.get("*", serveStatic({ path: "../browser/dist/index.html" }));
+
+const ensureQueue = async (queue: string): Promise<BaseDockerJobQueue> => {
+  // Initialize queue if it doesn't exist
+  if (!userJobQueues[queue]) {
+    userJobQueues[queue] = new LocalDockerJobQueue({
+      serverId: "local",
+      address: queue,
+      dataDirectory: getConfig().dataDirectory,
+      debug: config.debug,
+    });
+    await userJobQueues[queue].setup();
+  }
+  return userJobQueues[queue];
+};
 const handleWebsocket = async (socket: WebSocket, request: Request) => {
   const url = new URL(request.url);
   const pathTokens = url.pathname.split("/").filter((x) => x !== "");
