@@ -47,7 +47,8 @@ const config = {
 
 export const s3Client = new S3Client(config);
 try {
-  const _data = await s3Client.send(new ListBucketsCommand({ ...bucketParams }));
+  // ListBuckets takes no bucket-scoped input; this is just a connectivity check.
+  const _data = await s3Client.send(new ListBucketsCommand({}));
   // console.log(
   //   "ListBucketsCommand Buckets:",
   //   _data?.Buckets?.map((b) => b.Name),

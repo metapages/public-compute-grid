@@ -1,7 +1,7 @@
-import { StreamableHTTPTransport } from "@hono/mcp";
 import type { Context } from "hono";
 
 import { createMcpServer } from "@metapages/compute-queues-mcp/server-factory";
+import { serveMcpStreamableHttp } from "@metapages/compute-queues-mcp/streamable-http";
 
 /**
  * MCP over Streamable HTTP — the transport modern MCP clients (Claude Code
@@ -13,13 +13,11 @@ import { createMcpServer } from "@metapages/compute-queues-mcp/server-factory";
  * hand-rolled JSON-RPC handler it replaces could only ever return one response
  * per request, so `follow_job`'s progress notifications had nowhere to go.
  *
- * Stateless: `sessionIdGenerator: undefined` disables session tracking. The
- * tools carry their own state and hit the idempotent job API, so there is
- * nothing for a session to hold, and any instance can serve any request —
- * which matters because the API runs multi-instance behind a load balancer.
- * Progress notifications still stream, over each request's own response.
+ * The transport plumbing (stateless sessions, streaming GETs, and translating
+ * the exceptions @hono/mcp throws across the two hono copies) lives in
+ * serveMcpStreamableHttp, shared with the local-mode worker.
  */
-export const handleMCPStreamableHttp = async (c: Context): Promise<Response> => {
+export const handleMCPStreamableHttp = (c: Context): Promise<Response> => {
   const origin = new URL(c.req.url).origin;
 
   // The MCP tools talk to the job API over HTTP. Two different origins are
@@ -34,14 +32,5 @@ export const handleMCPStreamableHttp = async (c: Context): Promise<Response> => 
     baseUrl: `http://localhost:${Deno.env.get("PORT") || "8000"}`,
     publicUrl: origin,
   });
-  const transport = new StreamableHTTPTransport({ sessionIdGenerator: undefined });
-  await server.connect(transport);
-
-  // @hono/mcp is built against its own copy of hono's Context type; the shapes
-  // are identical at runtime but nominally distinct across the two copies.
-  // deno-lint-ignore no-explicit-any
-  const response = await transport.handleRequest(c as any);
-  // handleRequest returns undefined only when it has already written the
-  // response itself (a streaming GET); surface something valid either way.
-  return response ?? c.body(null, 204);
+  return serveMcpStreamableHttp(c, server);
 };

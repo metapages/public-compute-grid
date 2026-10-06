@@ -44,6 +44,7 @@ services:
       - deno:/deno
       - node_modules:/app/node_modules
       - ./deno.json:/app/deno.json
+      - ./deno.lock:/app/deno.lock:ro
       - ./app/shared:/app/app/shared
       - ./app/mcp:/app/app/mcp
       - ./.empty:/app/app/cli
@@ -99,6 +100,7 @@ services:
       - deno:/deno
       - node_modules:/app/node_modules
       - ./deno.json:/app/deno.json
+      - ./deno.lock:/app/deno.lock:ro
       - ./app/shared:/app/app/shared
       - ./app/mcp:/app/app/mcp
       - ./.empty:/app/app/cli
@@ -154,6 +156,7 @@ services:
       - deno:/deno
       - node_modules:/app/node_modules
       - ./deno.json:/app/deno.json
+      - ./deno.lock:/app/deno.lock:ro
       - ./app/shared:/app/app/shared
       - ./app/mcp:/app/app/mcp
       - ./.empty:/app/app/cli
@@ -214,6 +217,7 @@ services:
       - AWS_S3_BUCKET=${AWS_S3_BUCKET:-localbucket}
     volumes:
       - ./deno.json:/app/deno.json
+      - ./deno.lock:/app/deno.lock:ro
       - ./app/shared:/app/app/shared
       - ./app/mcp:/app/app/mcp
       - ./app/worker:/app/app/worker
@@ -271,6 +275,7 @@ services:
       - AWS_S3_BUCKET=${AWS_S3_BUCKET:-localbucket}
     volumes:
       - ./deno.json:/app/deno.json
+      - ./deno.lock:/app/deno.lock:ro
       - ./app/shared:/app/app/shared
       - ./app/mcp:/app/app/mcp
       - ./app/worker:/app/app/worker
@@ -335,6 +340,7 @@ services:
       - ./app/api/deno.json:/app/app/api/deno.json
       - ./app/api/src:/app/app/api/src
       - ./deno.json:/app/deno.json
+      - ./deno.lock:/app/deno.lock:ro
       - ./app/shared:/app/app/shared
       - ./app/mcp:/app/app/mcp
       - ./.empty:/app/app/cli

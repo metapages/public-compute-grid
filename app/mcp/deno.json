@@ -3,6 +3,7 @@
   "exports": {
     ".": "./src/mod.ts",
     "./server-factory": "./src/server-factory.ts",
+    "./streamable-http": "./src/util/streamable-http.ts",
     "./view-url": "./src/util/view-url.ts"
   },
   "tasks": {
