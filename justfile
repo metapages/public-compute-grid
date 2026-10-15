@@ -47,6 +47,7 @@ test-all:
 # stack (the full compose stack, queue "local1") | prod (no redirect).
 # Symlinked, not copied, so edits are live; cq is pointed at the local stack so
 # an agent using it cannot submit to the shared production queue.
+
 # Symlink the Agent Skill into your skills dir, aimed at a local stack
 dev-install-skill target="worker" dir="~/.claude/skills":
     #!/usr/bin/env bash
@@ -97,6 +98,7 @@ dev-install-skill target="worker" dir="~/.claude/skills":
     echo -e "Restart your agent so it reloads SKILL.md."
 
 # Only unlinks a symlink, so a real (curl-installed) skill dir is never deleted.
+
 # Undo dev-install-skill
 dev-uninstall-skill dir="~/.claude/skills":
     #!/usr/bin/env bash
@@ -113,6 +115,7 @@ dev-uninstall-skill dir="~/.claude/skills":
     fi
 
 # Needs a local-mode worker, which serves the API too: just app/worker/local
+
 # Test the compute-queues skill's API surface (no LLM)
 test-skill queue="local" api="http://localhost:8000":
     #!/usr/bin/env bash
@@ -132,6 +135,7 @@ test-skill queue="local" api="http://localhost:8000":
 
 # Spawns real `claude -p` sessions: costs tokens, not deterministic, needs
 # `claude` on PATH and a local-mode worker first: just app/worker/local
+
 # Test that an LLM with the compute-queues skill really builds a working container
 test-skill-ai +args="":
     #!/usr/bin/env bash
@@ -258,6 +262,213 @@ run-local-workers: publish-versioned-artifacts
 # Quick compilation checks
 @check:
     just app check
+
+###############################################################
+# pr-daemon (https://github.com/metapages/pr-daemon)
+#
+# One preview stack per branch, with nothing shared between them.
+#
+# The stack is a single local-mode worker: it is the API, the queue and the
+# static file server for the built browser app, all on one port. That is why
+# these recipes don't use docker compose like `just dev local` does — the
+# compose stack needs traefik, mkcert certs and /etc/hosts entries for
+# worker-metaframe.localhost, and it hard-codes one host port. A plain
+# `http://localhost:<port>` is what pr-daemon wants, and it works behind its
+# public-preview proxy without a certificate.
+#
+# Everything a branch owns is derived from the branch name: the port, the data
+# directory, the worker id (which labels its job containers). Two branches run
+# at once without touching each other. The machine-wide docker network and
+# image cache volume are deliberately left alone by `down`.
+###############################################################
+
+PR_DAEMON_STATE_ROOT := "/tmp/pr-daemon-compute-grid"
+
+# Print the branch's slug, port, state dir and worker id, as shell assignments
+_pr-daemon-env:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    branch="$(git rev-parse --abbrev-ref HEAD)"
+    if [ "$branch" = "HEAD" ]; then
+        branch="detached-$(git rev-parse --short HEAD)"
+    fi
+    # docker labels and file names are happier without the rest of git's alphabet
+    slug="$(printf '%s' "$branch" \
+        | tr '[:upper:]' '[:lower:]' \
+        | sed -E 's/[^a-z0-9_-]+/-/g' \
+        | cut -c1-40 \
+        | sed -E 's/-+$//')"
+    [ -n "$slug" ] || slug="branch"
+    if command -v shasum > /dev/null 2>&1; then
+        digest="$(printf '%s' "$branch" | shasum -a 256 | cut -c1-8)"
+    else
+        digest="$(printf '%s' "$branch" | sha256sum | cut -c1-8)"
+    fi
+    # 20000-39999: above the ports this repo's dev and test stacks use
+    printf 'branch=%q\n' "$branch"
+    printf 'slug=%q\n' "$slug"
+    printf 'state=%q\n' "{{ PR_DAEMON_STATE_ROOT }}/$slug"
+    printf 'worker_id=%q\n' "prd-$slug"
+    printf 'base_port=%q\n' "$(( 20000 + (0x$digest % 20000) ))"
+
+# Start this branch's preview stack and print its URL (used by pr-daemon)
+pr-daemon-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # fd 3 is the real stdout and carries exactly one line: the URL. Everything
+    # else goes to stderr, because pr-daemon reads the last URL-only line of
+    # stdout and nothing else.
+    exec 3>&1
+    exec 1>&2
+
+    eval "$(just _pr-daemon-env)"
+    pidfile="$state/worker.pid"
+    portfile="$state/port"
+    log="$state/worker.log"
+    data="$state/worker-data"
+    mkdir -p "$state"
+
+    answers() { curl -fsS --max-time 5 "http://localhost:$1/healthz" > /dev/null 2>&1; }
+
+    # Idempotent: if this branch's stack is already answering, say so and stop.
+    if [ -f "$portfile" ]; then
+        port="$(cat "$portfile")"
+        if answers "$port"; then
+            echo "✅ preview for '$branch' is already up on port $port"
+            echo "http://localhost:$port" >&3
+            exit 0
+        fi
+        echo "stale stack for '$branch' on port $port — restarting it"
+    fi
+
+    # Kill anything left from a previous run of this branch before rebinding.
+    just pr-daemon-down > /dev/null 2>&1 || true
+    mkdir -p "$state"
+
+    port="$base_port"
+    while lsof -nP -iTCP:"$port" -sTCP:LISTEN > /dev/null 2>&1; do
+        port=$(( port + 1 ))
+        if [ "$port" -ge 40000 ]; then
+            echo "💥 no free port in 20000-39999" >&2
+            exit 1
+        fi
+    done
+
+    echo "branch     $branch"
+    echo "port       $port"
+    echo "data       $data"
+    echo "worker id  $worker_id"
+    if [ -n "${PR_DAEMON_PUBLIC_URL:-}" ]; then
+        # The browser app reads its API origin from location.origin at runtime
+        # (app/browser/src/config.tsx), so the public host needs no rebuild.
+        echo "public     $PR_DAEMON_PUBLIC_URL"
+    fi
+
+    # The local-mode worker serves ../browser/dist, so the bundle has to exist
+    # before it starts. This is the slow step on a cold worktree: npm i, tsc,
+    # then vite build.
+    echo "--- building the browser bundle ---"
+    just app/shared/build
+    just app/browser/build
+
+    echo "--- starting the local-mode worker ---"
+    mkdir -p "$data"
+    cd app/worker
+    # 3>&- matters: without it the worker inherits pr-daemon's stdout pipe and
+    # pr-daemon waits forever for it to close. </dev/null because there is no TTY.
+    nohup deno run --allow-all --unstable-kv --unstable-cron src/cli.ts run \
+        --mode=local \
+        --cpus=2 \
+        --gpus=0 \
+        --port="$port" \
+        --data-directory="$data" \
+        --id="$worker_id" \
+        > "$log" 2>&1 3>&- < /dev/null &
+    worker_pid=$!
+    disown "$worker_pid" 2>/dev/null || true
+    echo "$worker_pid" > "$pidfile"
+    echo "$port" > "$portfile"
+
+    # Return only once the app answers. Docker image pulls on a cold machine
+    # are what makes this slow; pr-daemon allows 30 minutes.
+    for _ in $(seq 1 300); do
+        if answers "$port"; then
+            # /healthz is the worker. Also prove the UI is actually being served,
+            # so a missing dist directory fails here instead of in a browser.
+            if ! curl -fsS --max-time 10 "http://localhost:$port/" | grep -qi '<html'; then
+                echo "💥 worker is up but is not serving app/browser/dist" >&2
+                tail -40 "$log" >&2 || true
+                exit 1
+            fi
+            echo "✅ preview for '$branch' up on http://localhost:$port"
+            echo "http://localhost:$port" >&3
+            exit 0
+        fi
+        if ! kill -0 "$worker_pid" 2> /dev/null; then
+            echo "💥 the worker exited before it answered:" >&2
+            tail -60 "$log" >&2 || true
+            exit 1
+        fi
+        sleep 1
+    done
+
+    echo "💥 the worker never answered on port $port:" >&2
+    tail -60 "$log" >&2 || true
+    exit 1
+
+# Stop this branch's preview stack and delete its data (used by pr-daemon)
+pr-daemon-down:
+    #!/usr/bin/env bash
+    # No `set -e`: this has to finish, and succeed, when nothing is running.
+    set -uo pipefail
+
+    eval "$(just _pr-daemon-env)"
+    pidfile="$state/worker.pid"
+
+    stop() {
+        local pid="$1"
+        kill -0 "$pid" 2> /dev/null || return 0
+        kill -TERM "$pid" 2> /dev/null || true
+        for _ in $(seq 1 15); do
+            kill -0 "$pid" 2> /dev/null || return 0
+            sleep 1
+        done
+        kill -KILL "$pid" 2> /dev/null || true
+    }
+
+    if [ -f "$pidfile" ]; then
+        stop "$(cat "$pidfile")"
+    fi
+    # Belt and braces: the pid file can be missing or wrong (a reboot, a kill -9
+    # of the shell that started it). The --id is unique to this branch.
+    for pid in $(pgrep -f -- "--id=$worker_id" 2> /dev/null); do
+        stop "$pid"
+    done
+
+    # This branch's job containers, and nothing else. The shared network
+    # (metaframe-container-worker-network) and the shared image cache volume
+    # (metaframe-container-worker-cache) are machine-wide and stay.
+    containers="$(docker ps -aq --filter "label=container.mtfm.io/worker=$worker_id" 2> /dev/null)"
+    if [ -n "$containers" ]; then
+        echo "removing this branch's job containers" >&2
+        docker rm -f $containers > /dev/null 2>&1 || true
+    fi
+
+    rm -rf "$state"
+    echo "✅ preview for '$branch' is down and its data is deleted" >&2
+
+# Everything that must be green before a PR opens (used by pr-daemon)
+pr-daemon-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just check
+    just fmt-check
+    just lint
+    just app/worker/test
+    just app/shared/test
+    just app/cli/test
+    echo "✅ pr-daemon check passed"
 
 # Format all supported files
 @fmt +args="":

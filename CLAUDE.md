@@ -13,6 +13,19 @@ the worker acts as both a worker agent and API server.
 - just test: same as 'just test remote': run the tests with in remote mode
 - just test local: run the tests with the local worker agent
 
+# pr-daemon
+
+When running under pr-daemon, the branch's preview stack is a single local-mode worker (API + queue + the built browser
+app on one port), not the docker compose stack:
+
+- just pr-daemon-up: build the browser bundle, start the worker, print `http://localhost:<port>` as the last stdout line
+- just pr-daemon-down: stop it and delete its data directory and job containers
+- just pr-daemon-check: typecheck + fmt-check + lint + unit tests (what must be green before a PR opens)
+
+The port, data directory (`/tmp/pr-daemon-compute-grid/<branch>`) and worker id (`prd-<branch>`) are all derived from
+the branch name, so branches never collide. Don't run `just dev` alongside a preview — use `just pr-daemon-up` and work
+against the URL it prints.
+
 # Code style
 
 - just fmt: formats all code and config, run after making code changes
