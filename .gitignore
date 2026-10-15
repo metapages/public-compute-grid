@@ -2,6 +2,7 @@
 **/.deno
 **/.DS_Store
 **/.eslintcache
+**/_fresh
 **/dist
 **/node_modules
 docs/.vitepress/cache
