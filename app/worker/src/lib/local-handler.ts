@@ -879,12 +879,24 @@ const handleMCPInfo = (c: Context): Response => {
 // are catch-alls, and a GET that passes through them first makes serveStatic
 // probe for (and log a miss on) ../browser/dist/mcp on its way to the real
 // route.
+// The origin the caller used. Behind a TLS-terminating proxy (a pr-daemon
+// preview, for one) the request arrives as http, so trust X-Forwarded-Proto for
+// the scheme; the Host header is already the public one.
+const requestOrigin = (c: Context): string => {
+  const url = new URL(c.req.url);
+  const proto = c.req.header("X-Forwarded-Proto")?.split(",")[0].trim();
+  if (proto === "https" || proto === "http") {
+    url.protocol = `${proto}:`;
+  }
+  return url.origin;
+};
+
 app.all("/mcp", (c: Context) =>
   serveMcpStreamableHttp(
     c,
     createMcpServer({
       baseUrl: `http://localhost:${getConfig().port}`,
-      publicUrl: new URL(c.req.url).origin,
+      publicUrl: requestOrigin(c),
     }),
   ));
 app.get("/mcp/health", handleMCPHealth);

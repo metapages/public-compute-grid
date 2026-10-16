@@ -1,6 +1,6 @@
 import React, { useCallback } from "react";
 
-import { ApiOrigin } from "/@/config";
+import { ApiOrigin, LocalModeBaseUrl } from "/@/config";
 import { useQueue } from "/@/hooks/useQueue";
 import { useStore } from "/@/store";
 import {
@@ -111,7 +111,7 @@ export const JobStatus: React.FC = () => {
         </HStack>
 
         {!isMinimalHeader && jobId && (
-          <Link href={`${resolvedQueue === "local" ? "http://localhost:8000" : ApiOrigin}/j/${jobId}`} isExternal>
+          <Link href={`${resolvedQueue === "local" ? LocalModeBaseUrl : ApiOrigin}/j/${jobId}`} isExternal>
             <Text cursor={"copy"} onClick={copyJobId} fontSize={"0.7rem"}>
               Id: {jobId.slice(0, 5)}
             </Text>
