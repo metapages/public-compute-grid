@@ -274,7 +274,8 @@ run-local-workers: publish-versioned-artifacts
 # compose stack needs traefik, mkcert certs and /etc/hosts entries for
 # worker-metaframe.localhost, and it hard-codes one host port. A plain
 # `http://localhost:<port>` is what pr-daemon wants, and it works behind its
-# public-preview proxy without a certificate.
+# public-preview proxy without a certificate. Everything the browser calls is
+# on that one origin, so there are no extra PR_DAEMON_ROUTE services.
 #
 # Everything a branch owns is derived from the branch name: the port, the data
 # directory, the worker id (which labels its job containers). Two branches run
@@ -359,18 +360,24 @@ pr-daemon-up:
     echo "port       $port"
     echo "data       $data"
     echo "worker id  $worker_id"
-    if [ -n "${PR_DAEMON_PUBLIC_URL:-}" ]; then
-        # The browser app reads its API origin from location.origin at runtime
-        # (app/browser/src/config.tsx), so the public host needs no rebuild.
-        echo "public     $PR_DAEMON_PUBLIC_URL"
-    fi
+    # The origin the browser reaches this stack at. With a preview domain that
+    # is the public URL, and nothing else: browsers refuse to let a public page
+    # call loopback, so no PR_DAEMON_ROUTE lines are printed — the API, the
+    # websockets, job inputs/outputs and the UI are all this one origin.
+    origin="${PR_DAEMON_PUBLIC_URL:-http://localhost:$port}"
+    origin="${origin%/}"
+    echo "origin     $origin"
 
     # The local-mode worker serves ../browser/dist, so the bundle has to exist
     # before it starts. This is the slow step on a cold worktree: npm i, tsc,
     # then vite build.
     echo "--- building the browser bundle ---"
     just app/shared/build
-    just app/browser/build
+    # SERVER_ORIGIN empty: the app takes its API origin from location.origin
+    # (app/browser/src/config.tsx), so a stray value from a .env can't bake a
+    # local address into the bundle. The "local" queue would otherwise point
+    # the browser at http://localhost:8000; here it is this stack.
+    SERVER_ORIGIN= VITE_LOCAL_MODE_ORIGIN="$origin" just app/browser/build
 
     echo "--- starting the local-mode worker ---"
     mkdir -p "$data"
