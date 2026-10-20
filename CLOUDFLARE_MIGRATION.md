@@ -108,6 +108,8 @@ with no `Deno.*` or Workers-only calls. Only the runtime adapters are runtime-sp
 - Fixed: the worker lost all job output after the first ~32 KB. Its log-grabbing transform streams were never read, so
   they stopped accepting data once their buffers filled (`DockerJob.ts`, now drained with `resume()`).
 - Fixed: logs over 64 KiB failed to persist (above).
+- Fixed: log lines arriving after a job finished (e.g. the image push) replaced its full build log in `build-logs.json`,
+  which then showed only the push lines.
 - Production deploys from main have failed since Oct 6: Deno Deploy reports "The revision failed". The last successful
   deploy was Aug 18.
 - Pre-existing flakes, reproduced on main on the same machine: MCP jobs reported "not on queue" or "unknown", and the
