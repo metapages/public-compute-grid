@@ -1,9 +1,6 @@
 import { DataRefType } from "@metapages/compute-queues-shared";
 import type { Context } from "hono";
-import { PutObjectCommand } from "aws-sdk/client-s3";
-import { getSignedUrl } from "aws-sdk/s3-request-presigner";
-
-import { bucketParams, s3Client } from "@/routes/s3config.ts";
+import { getBlobStore } from "@/routes/s3config.ts";
 
 export const uploadHandler = async (c: Context) => {
   const key: string | undefined = c.req.param("key");
@@ -20,9 +17,8 @@ export const uploadHandler = async (c: Context) => {
   //  ContentLength: 4
   // ContentMD5?: string;
   // ContentType?: string;
-  const command = new PutObjectCommand({ ...bucketParams, Key: key });
   try {
-    let url = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+    let url = await getBlobStore().presignPut(key, 3600);
     url = url.replace("http://", "https://");
     return c.json({
       url,

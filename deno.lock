@@ -35,6 +35,7 @@
     "npm:@metapages/metapage@1.10.14": "1.10.14_react@19.2.8",
     "npm:@modelcontextprotocol/sdk@^1.17.1": "1.30.0_zod@4.4.3",
     "npm:@types/dockerode@^3.3.42": "3.3.47",
+    "npm:aws4fetch@1.0.20": "1.0.20",
     "npm:bytes@3.1.2": "3.1.2",
     "npm:crypto-random-string@5.0.0": "5.0.0",
     "npm:dockerode@^5.0.1": "5.0.1",
@@ -910,6 +911,9 @@
       "dependencies": [
         "safer-buffer"
       ]
+    },
+    "aws4fetch@1.0.20": {
+      "integrity": "sha512-/djoAN709iY65ETD6LKCtyyEI04XIBP5xVvfmNxsEP0uJB5tyaGBztSryRr4HqMStr9R06PisQE7m9zDTXKu6g=="
     },
     "base64-arraybuffer@1.0.2": {
       "integrity": "sha512-I3yl4r9QB5ZRY3XuJVEPfc2XhZO6YweFPI+UovAzn+8/hb3oJ6lnysaFcjVpkCPfVWFUDvoZ8kmVDP7WyRtYtQ=="
@@ -2315,6 +2319,7 @@
       "npm:@metapages/metapage@1.10.14",
       "npm:@modelcontextprotocol/sdk@^1.17.1",
       "npm:@types/dockerode@^3.3.42",
+      "npm:aws4fetch@1.0.20",
       "npm:bytes@3.1.2",
       "npm:dockerode@^5.0.1",
       "npm:esbuild@0.25.5",
