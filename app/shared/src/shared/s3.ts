@@ -1,7 +1,7 @@
 import {
   DeleteObjectCommand,
   GetObjectCommand,
-  ListBucketsCommand,
+  HeadBucketCommand,
   PutObjectCommand,
   S3Client,
 } from "aws-sdk/client-s3";
@@ -25,6 +25,11 @@ export const bucketParams = {
   ContentType: "application/octet-stream",
 };
 
+/**
+ * One S3-API client for every blob store: Cloudflare R2 in production
+ * (AWS_ENDPOINT=https://<account>.r2.cloudflarestorage.com, AWS_REGION=auto),
+ * MinIO locally. Only S3 API features both support are used.
+ */
 const config = {
   sslEnabled: AWS_ACCESS_KEY_ID?.includes("minio") ? false : true,
   credentials: {
@@ -43,12 +48,18 @@ const config = {
   // Add retry configuration for the AWS SDK
   maxAttempts: 3,
   retryMode: "adaptive" as const,
+  // The SDK's default flexible checksums put x-amz-checksum-* on presigned
+  // URLs, which R2 rejects and a browser PUT cannot satisfy. Only send them
+  // when an operation requires one.
+  requestChecksumCalculation: "WHEN_REQUIRED" as const,
+  responseChecksumValidation: "WHEN_REQUIRED" as const,
 };
 
 export const s3Client = new S3Client(config);
 try {
-  // ListBuckets takes no bucket-scoped input; this is just a connectivity check.
-  const _data = await s3Client.send(new ListBucketsCommand({}));
+  // Connectivity check. HeadBucket, not ListBuckets: an R2 token scoped to one
+  // bucket is not allowed to list buckets.
+  await s3Client.send(new HeadBucketCommand({ Bucket }));
   // console.log(
   //   "ListBucketsCommand Buckets:",
   //   _data?.Buckets?.map((b) => b.Name),
@@ -63,7 +74,7 @@ try {
   //   retryMode: config.retryMode,
   // });
 } catch (err) {
-  console.error(`Failed to ListBucketsCommand: ${err}`);
+  console.error(`Failed to HeadBucket ${Bucket}: ${err}`);
   console.error("S3 Configuration (failed):", {
     bucket: Bucket,
     region: AWS_REGION,
