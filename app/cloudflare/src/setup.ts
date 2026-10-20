@@ -2,7 +2,6 @@
  * Runtime wiring for Cloudflare. Imported first by the entry module, so it runs
  * before any API module loads (the api's db module opens the store at import).
  */
-import "./deno-shim.ts";
 
 import { env } from "cloudflare:workers";
 

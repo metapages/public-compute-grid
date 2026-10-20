@@ -46,10 +46,11 @@ with no `Deno.*` or Workers-only calls. Only the runtime adapters are runtime-sp
 - [x] `getEnv()` replaces `Deno.env.get` in shared, api and mcp module scope
 - [x] Store interface (`KvStore`, injected with `setKv`), with Deno KV satisfying it unchanged
 - [x] Bus interface (`setBroadcastChannelFactory`, `NoopBroadcastChannel`)
-- [x] `createApp()` is the API without static files; Deno's static routes live in `staticDeno.ts`
+- [x] `createApp()` is the API without static files; the Deno server (API + static files from disk) is `handlerDeno.ts`
 - [ ] `BaseDockerJobQueue.tick()` so the intervals can be driven from outside (needed for hibernation)
 - [ ] Switch hono to `npm:hono@4`, drop `handlerDeno`
-- [ ] Drop the remaining Deno-only imports from the shared graph, then delete `app/cloudflare/src/deno-shim.ts`
+- [x] Drop the Deno-only imports from the Worker graph (std/fs → node:fs, the Deno static handler moved out), and delete
+      the Deno shim
 
 ## 3. Cloudflare app and local stack (`app/cloudflare/`)
 

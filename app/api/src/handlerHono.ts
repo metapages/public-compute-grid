@@ -21,7 +21,6 @@ import { getBuildLogsHandler, getRunLogsHandler } from "./routes/api/v1/logs.ts"
 import { getJobNamespacesHandler } from "./routes/api/v1/namespaces.ts";
 import { getJobResultHandler } from "./routes/api/v1/result.ts";
 import { getApiDockerJobQueue } from "./routes/websocket.ts";
-import { addDenoStaticRoutes } from "./staticDeno.ts";
 // MCP (Model Context Protocol) handlers
 import { handleMCPHealth, handleMCPInfo } from "./routes/mcp/http.ts";
 import { handleMCPStreamableHttp } from "./routes/mcp/streamable.ts";
@@ -129,7 +128,3 @@ export const createApp = (opts?: { serveStatic?: (app: Hono) => void }): Hono =>
   opts?.serveStatic?.(app);
   return app;
 };
-
-export const handlerHttp = createApp({ serveStatic: addDenoStaticRoutes }).fetch as (
-  request: Request,
-) => Promise<Response | undefined>;

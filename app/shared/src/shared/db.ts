@@ -2,7 +2,7 @@ import path from "node:path";
 
 import { LRUMap } from "mnemonist";
 import { retryAsync } from "retry";
-import { ensureDir } from "std/fs";
+import { ensureDir } from "./fs.ts";
 import { join } from "std/path";
 import { getEnv } from "@shared/env.ts";
 import { getKv, type KvStore } from "@shared/kv.ts";

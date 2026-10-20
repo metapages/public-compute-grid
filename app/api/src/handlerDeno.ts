@@ -1,6 +1,8 @@
 import type { Context, Hono } from "hono";
 import { serveStatic } from "hono/middleware";
 
+import { createApp } from "@/handlerHono.ts";
+
 /**
  * Static files from disk, for the Deno server: the llms.txt, the docs site and
  * the browser app. Registered after every API route: the app catch-alls must
@@ -57,3 +59,12 @@ export const addDenoStaticRoutes = (app: Hono): void => {
   app.get("/", serveStatic({ path: "app/browser/dist/index.html" }));
   app.get("*", serveStatic({ path: "app/browser/dist/index.html" }));
 };
+
+/**
+ * The Deno server's request handler: the API plus static files from disk.
+ * Kept out of handlerHono.ts because hono's Deno serveStatic reads Deno
+ * globals at import, and the Cloudflare Worker imports handlerHono.ts.
+ */
+export const handlerHttp = createApp({ serveStatic: addDenoStaticRoutes }).fetch as (
+  request: Request,
+) => Promise<Response | undefined>;

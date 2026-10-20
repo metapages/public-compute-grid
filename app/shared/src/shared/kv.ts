@@ -1,4 +1,4 @@
-import { ensureFileSync } from "std/fs";
+import { ensureFileSync } from "./fs.ts";
 
 import { getEnv } from "./env.ts";
 import type { KvStore } from "./store/kv.ts";

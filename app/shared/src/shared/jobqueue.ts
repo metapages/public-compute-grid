@@ -10,6 +10,7 @@
  * removed. The results are cached tho
  */
 
+import { LRUMapWithDelete } from "mnemonist";
 import { ms } from "ms";
 import { createNanoEvents, type Emitter } from "nanoevents";
 import { delay } from "std/async/delay";
@@ -353,6 +354,14 @@ export class BaseDockerJobQueue {
    */
   private buildLogsBuffer: Map<string, ConsoleLogLine[]> = new Map();
   private runLogsBuffer: Map<string, ConsoleLogLine[]> = new Map();
+  /**
+   * Jobs whose logs were already flushed, with the pending append for lines
+   * that arrived after that (a worker can still be pushing the built image).
+   * Such lines are appended to the persisted log: buffering them would start a
+   * fresh buffer holding only the tail, which readers prefer over the full
+   * persisted log.
+   */
+  private flushedLogs = new LRUMapWithDelete<string, Promise<void>>(1000);
 
   // intervals
   protected _intervalWorkerBroadcast: ReturnType<typeof setInterval> | undefined;
@@ -746,6 +755,11 @@ export class BaseDockerJobQueue {
     if (!logs.logs?.length) {
       return;
     }
+    const flushed = this.flushedLogs.get(logs.jobId);
+    if (flushed) {
+      this.flushedLogs.set(logs.jobId, flushed.then(() => this.appendPersistedLogs(logs)));
+      return;
+    }
     const buffer = BUILD_LOG_STEPS.has(logs.step) ? this.buildLogsBuffer : this.runLogsBuffer;
     const existing = buffer.get(logs.jobId) || [];
     const combined = existing.concat(logs.logs);
@@ -753,6 +767,18 @@ export class BaseDockerJobQueue {
       logs.jobId,
       combined.length > MAX_BUFFERED_LOG_LINES ? combined.slice(-MAX_BUFFERED_LOG_LINES) : combined,
     );
+  }
+
+  private async appendPersistedLogs(logs: JobStatusPayload): Promise<void> {
+    const isBuild = BUILD_LOG_STEPS.has(logs.step);
+    try {
+      const existing = (isBuild ? await this.db.getBuildLogs(logs.jobId) : await this.db.getRunLogs(logs.jobId)) ?? [];
+      const combined = existing.concat(logs.logs);
+      const capped = combined.length > MAX_BUFFERED_LOG_LINES ? combined.slice(-MAX_BUFFERED_LOG_LINES) : combined;
+      await (isBuild ? this.db.storeBuildLogs(logs.jobId, capped) : this.db.storeRunLogs(logs.jobId, capped));
+    } catch (err) {
+      console.error(`Failed to append late ${isBuild ? "build" : "run"} logs for job ${logs.jobId}:`, err);
+    }
   }
 
   /**
@@ -1150,6 +1176,9 @@ export class BaseDockerJobQueue {
     // what the caller needs to see.
     await this.flushLogBuffer(jobId, this.buildLogsBuffer, "build");
     await this.flushLogBuffer(jobId, this.runLogsBuffer, "run");
+    if (!this.flushedLogs.has(jobId)) {
+      this.flushedLogs.set(jobId, Promise.resolve());
+    }
 
     const { updatedInMemoryJob, subsequentStateChange } = await this.db.setJobFinished({
       queue: this.address,
@@ -1203,6 +1232,8 @@ export class BaseDockerJobQueue {
     jobId: string,
     change: StateChangeValueRunning,
   ): Promise<void> {
+    // Running again (e.g. requeued after a lost worker): buffer a fresh log
+    this.flushedLogs.delete(jobId);
     if (!this.state.jobs[jobId]) {
       // be robust, assume very little.
       const possibleMissedJob = await this.db.queueJobGet({

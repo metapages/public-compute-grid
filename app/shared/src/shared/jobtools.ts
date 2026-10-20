@@ -14,7 +14,7 @@ import {
 } from "@shared/types.ts";
 import { sanitizeFilename, shaDockerJob } from "@shared/util.ts";
 import { retryAsync } from "retry";
-import { ensureDir, ensureDirSync, exists, existsSync } from "std/fs";
+import { ensureDir, ensureDirSync, exists, existsSync } from "./fs.ts";
 import { dirname, join } from "std/path";
 
 import { crypto } from "@std/crypto";
