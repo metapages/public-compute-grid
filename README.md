@@ -6,7 +6,7 @@
 
 https://container.mtfm.io
 
-Examples: https://about.metapage.io/examples
+Examples: [https://about.metapage.io/examples](https://metapage.io/landing/examples)
 
 High level:
 
