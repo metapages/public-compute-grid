@@ -33,9 +33,12 @@
   "env": {
     "staging": {
       "name": "compute-queues-staging",
+      // https://compute-queues-staging.<account subdomain>.workers.dev until there is a staging domain
+      "workers_dev": true,
       "durable_objects": {
         "bindings": [{ "name": "QUEUES", "class_name": "QueueDurableObject" }]
       },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["QueueDurableObject"] }],
       "d1_databases": [
         {
           "binding": "DB",

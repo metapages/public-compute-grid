@@ -63,6 +63,45 @@ dev +args="": build-api
         --var AWS_S3_BUCKET:${AWS_S3_BUCKET:-localbucket} \
         {{ args }}
 
+# One-time Cloudflare resources for an env (idempotent): D1 database, R2 bucket + CORS + expiry [staging|production]
+setup env="staging":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    suffix=$([ "{{ env }}" = "production" ] && echo "" || echo "-{{ env }}")
+    db="compute-queues${suffix}"
+    bucket="compute-queues${suffix}"
+
+    id=$({{ WRANGLER }} d1 list --json | deno eval --quiet "const dbs = JSON.parse(await new Response(Deno.stdin.readable).text()); console.log(dbs.find((d) => d.name === '${db}')?.uuid ?? '')")
+    if [ -z "$id" ]; then
+        {{ WRANGLER }} d1 create "${db}"
+        id=$({{ WRANGLER }} d1 list --json | deno eval --quiet "const dbs = JSON.parse(await new Response(Deno.stdin.readable).text()); console.log(dbs.find((d) => d.name === '${db}')?.uuid ?? '')")
+    fi
+    deno run --allow-read --allow-write scripts/set-d1-id.ts "${db}" "${id}"
+
+    if ! {{ WRANGLER }} r2 bucket info "${bucket}" >/dev/null 2>&1; then
+        {{ WRANGLER }} r2 bucket create "${bucket}"
+    fi
+    {{ WRANGLER }} r2 bucket cors set "${bucket}" --file r2-cors.json --force
+    # Data is a cache, not storage: everything expires after a month
+    {{ WRANGLER }} r2 bucket lifecycle add "${bucket}" expire-30-days --expire-days 30 --force || true
+
+    echo -e ""
+    echo -e "{{ bold }}Next:{{ normal }} create an R2 API token (Object Read & Write, bucket ${bucket}) in the dashboard,"
+    echo -e "then: AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... just cloudflare secrets {{ env }}"
+
+# Upload the R2 S3-API credentials as Worker secrets [staging|production]
+secrets env="staging":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID (R2 API token access key)}"
+    : "${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY (R2 API token secret)}"
+    account=$({{ WRANGLER }} whoami --json | deno eval --quiet "const w = JSON.parse(await new Response(Deno.stdin.readable).text()); console.log(w.accounts?.[0]?.id ?? '')")
+    endpoint="${AWS_ENDPOINT:-https://${CLOUDFLARE_ACCOUNT_ID:-$account}.r2.cloudflarestorage.com}"
+    envflag=$([ "{{ env }}" = "production" ] && echo "" || echo "--env {{ env }}")
+    printf '%s' "$AWS_ACCESS_KEY_ID" | {{ WRANGLER }} secret put AWS_ACCESS_KEY_ID $envflag
+    printf '%s' "$AWS_SECRET_ACCESS_KEY" | {{ WRANGLER }} secret put AWS_SECRET_ACCESS_KEY $envflag
+    printf '%s' "$endpoint" | {{ WRANGLER }} secret put AWS_ENDPOINT $envflag
+
 # Deploy [env: staging|production]
 deploy env="staging": build
     #!/usr/bin/env bash
