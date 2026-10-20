@@ -22,6 +22,7 @@ services:
       --ip 0.0.0.0 --port 8787
       --persist-to /wrangler-state
       --show-interactive-dev-session=false
+      --test-scheduled
       --var AWS_ACCESS_KEY_ID:minioaccesskey123123
       --var AWS_SECRET_ACCESS_KEY:minioaccesskey123123
       --var AWS_ENDPOINT:http://minio:9000
@@ -61,6 +62,20 @@ services:
       - "traefik.http.services.api.loadbalancer.server.port=8787"
     logging:
       driver: ${LOGGING_API:-json-file}
+
+  # wrangler dev never fires Cron Triggers: this does, through --test-scheduled.
+  # More often than production's once a minute, so retries show up quickly.
+  # wrangler refuses /cdn-cgi/ requests not addressed to localhost, hence Host.
+  cron:
+    depends_on:
+      api:
+        condition: service_healthy
+    image: curlimages/curl:8.11.1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - 'while true; do curl -s -o /dev/null -H "Host: localhost:8787" "http://api:8787/cdn-cgi/handler/scheduled?cron=*+*+*+*+*"; sleep 20; done'
+    networks:
+      - default
 
   worker:
     depends_on:
