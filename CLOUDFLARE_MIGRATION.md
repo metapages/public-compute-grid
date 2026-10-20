@@ -109,5 +109,6 @@ with no `Deno.*` or Workers-only calls. Only the runtime adapters are runtime-sp
 - Fixed: logs over 64 KiB failed to persist (above).
 - Production deploys from main have failed since Oct 6: Deno Deploy reports "The revision failed". The last successful
   deploy was Aug 18.
-- The MCP tests are intermittently flaky on a loaded machine (a job reported "not on queue" or "unknown"). Seen on the
-  Deno stacks; recent PR CI runs are green.
+- Pre-existing flakes, reproduced on main on the same machine: MCP jobs reported "not on queue" or "unknown", and the
+  local inputs/outputs and multi-segment path tests. Each stack passes in full on most runs (local 60/60, remote 64/64,
+  cloudflare 64/64 with one flake).
