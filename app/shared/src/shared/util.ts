@@ -133,6 +133,10 @@ export const formatResultsS3Key = (id: string): string => {
   return `j/${id}/result.json`;
 };
 
+export const formatLogsS3Key = (id: string, kind: "build" | "run"): string => {
+  return `j/${id}/${kind}-logs.json`;
+};
+
 const resolvePreferredWorker = (workerA: string, workerB: string) => {
   return workerA.localeCompare(workerB) < 0 ? workerA : workerB;
 };

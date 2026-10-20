@@ -3,66 +3,78 @@
 Deno Deploy shuts down in about 6 months. We're doing this now, while we have the time. The S3 bucket is also being shut
 down, so blobs move to R2.
 
-**Overview:** the API becomes a Cloudflare Worker. Each queue gets its own Durable Object, which holds that queue's
-websockets and in-memory state, so the Redis bus goes away. Global keys go to D1. Blobs go to R2 through the S3 API
-(MinIO stays as the local stand-in). The browser and docs are served as Workers Static Assets. Webhook retry runs on a
-Cron Trigger.
+**Overview:** the API becomes a Cloudflare Worker (`app/cloudflare`). Each queue gets its own Durable Object, which
+holds that queue's websockets and in-memory state, so the Redis bus goes away. The store is D1. Blobs go to R2 through
+the S3 API, with MinIO as the local stand-in. The browser and docs are served as Workers Static Assets. Webhook retry
+runs on a Cron Trigger.
 
 **Approach:**
 
 - Write the integration tests first, then work from them. They run against any `API_URL`: the local Deno stack, the
-  local Cloudflare stack (`wrangler dev`), and staging.
+  local Cloudflare stack (`just test cloudflare`), and staging (`just test-url <url>`).
 - The local stack has to keep working the whole way through.
 
 **Long-term direction:** the worker moves to Node, and server, worker and CLI eventually become one program. So new core
-code uses web-standard APIs behind small interfaces (config, store, bus, scheduler, blob store), with no `Deno.*` or
-Workers-only calls. Only the runtime adapters are runtime-specific.
+code uses web-standard APIs behind small interfaces (`getEnv`, `KvStore`, `SqlDriver`, the queue bus, `S3BlobStore`),
+with no `Deno.*` or Workers-only calls. Only the runtime adapters are runtime-specific. `SqlKvStore` already runs on
+`node:sqlite`.
 
 ## 0. Integration tests first
 
-- [ ] HTTP contract tests: submit, result, job lookups, exists, namespaces, cancel, `/f/` upload/download
-- [ ] Websocket tests: client snapshot on connect, state deltas, worker registration
-- [ ] SSE `/stream` and `build-logs.json` / `run-logs.json` tests
-- [ ] Static route tests: `/`, SPA fallback, `/docs`, `/llms.txt`
-- [ ] Webhook retry test (cron)
-- [ ] MCP HTTP test
-- [ ] `just test-url <url>` runs the suite against any deployment
+- [x] HTTP contract tests: submit, result, job lookups, namespaces, `/f/` upload/exists/download
+      (`app/test/src/contract_api_test.ts`)
+- [x] Websocket tests: client snapshot on connect, and state deltas for a job submitted over HTTP
+- [x] SSE `/stream` and `build-logs.json` / `run-logs.json` tests
+- [x] Static route tests: `/`, `/j/<id>`, `/docs`, `/llms.txt`
+- [x] Webhook retry test (`webhooks_retry_test.ts`): the first call fails, and the scheduler must retry (Deno.cron, or a
+      Cron Trigger fired by the compose `cron` sidecar)
+- [x] Big-log test: ~200 KB of output must be fully kept after the job finishes
+- [x] MCP HTTP test (the existing MCP suites pass against Cloudflare)
+- [x] `just test-url <url>` runs the contract suite against any deployment, with a temporary local worker
+- [x] `KvStore` conformance test, run against both Deno KV and `SqlKvStore`
 
-## 1. S3 → R2 (ships independently, on Deno Deploy)
+## 1. S3 → R2
 
-- [ ] Create R2 buckets for prod and staging, with an API token
-- [ ] Make the S3 client R2-compatible (endpoint, `region: auto`, path-style) and keep MinIO for local
+- [x] Blob store on `aws4fetch` (fetch + WebCrypto; R2, MinIO, any runtime) instead of the AWS SDK
+- [ ] Create R2 buckets for prod and staging, with an API token (needs Cloudflare account access)
 - [ ] CORS on R2 for browser PUTs
 - [ ] R2 lifecycle rule: objects expire after about a month
-- [ ] Switch prod env to R2. No copy needed, since data expires after a month
+- [ ] Switch the Deno Deploy env to R2 (it works there too). No copy needed, since data expires after a month
 
 ## 2. Runtime-neutral core
 
-- [ ] `getConfig()` replaces direct `Deno.env.get`
-- [ ] Store interface over the Deno.Kv subset (get/set/delete/list/atomic), with a `DenoKvStore` implementation
-- [ ] Bus interface around `CustomBroadcastChannel`
-- [ ] `BaseDockerJobQueue.tick()` so the intervals can be driven from outside
+- [x] `getEnv()` replaces `Deno.env.get` in shared, api and mcp module scope
+- [x] Store interface (`KvStore`, injected with `setKv`), with Deno KV satisfying it unchanged
+- [x] Bus interface (`setBroadcastChannelFactory`, `NoopBroadcastChannel`)
+- [x] `createApp()` is the API without static files; Deno's static routes live in `staticDeno.ts`
+- [ ] `BaseDockerJobQueue.tick()` so the intervals can be driven from outside (needed for hibernation)
 - [ ] Switch hono to `npm:hono@4`, drop `handlerDeno`
-- [ ] `just check`, `just test local`, `just test` all pass, then merge (still on Deno Deploy)
+- [ ] Drop the remaining Deno-only imports from the shared graph, then delete `app/cloudflare/src/deno-shim.ts`
 
 ## 3. Cloudflare app and local stack (`app/cloudflare/`)
 
-- [ ] `wrangler.jsonc`: nodejs_compat, assets, DO `QUEUE`, D1, cron
-- [ ] Worker entry: route `/q/:queue/*` to `QueueDO`, handle everything else statelessly
-- [ ] `QueueDO`: websockets, submit, cancel, SSE
-- [ ] Store: queue-scoped keys in DO SQLite, global keys in D1, expiry sweep on cron
-- [ ] Large build/run logs go to R2, with a pointer in D1
-- [ ] Cron Trigger for webhook retry
-- [ ] Static assets: SPA fallback and `/docs` `.html` rewrite
-- [ ] Bundle → `wrangler deploy`, plus `just cloudflare dev|deploy`
-- [ ] Docker compose `cloudflare` mode: `wrangler dev` + worker + MinIO, and `just test cloudflare` passes
+- [x] `wrangler.jsonc`: nodejs_compat, assets, DO `QUEUES`, D1, cron, staging env
+- [x] Worker entry: route `/q/:queue/*` (HTTP and websockets) and `/j/:id/copy` to `QueueDurableObject`, the rest
+      statelessly
+- [x] `QueueDurableObject`: websockets, submit, cancel, SSE, logs, status
+- [x] Store: `SqlKvStore` over D1. Everything is in D1, because db.ts reads across queues (a job's namespaces span
+      queues), so a per-queue DO store doesn't fit yet
+- [x] Cron Trigger: webhook retry and the expired-row sweep
+- [x] Static assets: `/docs` cleanUrls, VitePress' 404 for missing docs, `/j/<id>` rebased
+- [x] MCP `/mcp`: the tools call the API in-process through the router
+- [x] `deno bundle` → `wrangler deploy`: `just cloudflare build|dev|deploy`
+- [x] Docker compose `cloudflare` mode (`just dev cloudflare`, `just test cloudflare`): the full suite passes
+- [x] Logs in blob storage (R2/MinIO, or files in local mode), with a pointer in the store. They used to be one KV
+      value, and Deno KV rejects values over 64 KiB ("Value too large"), so long logs were lost
+- [ ] `/mcp/ws` (the legacy MCP websocket) is not supported: it reads in-process queue state. Retire it or route it
 
 ## 4. Staging
 
-- [ ] Deploy to the staging subdomain
-- [ ] `just test-url` against staging
+- [ ] Cloudflare account: D1 databases, R2 buckets and secrets, staging subdomain route
+- [ ] `just cloudflare deploy staging`
+- [ ] `just test-url https://<staging>`
 - [ ] Attach a real worker and run the OpenThermo job end to end
-- [ ] Check reconnects after redeploy, long SSE streams, MCP
+- [ ] Check reconnects after redeploy, long SSE streams, D1 latency from the queue DO
 - [ ] Load test a single hot queue
 
 ## 5. Cutover
@@ -70,12 +82,13 @@ Workers-only calls. Only the runtime adapters are runtime-specific.
 - [ ] Lower the DNS TTL
 - [ ] Point `container.mtfm.io` at the Worker
 - [ ] Monitor for 48h. Rollback is pointing DNS back at Deno Deploy
-- [ ] Replace `deploy.yml` with `wrangler deploy`
+- [ ] Replace `deploy.yml` with `just cloudflare deploy production`
 
 ## 6. Cost: hibernation
 
-- [ ] Hibernatable WebSockets and alarms in place of intervals
-- [ ] Rehydrate queue state from DO SQLite on wake
+- [ ] Hibernatable WebSockets and alarms in place of intervals. Today a queue's DO stays awake while it has a socket or
+      a live interval
+- [ ] Rehydrate queue state from the store on wake
 
 ## 7. Cleanup (before Deno Deploy shuts down)
 
@@ -86,4 +99,15 @@ Workers-only calls. Only the runtime adapters are runtime-specific.
 ## Later: Node and unification
 
 - [ ] Worker runs on Node
-- [ ] Single server/worker/CLI program, sharing the runtime-neutral core
+- [ ] Single server/worker/CLI program, sharing the runtime-neutral core. The local-mode worker's
+      `app/worker/src/lib/local-handler.ts` duplicates the api routes and is the first thing to fold in
+
+## Findings along the way
+
+- Fixed: the worker lost all job output after the first ~32 KB. Its log-grabbing transform streams were never read, so
+  they stopped accepting data once their buffers filled (`DockerJob.ts`, now drained with `resume()`).
+- Fixed: logs over 64 KiB failed to persist (above).
+- Production deploys from main have failed since Oct 6: Deno Deploy reports "The revision failed". The last successful
+  deploy was Aug 18.
+- The MCP tests are intermittently flaky on a loaded machine (a job reported "not on queue" or "unknown"). Seen on the
+  Deno stacks; recent PR CI runs are green.

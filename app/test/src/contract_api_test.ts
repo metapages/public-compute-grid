@@ -205,6 +205,29 @@ Deno.test(
   },
 );
 
+Deno.test("contract: logs bigger than a store value are kept after the job finishes", async () => {
+  // ~200 KB of output: over Deno KV's 64 KiB value limit, which used to drop them
+  const marker = nonce();
+  const lineCount = 3000;
+  const { jobId } = await submitJob(
+    // The sleep lets the output drain before the job finishes: a job that exits
+    // the instant it prints can lose its tail in flight (a separate worker race)
+    `sh -c 'for i in $(seq 1 ${lineCount}); do echo "${marker}-$i-padding-padding-padding-padding-padding"; done; sleep 3'`,
+    `contract-biglogs-${marker}`,
+  );
+  const events = await readSse(`${API_URL}/q/${QUEUE_ID}/j/${jobId}/stream`);
+  assertEquals((events.find((e) => e.event === "final")?.data as { reason: string })?.reason, "Success");
+
+  for (const path of [`/q/${QUEUE_ID}/j/${jobId}/run-logs.json`, `/j/${jobId}/run-logs.json`]) {
+    const { status, body } = await getJson<LogsResponse>(path);
+    assertEquals(status, 200, path);
+    assertEquals(body.isFinal, true, path);
+    // Entries are raw output chunks: they don't align with lines, so concatenate
+    const lines = body.data.map((l) => l[0]).join("").split("\n").filter((l) => l.startsWith(marker));
+    assertEquals(lines.length, lineCount, `${path}: persisted run log is incomplete`);
+  }
+});
+
 Deno.test("contract: namespaces.json", { ignore: remoteOnly }, async () => {
   const marker = nonce();
   const namespace = `contract-ns-${marker}`;
@@ -300,9 +323,9 @@ Deno.test("contract: queue status", async () => {
 });
 
 /**
- * GET a static page. Dev stacks rebuild the browser app in the background
- * (create-browser-assets runs a watcher), so a read can race a rewrite of
- * index.html: retry a body read that breaks off.
+ * GET a static page. The remote test stack rebuilds the browser app while the
+ * tests run (create-browser-assets empties app/browser/dist and writes it
+ * again), so a read can break off mid-body: wait out the rebuild.
  */
 const getPage = async (url: string): Promise<{ status: number; text: string }> => {
   for (let attempt = 1;; attempt++) {
@@ -310,8 +333,8 @@ const getPage = async (url: string): Promise<{ status: number; text: string }> =
       const response = await fetch(url);
       return { status: response.status, text: await response.text() };
     } catch (err) {
-      if (attempt >= 3) throw err;
-      await new Promise((r) => setTimeout(r, 1000));
+      if (attempt >= 20) throw err;
+      await new Promise((r) => setTimeout(r, 3000));
     }
   }
 };

@@ -24,6 +24,7 @@ import { addJobProcessSubmissionWebhook } from "@shared/webhooks.ts";
 import { JobDataCacheDurationMilliseconds, JobLogsDurationMilliseconds } from "./constants.ts";
 import {
   formatDefinitionS3Key,
+  formatLogsS3Key,
   formatResultsS3Key,
   getJobColorizedString,
   getQueueColorizedString,
@@ -833,20 +834,41 @@ export class DB {
    * terminal state (see BaseDockerJobQueue.flushLogBuffer).
    */
   async storeBuildLogs(jobId: string, logs: ConsoleLogLine[]): Promise<void> {
-    await this.kv.set(["build-logs", jobId], logs, { expireIn: JobLogsDurationMilliseconds });
+    await this.storeLogs(jobId, "build", logs);
   }
 
   async getBuildLogs(jobId: string): Promise<ConsoleLogLine[] | null> {
-    const entry = await this.kv.get<ConsoleLogLine[]>(["build-logs", jobId]);
-    return entry.value;
+    return await this.getLogs(jobId, "build");
   }
 
   async storeRunLogs(jobId: string, logs: ConsoleLogLine[]): Promise<void> {
-    await this.kv.set(["run-logs", jobId], logs, { expireIn: JobLogsDurationMilliseconds });
+    await this.storeLogs(jobId, "run", logs);
   }
 
   async getRunLogs(jobId: string): Promise<ConsoleLogLine[] | null> {
-    const entry = await this.kv.get<ConsoleLogLine[]>(["run-logs", jobId]);
-    return entry.value;
+    return await this.getLogs(jobId, "run");
+  }
+
+  /**
+   * The lines go to blob storage and the store keeps a pointer: a long build's
+   * log is far bigger than a store value may be (64 KiB on Deno KV, ~2 MB a
+   * row on D1), and logs that didn't fit used to be dropped.
+   */
+  private async storeLogs(jobId: string, kind: "build" | "run", logs: ConsoleLogLine[]): Promise<void> {
+    const key = formatLogsS3Key(jobId, kind);
+    await putJsonToS3(key, logs);
+    await this.kv.set([`${kind}-logs`, jobId], { key }, { expireIn: JobLogsDurationMilliseconds });
+  }
+
+  private async getLogs(jobId: string, kind: "build" | "run"): Promise<ConsoleLogLine[] | null> {
+    const entry = await this.kv.get<ConsoleLogLine[] | { key: string }>([`${kind}-logs`, jobId]);
+    if (!entry.value) {
+      return null;
+    }
+    // Stored inline before logs moved to blob storage
+    if (Array.isArray(entry.value)) {
+      return entry.value;
+    }
+    return (await getJsonFromS3<ConsoleLogLine[]>(entry.value.key)) ?? null;
   }
 }
