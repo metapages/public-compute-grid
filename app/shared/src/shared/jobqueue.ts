@@ -14,6 +14,7 @@ import { ms } from "ms";
 import { createNanoEvents, type Emitter } from "nanoevents";
 import { delay } from "std/async/delay";
 import { DB } from "@shared/db.ts";
+import { getEnv } from "@shared/env.ts";
 import {
   type BroadcastJobDefinitions,
   type BroadcastJobStates,
@@ -71,12 +72,39 @@ import { setJobStateFinished } from "../client.ts";
  * is the bus instead, in production and in the local multi-instance stack
  * alike. Native is only correct where a single process is the whole server —
  * the worker's `--mode=local`.
+ *
+ * On Cloudflare each queue lives in exactly one Durable Object, so there are no
+ * other instances to tell: the runtime installs a no-op channel with
+ * setBroadcastChannelFactory before any queue is created.
  */
-const redisUrl: string | undefined = Deno.env.get("DENO_BROADCAST_REDIS_URL") ||
-  Deno.env.get("REDIS_URL");
+const redisUrl: string | undefined = getEnv("DENO_BROADCAST_REDIS_URL") ||
+  getEnv("REDIS_URL");
 
-let CustomBroadcastChannel: typeof BroadcastChannel = BroadcastChannel;
+export type BroadcastChannelFactory = (name: string) => BroadcastChannel;
+
+/** A channel nobody else listens on, for runtimes with one instance per queue. */
+export class NoopBroadcastChannel extends EventTarget {
+  readonly name: string;
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onmessageerror: ((event: MessageEvent) => void) | null = null;
+  constructor(name: string) {
+    super();
+    this.name = name;
+  }
+  postMessage(_message: unknown): void {}
+  close(): void {}
+}
+
+let createBroadcastChannel: BroadcastChannelFactory = typeof BroadcastChannel === "function"
+  ? (name) => new BroadcastChannel(name)
+  : (name) => new NoopBroadcastChannel(name) as unknown as BroadcastChannel;
 export let usingRedisBroadcastChannel = false;
+
+/** Replace how queues create their cross-instance channel. Call before creating queues. */
+export const setBroadcastChannelFactory = (factory: BroadcastChannelFactory): void => {
+  createBroadcastChannel = factory;
+  usingRedisBroadcastChannel = false;
+};
 
 if (redisUrl) {
   // The library reads DENO_BROADCAST_REDIS_URL at import time and throws
@@ -86,7 +114,7 @@ if (redisUrl) {
     const { BroadcastChannelRedis } = await import(
       "@metapages/deno-redis-broadcastchannel"
     );
-    CustomBroadcastChannel = BroadcastChannelRedis;
+    createBroadcastChannel = (name) => new BroadcastChannelRedis(name) as unknown as BroadcastChannel;
     usingRedisBroadcastChannel = true;
     console.log(`🌺 broadcast channel: redis (${new URL(redisUrl).hostname})`);
   } catch (err) {
@@ -353,7 +381,7 @@ export class BaseDockerJobQueue {
     this.clients = [];
     this.state = { jobs: {} };
 
-    this.channel = new CustomBroadcastChannel(address);
+    this.channel = createBroadcastChannel(address);
 
     this.channelEmitter = createNanoEvents<BroadcastMessageEvents>();
 

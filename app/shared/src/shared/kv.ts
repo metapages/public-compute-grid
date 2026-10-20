@@ -1,11 +1,27 @@
 import { ensureFileSync } from "std/fs";
 
-let localkv: Deno.Kv | undefined = undefined;
+import { getEnv } from "./env.ts";
+import type { KvStore } from "./store/kv.ts";
 
-export const getKv = async (): Promise<Deno.Kv> => {
-  // console.log(`🔥 getKv DENO_KV_URL=${DENO_KV_URL}`);
+export type { KvStore } from "./store/kv.ts";
+
+let localkv: KvStore | undefined = undefined;
+
+/**
+ * Use this store instead of opening Deno KV. A runtime without Deno KV
+ * (Cloudflare, Node) calls this before anything touches the db.
+ */
+export const setKv = (store: KvStore): void => {
+  localkv = store;
+};
+
+/**
+ * The process-wide store: whatever setKv installed, else Deno KV at
+ * DENO_KV_URL (a file path, a KV Connect URL, or unset for the default).
+ */
+export const getKv = async (): Promise<KvStore> => {
   if (localkv === undefined) {
-    const kvPath = Deno.env.get("DENO_KV_URL") || undefined;
+    const kvPath = getEnv("DENO_KV_URL") || undefined;
     if (
       kvPath &&
       !kvPath?.startsWith("http")
@@ -13,14 +29,12 @@ export const getKv = async (): Promise<Deno.Kv> => {
       ensureFileSync(kvPath);
     }
 
-    // console.log(`🔥 Opening kv at ${kvPath}`);
-    const thiskv = await Deno.openKv(kvPath);
+    const thiskv = await Deno.openKv(kvPath) as unknown as KvStore;
     if (localkv) {
       thiskv.close();
       return localkv;
     }
     localkv = thiskv;
-    // console.log(`🗝️  DenoKv Connected${kvPath ? " [" + kvPath + "]" : ""} ✅`);
   }
   return localkv;
 };

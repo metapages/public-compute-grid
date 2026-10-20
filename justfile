@@ -29,7 +29,7 @@ cyan := "\\e[36m"
 
 # Validate mode
 @_validate_mode mode="":
-    @if [ "{{ mode }}" = "remote" ] || [ "{{ mode }}" = "local" ]; then :; else echo "Error: Mode must be 'remote' or 'local'" >&2; exit 1; fi
+    @if [ "{{ mode }}" = "remote" ] || [ "{{ mode }}" = "local" ] || [ "{{ mode }}" = "cloudflare" ]; then :; else echo "Error: Mode must be 'remote', 'local' or 'cloudflare'" >&2; exit 1; fi
 
 # Start Development Environment
 @dev mode="remote" +args="": (_validate_mode mode)
@@ -530,6 +530,13 @@ alias shared := _shared
 
 @_shared +args="":
     just app/shared/{{ args }}
+
+# cloudflare subdirectory commands (the API on Cloudflare Workers, issue #308)
+
+alias cloudflare := _cloudflare
+
+@_cloudflare +args="":
+    just app/cloudflare/{{ args }}
 
 # docs subdirectory commands (VitePress site served at /docs)
 

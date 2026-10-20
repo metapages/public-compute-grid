@@ -2,6 +2,7 @@ import type { Context } from "hono";
 
 import { createMcpServer } from "@metapages/compute-queues-mcp/server-factory";
 import { serveMcpStreamableHttp } from "@metapages/compute-queues-mcp/streamable-http";
+import { getEnv } from "@shared/env.ts";
 
 /**
  * MCP over Streamable HTTP — the transport modern MCP clients (Claude Code
@@ -29,7 +30,7 @@ export const handleMCPStreamableHttp = (c: Context): Promise<Response> => {
   // inside the container, so every self-call failed. Loopback plus $PORT is
   // always reachable; the public origin stays on the links.
   const server = createMcpServer({
-    baseUrl: `http://localhost:${Deno.env.get("PORT") || "8000"}`,
+    baseUrl: `http://localhost:${getEnv("PORT") || "8000"}`,
     publicUrl: origin,
   });
   return serveMcpStreamableHttp(c, server);

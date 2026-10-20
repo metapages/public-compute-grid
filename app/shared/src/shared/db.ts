@@ -4,7 +4,8 @@ import { LRUMap } from "mnemonist";
 import { retryAsync } from "retry";
 import { ensureDir } from "std/fs";
 import { join } from "std/path";
-import { getKv } from "@shared/kv.ts";
+import { getEnv } from "@shared/env.ts";
+import { getKv, type KvStore } from "@shared/kv.ts";
 import {
   type ConsoleLogLine,
   type DataRef,
@@ -33,8 +34,6 @@ import {
   setJobStateRunning,
 } from "./util.ts";
 
-const AWS_SECRET_ACCESS_KEY = Deno.env.get("AWS_SECRET_ACCESS_KEY");
-
 let deleteFromS3: (key: string) => Promise<void>;
 let putJsonToS3: (key: string, data: unknown) => Promise<void>;
 let getJsonFromS3: <T>(key: string) => Promise<T | undefined>;
@@ -48,10 +47,10 @@ const definitionCache = new LRUMap<string, DockerJobDefinitionInputRefs>(200);
  *  /queue/:queue/:jobId/InMemoryJob.json
  */
 export class DB {
-  private kv: Deno.Kv;
+  private kv: KvStore;
   private dataDirectory: string;
 
-  private constructor(kv: Deno.Kv, dataDirectory: string) {
+  private constructor(kv: KvStore, dataDirectory: string) {
     this.kv = kv;
     this.dataDirectory = dataDirectory;
   }
@@ -62,7 +61,7 @@ export class DB {
     // Use the provided dataDirectory or default to TMPDIR
     const effectiveDataDirectory = dataDirectory || "/tmp/worker-metapage-io";
 
-    if (!AWS_SECRET_ACCESS_KEY) {
+    if (!getEnv("AWS_SECRET_ACCESS_KEY")) {
       // Ensure the directory exists and has correct permissions if not using S3
       await ensureDir(effectiveDataDirectory);
       await Deno.chmod(effectiveDataDirectory, 0o777);
@@ -81,7 +80,7 @@ export class DB {
   private static async setupStorageFunctions(
     dataDirectory: string,
   ): Promise<void> {
-    if (AWS_SECRET_ACCESS_KEY) {
+    if (getEnv("AWS_SECRET_ACCESS_KEY")) {
       // Import S3 functions
       ({ deleteFromS3, putJsonToS3, getJsonFromS3 } = await import(
         "@shared/s3.ts"

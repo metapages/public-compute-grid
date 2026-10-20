@@ -7,19 +7,28 @@ export interface JobQueueClient {
   baseUrl: string;
 }
 
+export type FetchFunction = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
 export class WorkerMetapageClient implements JobQueueClient {
   /** Where this process sends its own HTTP requests. */
   public baseUrl: string;
   /** Origin for URLs shown to a user; equals baseUrl unless overridden. */
   public publicUrl: string;
+  /**
+   * How requests are sent. Global fetch by default; a server that hosts the
+   * API itself can pass a function that dispatches in-process instead (on
+   * Cloudflare a Worker cannot reach itself over the network).
+   */
+  public fetch: FetchFunction;
 
-  constructor(baseUrl: string = "https://container.mtfm.io", publicUrl?: string) {
+  constructor(baseUrl: string = "https://container.mtfm.io", publicUrl?: string, fetchImpl?: FetchFunction) {
     this.baseUrl = baseUrl;
     this.publicUrl = publicUrl || baseUrl;
+    this.fetch = fetchImpl || ((input, init) => globalThis.fetch(input, init));
   }
 
   async submitJob(queue: string, jobDefinition: any): Promise<{ jobId: string }> {
-    const response = await fetch(`${this.baseUrl}/q/${queue}`, {
+    const response = await this.fetch(`${this.baseUrl}/q/${queue}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -37,7 +46,7 @@ export class WorkerMetapageClient implements JobQueueClient {
 
   async getJobStatus(jobId: string): Promise<any> {
     // `.json` suffix: the bare /j/<jobId> path serves the browser page.
-    const response = await fetch(`${this.baseUrl}/j/${jobId}.json`, {
+    const response = await this.fetch(`${this.baseUrl}/j/${jobId}.json`, {
       method: "GET",
       headers: {
         "Content-Type": "application/json",
@@ -54,7 +63,7 @@ export class WorkerMetapageClient implements JobQueueClient {
   }
 
   async getJobResult(jobId: string): Promise<any> {
-    const response = await fetch(`${this.baseUrl}/j/${jobId}/result.json`, {
+    const response = await this.fetch(`${this.baseUrl}/j/${jobId}/result.json`, {
       method: "GET",
       headers: {
         "Content-Type": "application/json",
@@ -76,7 +85,7 @@ export class WorkerMetapageClient implements JobQueueClient {
    * undefined, which is how follow_job was reporting no exit code.
    */
   async getJobRunResult(queue: string, jobId: string): Promise<Record<string, any> | undefined> {
-    const response = await fetch(
+    const response = await this.fetch(
       `${this.baseUrl}/q/${encodeURIComponent(queue)}/j/${jobId}/result.json`,
       { headers: { "Content-Type": "application/json" } },
     );
@@ -88,7 +97,7 @@ export class WorkerMetapageClient implements JobQueueClient {
   }
 
   async listJobs(queue: string): Promise<any> {
-    const response = await fetch(`${this.baseUrl}/q/${queue}`, {
+    const response = await this.fetch(`${this.baseUrl}/q/${queue}`, {
       method: "GET",
       headers: {
         "Content-Type": "application/json",
@@ -110,7 +119,7 @@ export class WorkerMetapageClient implements JobQueueClient {
    */
   async cancelJob(queue: string, jobId: string, namespace: string = "*"): Promise<void> {
     const url = `${this.baseUrl}/q/${queue}/j/${jobId}/cancel?namespace=${encodeURIComponent(namespace)}`;
-    const response = await fetch(url, {
+    const response = await this.fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -123,7 +132,7 @@ export class WorkerMetapageClient implements JobQueueClient {
   }
 
   async uploadFile(key: string, content: string | ArrayBuffer): Promise<string> {
-    const response = await fetch(`${this.baseUrl}/f/${key}`, {
+    const response = await this.fetch(`${this.baseUrl}/f/${key}`, {
       method: "PUT",
       body: content,
     });
@@ -136,7 +145,7 @@ export class WorkerMetapageClient implements JobQueueClient {
   }
 
   async downloadFile(key: string): Promise<ArrayBuffer> {
-    const response = await fetch(`${this.baseUrl}/f/${key}`, {
+    const response = await this.fetch(`${this.baseUrl}/f/${key}`, {
       method: "GET",
     });
 
@@ -172,9 +181,10 @@ export async function followJobStream(
   jobId: string,
   onEvent: (event: JobStreamEvent) => void | Promise<void>,
   signal?: AbortSignal,
+  fetchImpl: FetchFunction = (input, init) => globalThis.fetch(input, init),
 ): Promise<{ state: string; reason?: string }> {
   const url = `${baseUrl}/q/${encodeURIComponent(queue)}/j/${jobId}/stream`;
-  const response = await fetch(url, {
+  const response = await fetchImpl(url, {
     headers: { accept: "text/event-stream" },
     signal,
   });

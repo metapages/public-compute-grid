@@ -17,7 +17,7 @@ green := "\\e[32m"
 
 # Validate mode
 @_validate_mode mode="":
-    @if [ "{{ mode }}" = "remote" ] || [ "{{ mode }}" = "local" ]; then :; else echo "Error: Mode must be 'remote' or 'local'" >&2; exit 1; fi
+    @if [ "{{ mode }}" = "remote" ] || [ "{{ mode }}" = "local" ] || [ "{{ mode }}" = "cloudflare" ]; then :; else echo "Error: Mode must be 'remote', 'local' or 'cloudflare'" >&2; exit 1; fi
 
 # Develop: open the browser and start the dev stack [remote|local]
 @dev mode="remote" +args="": (_validate_mode mode) _build_shared _ensure-all (open mode) (_up mode args)
@@ -192,6 +192,8 @@ test mode="remote" +args="": _build_shared check (_validate_mode mode)
     just shared/build
     # tests don't need the browser but dir needs to exist
     mkdir -p browser/dist
+    # the cloudflare api is bundled on the host; wrangler in the stack serves it
+    if [ "{{ mode }}" = "cloudflare" ]; then just cloudflare/build-api; fi
     docker compose --project-name="${STACK}" -f ../docker-compose.yml -f ../docker-compose-{{ mode }}.yml -f ../docker-compose-test-{{ mode }}.yml up --build --remove-orphans --detach
         # functional tests. On failure dump the server-side logs before the
         # trap tears the stack down: the test output alone shows only what the
@@ -226,6 +228,8 @@ _up mode="remote" +args="": (_validate_mode mode) _ensure-all _mkcert
     fi
     docker compose --project-name=dev -f ../docker-compose.yml -f ../docker-compose-{{ mode }}.yml rm --force 2>/dev/null || true
     docker rm dev-worker-1 2>/dev/null || true
+    # the cloudflare api is bundled on the host; re-run `just cloudflare bundle` after changes
+    if [ "{{ mode }}" = "cloudflare" ]; then just cloudflare/build-api; fi
     docker compose --project-name=dev -f ../docker-compose.yml -f ../docker-compose-{{ mode }}.yml up --remove-orphans {{ args }}
 
 # Watch the local dev stack, running the tests when files change

@@ -19,8 +19,9 @@ import { dirname, join } from "std/path";
 
 import { crypto } from "@std/crypto";
 import { encodeHex } from "@std/encoding";
+import { getEnv } from "./env.ts";
 
-const IGNORE_CERTIFICATE_ERRORS: boolean = Deno.env.get("IGNORE_CERTIFICATE_ERRORS") === "true";
+const IGNORE_CERTIFICATE_ERRORS: boolean = getEnv("IGNORE_CERTIFICATE_ERRORS") === "true";
 
 /**
  * If two workers claim a job, this function will resolve which worker should take the job.
@@ -114,7 +115,7 @@ let BaseCurlUploadArgs = [
 if (IGNORE_CERTIFICATE_ERRORS) {
   // add the resolve flags from the /etc/hosts file
   // APP_PORT is only needed for the upload/curl/dns/docker fiasco
-  const APP_PORT = Deno.env.get("APP_PORT") || "443";
+  const APP_PORT = getEnv("APP_PORT") || "443";
   const hostsFileContents = Deno.readTextFileSync("/etc/hosts");
   const hostsFileLines = hostsFileContents.split("\n");
   const resolveFlags = hostsFileLines
@@ -140,7 +141,7 @@ export const fileToDataref = async (
 ): Promise<DataRef> => {
   const { size } = await Deno.stat(file);
   const hash = await hashFileOnDisk(file);
-  const actualAddress = Deno.env.get("DEV_ONLY_EXTERNAL_SERVER_ADDRESS") ||
+  const actualAddress = getEnv("DEV_ONLY_EXTERNAL_SERVER_ADDRESS") ||
     address;
 
   if (size > ENV_VAR_DATA_ITEM_LENGTH_MAX) {
@@ -208,7 +209,7 @@ export const fileToDataref = async (
       { delay: 2000, maxTry: 20 },
     );
 
-    // const actualAddress = Deno.env.get("DEV_ONLY_EXTERNAL_SERVER_ADDRESS") ||
+    // const actualAddress = getEnv("DEV_ONLY_EXTERNAL_SERVER_ADDRESS") ||
     //   address;
 
     const dataRef: DataRef = {

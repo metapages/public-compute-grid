@@ -59,6 +59,8 @@ export interface KvListSelector {
 
 export interface KvListOptions {
   limit?: number;
+  /** Deno KV only; SQL stores are always strongly consistent */
+  consistency?: "strong" | "eventual";
 }
 
 export interface KvStore {

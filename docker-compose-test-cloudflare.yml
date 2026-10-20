@@ -1,0 +1,39 @@
+# Test runner for the Cloudflare stack: same as remote, against the wrangler api
+services:
+  test:
+    depends_on:
+      api:
+        condition: service_healthy
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM denoland/deno:alpine-2.9.3
+        RUN apk add --no-cache curl bash
+    command: deno test --trace-leaks --watch --unsafely-ignore-certificate-errors --allow-all --unstable-cron --unstable-kv .
+    working_dir: /app/app/test
+    extra_hosts:
+      - host.docker.internal:host-gateway
+      - worker-metaframe.localhost:host-gateway
+      - minio.worker-metaframe.localhost:host-gateway
+    environment:
+      # APP_PORT is only needed for the upload/curl/dns/docker fiasco
+      - APP_PORT=${APP_PORT:-443}
+      - IGNORE_CERTIFICATE_ERRORS=true
+      - NPM_CONFIG_REGISTRY=${NPM_CONFIG_REGISTRY:-}
+      - API_URL=https://worker-metaframe.localhost:${APP_PORT:-443}
+      - DENO_DIR=/deno
+      - DENO_INSTALL_ROOT=/deno
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-minioaccesskey123123}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-minioaccesskey123123}
+      - AWS_REGION=${AWS_REGION:-us-west-2}
+      - AWS_ENDPOINT=${AWS_ENDPOINT:-http://minio:9000}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET:-localbucket}
+    volumes:
+      - deno:/deno
+      - .:/app
+    labels:
+      - "custom.label=worker-metaframe.localhost"
+    networks:
+      - default
+    logging:
+      driver: ${LOGGING_TESTS:-json-file}

@@ -1,0 +1,9 @@
+{
+  "name": "@metapages/compute-queues-cloudflare",
+  "exports": {},
+  "imports": {
+    "@/": "../api/src/",
+    "@shared/": "../shared/src/shared/"
+  },
+  "exclude": ["dist", ".wrangler", ".assets"]
+}

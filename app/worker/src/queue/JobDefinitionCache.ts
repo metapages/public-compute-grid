@@ -6,6 +6,7 @@ import {
   WebsocketMessageTypeServerBroadcast,
   WebsocketMessageTypeWorkerToServer,
 } from "@metapages/compute-queues-shared";
+import type { KvStore } from "../../../shared/src/shared/kv.ts";
 
 // export class JobDefinitionCacheLocal {
 //   kv: Deno.Kv;
@@ -31,9 +32,9 @@ import {
 
 export class JobDefinitionCache {
   sender: WebsocketMessageSenderWorker;
-  kv: Deno.Kv;
+  kv: KvStore;
   constructor(args: {
-    kv: Deno.Kv;
+    kv: KvStore;
     sender: WebsocketMessageSenderWorker;
   }) {
     const { sender, kv } = args;

@@ -299,9 +299,26 @@ Deno.test("contract: queue status", async () => {
   assert(body && typeof body === "object");
 });
 
+/**
+ * GET a static page. Dev stacks rebuild the browser app in the background
+ * (create-browser-assets runs a watcher), so a read can race a rewrite of
+ * index.html: retry a body read that breaks off.
+ */
+const getPage = async (url: string): Promise<{ status: number; text: string }> => {
+  for (let attempt = 1;; attempt++) {
+    try {
+      const response = await fetch(url);
+      return { status: response.status, text: await response.text() };
+    } catch (err) {
+      if (attempt >= 3) throw err;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+};
+
 Deno.test("contract: browser app routes", async (t) => {
-  const index = await fetch(`${API_URL}/`);
-  const indexHtml = await index.text();
+  const index = await getPage(`${API_URL}/`);
+  const indexHtml = index.text;
   if (index.status === 404) {
     // Test stacks may run without a browser build; there is nothing to check
     console.log("contract: no browser build served, skipping static route checks");
@@ -311,9 +328,9 @@ Deno.test("contract: browser app routes", async (t) => {
   assertStringIncludes(indexHtml.toLowerCase(), "<html");
 
   await t.step("/j/<jobId> serves the app with assets rebased to /", async () => {
-    const response = await fetch(`${API_URL}/j/${"a".repeat(64)}`);
+    const response = await getPage(`${API_URL}/j/${"a".repeat(64)}`);
     assertEquals(response.status, 200);
-    assertStringIncludes(await response.text(), '<base href="/"');
+    assertStringIncludes(response.text, '<base href="/"');
   });
 });
 
@@ -326,11 +343,21 @@ Deno.test("contract: llms.txt", { ignore: remoteOnly }, async () => {
 Deno.test("contract: docs routes", { ignore: remoteOnly }, async () => {
   const redirect = await fetch(`${API_URL}/docs`, { redirect: "manual" });
   await redirect.body?.cancel();
-  assertEquals(redirect.status, 301);
+  // 301 from the Deno server, 307 from Cloudflare Static Assets: any redirect
+  assert(redirect.status >= 301 && redirect.status <= 308, `/docs status ${redirect.status}`);
   assert(redirect.headers.get("location")?.endsWith("/docs/"));
 
   // A missing doc is a 404, never the browser app's index.html
   const missing = await fetch(`${API_URL}/docs/no-such-page-${nonce()}`);
-  await missing.body?.cancel();
+  const missingBody = await missing.text();
   assertEquals(missing.status, 404);
+  assert(!missingBody.includes('<base target="_parent"'), "missing doc served the browser app");
+
+  // Pages are served without the .html extension (VitePress cleanUrls)
+  const page = await fetch(`${API_URL}/docs/guide/agent-skill`);
+  await page.body?.cancel();
+  if (page.status !== 404) {
+    // only when the docs site is built into this deployment
+    assertEquals(page.status, 200);
+  }
 });

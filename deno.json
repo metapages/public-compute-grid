@@ -3,6 +3,7 @@
   "workspace": [
     "app/api",
     "app/cli",
+    "app/cloudflare",
     "app/mcp",
     "app/shared",
     "app/test",

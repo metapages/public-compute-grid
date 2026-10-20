@@ -7,7 +7,8 @@ import {
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import { WorkerMetapageClient } from "./client.ts";
+import { getEnv } from "@metapages/compute-queues-shared";
+import { type FetchFunction, WorkerMetapageClient } from "./client.ts";
 import {
   cancelJobTool,
   followJobTool,
@@ -41,11 +42,13 @@ export const createMcpServer = (opts?: {
    * tool's self-call fail. Links still need the public origin to be clickable.
    */
   publicUrl?: string;
+  /** How the tools send requests to the API; global fetch by default. */
+  fetch?: FetchFunction;
 }): Server => {
   const baseUrl = opts?.baseUrl ||
-    Deno.env.get("WORKER_METAPAGE_URL") ||
+    getEnv("WORKER_METAPAGE_URL") ||
     "https://container.mtfm.io";
-  const client = new WorkerMetapageClient(baseUrl, opts?.publicUrl);
+  const client = new WorkerMetapageClient(baseUrl, opts?.publicUrl, opts?.fetch);
 
   const server = new Server(
     { name: "worker-metapage-io", version: "1.0.0" },
