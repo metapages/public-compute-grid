@@ -14,7 +14,8 @@ services:
         condition: service_started
       minio:
         condition: service_healthy
-    image: node:22-bookworm-slim
+    # not -slim: workerd needs the system CA certificates
+    image: node:22-bookworm
     working_dir: /app/app/cloudflare
     command: >-
       npx --yes wrangler@4.151.3 dev
