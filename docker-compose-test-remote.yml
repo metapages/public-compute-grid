@@ -8,7 +8,11 @@ services:
       dockerfile_inline: |
         FROM denoland/deno:alpine-2.9.3
         RUN apk add --no-cache curl bash
-    command: deno test --trace-leaks --watch --unsafely-ignore-certificate-errors --allow-all --unstable-cron --unstable-kv .
+    # `just dev` watches and reruns the suite here. `just test` overrides this
+    # with an idle command and `exec`s one run itself: leaving the watch run on
+    # meant two suites hit the same worker at once, and their identical jobs
+    # superseded each other (same namespace) and clobbered each other's uploads.
+    command: ${TEST_SERVICE_COMMAND:-deno test --trace-leaks --watch --unsafely-ignore-certificate-errors --allow-all --unstable-cron --unstable-kv .}
     working_dir: /app/app/test
     extra_hosts:
       - host.docker.internal:host-gateway
