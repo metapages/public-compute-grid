@@ -37,7 +37,9 @@ with no `Deno.*` or Workers-only calls. Only the runtime adapters are runtime-sp
 
 - [x] Staging R2 bucket `compute-queues-staging`, with CORS and a 30-day expiry rule (`just cloudflare setup staging`)
 - [x] Blob store on `aws4fetch` (fetch + WebCrypto; R2, MinIO, any runtime) instead of the AWS SDK
-- [ ] An R2 API token (Object Read & Write) for the Worker's S3 presigning: `just cloudflare secrets staging`
+- [x] An R2 API token (Object Read & Write) for the Worker's S3 presigning: `just cloudflare secrets staging`. It must
+      be scoped to the bucket — a token scoped elsewhere fails every request with `403 AccessDenied`, which looks like a
+      signing bug and is not one
 - [ ] Production bucket, at cutover (`just cloudflare setup production`)
 - [ ] Switch the Deno Deploy env to R2 (it works there too). No copy needed, since data expires after a month
 
@@ -75,13 +77,23 @@ with no `Deno.*` or Workers-only calls. Only the runtime adapters are runtime-sp
 
 ## 4. Staging
 
+Live at **https://compute-queues-staging.dion19.workers.dev** (D1 `compute-queues-staging`, R2 `compute-queues-staging`,
+one Durable Object per queue, cron every minute).
+
 - [x] Staging D1 database and R2 bucket created; `just cloudflare setup <env>` is idempotent
-- [ ] R2 API token uploaded as Worker secrets
-- [ ] `just cloudflare deploy staging` (deploys to `compute-queues-staging.<subdomain>.workers.dev`)
-- [ ] `just test-url https://<staging>`
-- [ ] Attach a real worker and run the OpenThermo job end to end
-- [ ] Check reconnects after redeploy, long SSE streams, D1 latency from the queue DO
-- [ ] Load test a single hot queue
+- [x] R2 API token uploaded as Worker secrets
+- [x] `just cloudflare deploy staging`
+- [x] `just test-url https://compute-queues-staging.dion19.workers.dev` — 10/10
+- [x] A real worker attached, and the OpenThermo repo built and run end to end (`cq` with a git build context): the repo
+      cloned at its commit, compiled with gcc in the container, the binary run on a Gaussian log, exit 0, build and run
+      logs persisted separately, and the output file served back through the API from R2
+- [x] Worker reconnect across a redeploy: re-registered ~2s after `deploy`, with jobs succeeding either side of it
+- [x] Long SSE streams: one `cq run` stream followed a multi-minute image build to completion
+- [x] Cron verified firing on staging (`wrangler tail`: scheduled invocations, outcome ok, no exceptions)
+- [x] Load test, one hot queue: 40 concurrent submissions, all accepted, all finished (21s wall, POST p95 2.9s under
+      that concurrency)
+- [x] D1 latency through the queue DO: ~360ms of server-side work per submission (sequential submit ~458ms against a
+      ~99ms warm-connection baseline). See the latency finding below
 
 ## 5. Cutover
 
@@ -109,6 +121,10 @@ with no `Deno.*` or Workers-only calls. Only the runtime adapters are runtime-sp
       `app/worker/src/lib/local-handler.ts` duplicates the api routes and is the first thing to fold in
 
 ## Findings along the way
+
+- A submission costs ~360ms of server-side work on Cloudflare, dominated by `queueJobAdd` doing several D1 writes one
+  after another plus an R2 PUT for `definition.json`. `KvStore.atomic()` already exists and D1 runs a batch as a single
+  round trip, so batching that path is the obvious optimization. Not blocking: jobs run for seconds to minutes.
 
 - Fixed: the worker lost all job output after the first ~32 KB. Its log-grabbing transform streams were never read, so
   they stopped accepting data once their buffers filled (`DockerJob.ts`, now drained with `resume()`).
