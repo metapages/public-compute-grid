@@ -120,6 +120,8 @@ with no `Deno.*` or Workers-only calls. Only the runtime adapters are runtime-sp
 - A finished record whose results are gone is re-run correctly on a single-instance server (the local-mode worker, and
   Cloudflare) but not on the multi-instance Deno stack: `resolveMostCorrectJob` prefers the _earliest_ Success, so the
   dead record keeps winning over the fresh one the re-run produces. One more reason a queue belongs in one place.
+- One unexplained one-off: `Test exists API` saw a never-uploaded key report `exists: true` on the Cloudflare stack. It
+  did not recur on a re-run or reproduce against the same code by hand, and the run's api logs were gone by then.
 - Pre-existing flakes, reproduced on main on the same machine: MCP jobs reported "not on queue" or "unknown", and the
   local inputs/outputs and multi-segment path tests. Each stack passes in full on most runs (local 60/60, remote 64/64,
   cloudflare 63/64, the one failure an MCP flake).
