@@ -94,27 +94,47 @@ setup env="staging":
         {{ WRANGLER }} r2 bucket create "${bucket}" --update-config=false
     fi
     {{ WRANGLER }} r2 bucket cors set "${bucket}" --file r2-cors.json --force
-    # Data is a cache, not storage: everything expires after a month. Adding a
-    # rule that already exists is an API error, so only add it once.
-    if ! {{ WRANGLER }} r2 bucket lifecycle list "${bucket}" 2>/dev/null | grep -q "expire-30-days"; then
-        {{ WRANGLER }} r2 bucket lifecycle add "${bucket}" expire-30-days --expire-days 30 --force
+    # Data is a cache, not storage. This MUST stay longer than
+    # JobDataCacheDurationMilliseconds (4 weeks, shared/constants.ts): a finished
+    # job record that outlives the results it points at is served as a cache hit
+    # with nothing behind it, and since a job id is the hash of its definition,
+    # that job can then never run again. Adding a rule that already exists is an
+    # API error, so only add it once.
+    rules=$({{ WRANGLER }} r2 bucket lifecycle list "${bucket}" 2>/dev/null || true)
+    # expire-30-days was this rule's earlier name, and 30 days left only two days
+    # of margin over the record TTL
+    if echo "${rules}" | grep -q "expire-30-days"; then
+        {{ WRANGLER }} r2 bucket lifecycle remove "${bucket}" --name expire-30-days
+    fi
+    if ! echo "${rules}" | grep -q "expire-35-days"; then
+        {{ WRANGLER }} r2 bucket lifecycle add "${bucket}" expire-35-days --expire-days 35 --force
     fi
 
     echo -e ""
     echo -e "{{ bold }}Next:{{ normal }} create an R2 API token (Object Read & Write, bucket ${bucket}) in the dashboard,"
     echo -e "then: AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... just cloudflare secrets {{ env }}"
 
-# Upload the R2 S3-API credentials as Worker secrets [staging|production]
+# Upload the R2 S3-API credentials as Worker secrets [staging|production].
+# Reads R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY (from .env, or the environment),
+# falling back to AWS_*. The R2_* names exist so the credentials can live in
+# .env without being picked up by the dev and test stacks, which read AWS_* and
+# default them to the local MinIO. Inside the Worker they are AWS_*, which is
+
+# what the blob store reads.
 secrets env="staging":
     #!/usr/bin/env bash
     set -euo pipefail
-    : "${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID (R2 API token access key)}"
-    : "${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY (R2 API token secret)}"
+    access_key="${R2_ACCESS_KEY_ID:-${AWS_ACCESS_KEY_ID:-}}"
+    secret_key="${R2_SECRET_ACCESS_KEY:-${AWS_SECRET_ACCESS_KEY:-}}"
+    : "${access_key:?set R2_ACCESS_KEY_ID (the R2 API token access key id)}"
+    : "${secret_key:?set R2_SECRET_ACCESS_KEY (the R2 API token secret)}"
     account=$({{ WRANGLER }} whoami --json | deno eval --quiet "const w = JSON.parse(await new Response(Deno.stdin.readable).text()); console.log(w.accounts?.[0]?.id ?? '')")
-    endpoint="${AWS_ENDPOINT:-https://${CLOUDFLARE_ACCOUNT_ID:-$account}.r2.cloudflarestorage.com}"
+    # Deliberately not AWS_ENDPOINT: that is set to the local MinIO for dev and
+    # test work, and uploading it here would point the deployment at localhost.
+    endpoint="${R2_ENDPOINT:-https://${CLOUDFLARE_ACCOUNT_ID:-$account}.r2.cloudflarestorage.com}"
     envflag=$([ "{{ env }}" = "production" ] && echo "" || echo "--env {{ env }}")
-    printf '%s' "$AWS_ACCESS_KEY_ID" | {{ WRANGLER }} secret put AWS_ACCESS_KEY_ID $envflag
-    printf '%s' "$AWS_SECRET_ACCESS_KEY" | {{ WRANGLER }} secret put AWS_SECRET_ACCESS_KEY $envflag
+    printf '%s' "$access_key" | {{ WRANGLER }} secret put AWS_ACCESS_KEY_ID $envflag
+    printf '%s' "$secret_key" | {{ WRANGLER }} secret put AWS_SECRET_ACCESS_KEY $envflag
     printf '%s' "$endpoint" | {{ WRANGLER }} secret put AWS_ENDPOINT $envflag
 
 # Deploy [env: staging|production]
