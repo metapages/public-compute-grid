@@ -1,8 +1,8 @@
 import { config, getConfig } from "/@/config.ts";
-import { createMcpServer } from "@metapages/compute-queues-mcp/server-factory";
+import { createMcpServer, MCP_TOOLS } from "@metapages/compute-queues-mcp/server-factory";
 import { serveMcpStreamableHttp } from "@metapages/compute-queues-mcp/streamable-http";
 import { type Context, Hono } from "hono";
-import { serveStatic } from "hono/middleware";
+import { serveStatic } from "hono/deno";
 import { createHandler } from "metapages/worker/routing/handlerDeno";
 import { join } from "std/path";
 import mime from "mime";
@@ -721,106 +721,6 @@ const serveSpaOneLevelDown = async (indexPath: string, c: Context): Promise<Resp
 };
 
 // MCP Types and Handlers
-type MCPTool = {
-  name: string;
-  description: string;
-  inputSchema: {
-    type: "object";
-    properties: Record<string, unknown>;
-    required: string[];
-  };
-};
-
-const mcpTools: MCPTool[] = [
-  {
-    name: "submit_job",
-    description: "Submit a Docker job to a queue for execution. Returns the job ID for tracking.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        image: {
-          type: "string",
-          description: "Docker image to run (e.g., 'python:3.11', 'alpine:latest')",
-        },
-        command: {
-          type: "string",
-          description: "Command to execute in the container",
-          default: "echo 'Hello World'",
-        },
-        inputs: {
-          type: "object",
-          description: "Input files as key-value pairs where key is filename and value is file content",
-          additionalProperties: { type: "string" },
-          default: {},
-        },
-        env: {
-          type: "object",
-          description: "Environment variables as key-value pairs",
-          additionalProperties: { type: "string" },
-          default: {},
-        },
-        maxDuration: {
-          type: "string",
-          description: "Maximum job duration (e.g., '10m', '1h', '30s')",
-          default: "10m",
-        },
-      },
-      required: ["image"],
-    },
-  },
-  {
-    name: "get_job_status",
-    description:
-      "Get the status and details of a job by its ID. Returns job state, progress, and results if completed.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        jobId: {
-          type: "string",
-          description: "The unique job ID to check status for",
-        },
-        includeResult: {
-          type: "boolean",
-          description: "Whether to include job results if the job is finished",
-          default: true,
-        },
-      },
-      required: ["jobId"],
-    },
-  },
-  {
-    name: "list_jobs",
-    description: "List all jobs in the local queue with their current status and basic information.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        limit: {
-          type: "number",
-          description: "Maximum number of jobs to return",
-          default: 50,
-          minimum: 1,
-          maximum: 200,
-        },
-      },
-      required: [],
-    },
-  },
-  {
-    name: "cancel_job",
-    description: "Cancel a running or queued job in the local queue.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        jobId: {
-          type: "string",
-          description: "The unique job ID to cancel",
-        },
-      },
-      required: ["jobId"],
-    },
-  },
-];
-
 const handleMCPHealth = (c: Context): Response => {
   return c.json({
     status: "healthy",
@@ -840,8 +740,8 @@ const handleMCPInfo = (c: Context): Response => {
     },
     capabilities: {
       tools: {
-        count: mcpTools.length,
-        names: mcpTools.map((t) => t.name),
+        count: MCP_TOOLS.length,
+        names: MCP_TOOLS.map((t) => t.name),
       },
     },
     endpoints: {
@@ -850,11 +750,11 @@ const handleMCPInfo = (c: Context): Response => {
       info: "/mcp/info",
     },
     documentation: {
-      tools: mcpTools.map((tool) => ({
+      tools: MCP_TOOLS.map((tool) => ({
         name: tool.name,
         description: tool.description,
-        required: tool.inputSchema.required,
-        properties: Object.keys(tool.inputSchema.properties),
+        required: tool.inputSchema.required ?? [],
+        properties: Object.keys(tool.inputSchema.properties ?? {}),
       })),
     },
   });

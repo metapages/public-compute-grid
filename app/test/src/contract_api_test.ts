@@ -364,6 +364,15 @@ Deno.test("contract: llms.txt", { ignore: remoteOnly }, async () => {
 });
 
 Deno.test("contract: docs routes", { ignore: remoteOnly }, async () => {
+  // The docs site is a separate build (`just docs build`), and a deployment can
+  // be serving the API without it. Nothing below is meaningful then.
+  const home = await fetch(`${API_URL}/docs/`);
+  await home.body?.cancel();
+  if (home.status === 404) {
+    console.log("contract: no docs site deployed, skipping docs route checks");
+    return;
+  }
+
   const redirect = await fetch(`${API_URL}/docs`, { redirect: "manual" });
   await redirect.body?.cancel();
   // 301 from the Deno server, 307 from Cloudflare Static Assets: any redirect

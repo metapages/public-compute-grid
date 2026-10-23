@@ -1,5 +1,5 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import type { CallToolRequest, ReadResourceRequest } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolRequest, ReadResourceRequest, Tool } from "@modelcontextprotocol/sdk/types.js";
 import {
   CallToolRequestSchema,
   ListResourcesRequestSchema,
@@ -23,6 +23,21 @@ import {
   submitJobTool,
   uploadFileTool,
 } from "./tools/index.ts";
+
+/**
+ * Every tool this server serves, in the order a client sees them. Exported so
+ * the servers that mount it (the API and the local-mode worker) can describe
+ * themselves at /mcp/info without keeping their own copy of the list, which
+ * went stale: both advertised tools that no longer existed.
+ */
+export const MCP_TOOLS: Tool[] = [
+  submitJobTool,
+  followJobTool,
+  getJobStatusTool,
+  listJobsTool,
+  cancelJobTool,
+  uploadFileTool,
+];
 
 /**
  * Build the MCP server. Transport-agnostic on purpose: the same server is
@@ -63,16 +78,7 @@ export const createMcpServer = (opts?: {
     },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, () => ({
-    tools: [
-      submitJobTool,
-      followJobTool,
-      getJobStatusTool,
-      listJobsTool,
-      cancelJobTool,
-      uploadFileTool,
-    ],
-  }));
+  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: MCP_TOOLS }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest, extra: unknown) => {
     switch (request.params.name) {

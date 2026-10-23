@@ -158,13 +158,19 @@ const route = async (request: Request, env: Env): Promise<Response> => {
   }
 
   if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
-    // Queue websockets were routed above. /mcp/ws reads in-process queue
-    // state, which a stateless Worker does not have: use /mcp instead.
+    // Queue websockets were routed above; no other path has one (MCP clients
+    // use Streamable HTTP at /mcp).
     return new Response("Websocket path not supported", { status: 404 });
   }
 
   if (request.method === "GET" && /^\/j\/[^/.]+$/.test(url.pathname)) {
     return serveJobPage(env, request);
+  }
+
+  // The Deno server redirects /docs itself, so do it here rather than leave it
+  // to the asset layer, which only redirects when a docs build is deployed.
+  if (request.method === "GET" && url.pathname === "/docs") {
+    return Response.redirect(new URL("/docs/", url).toString(), 301);
   }
 
   // A missing doc: VitePress' own 404 page, never the browser app

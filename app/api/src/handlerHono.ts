@@ -11,7 +11,7 @@ import { cancelJobHandler } from "@/routes/queue/job/cancel.ts";
 import { statusHandler } from "@/routes/status.ts";
 import { makeStreamHandler } from "@metapages/compute-queues-shared";
 import { type Context, Hono } from "hono";
-import { cors } from "hono/middleware/cors";
+import { cors } from "hono/cors";
 
 import { getDefinitionHandler } from "./routes/api/v1/definition.ts";
 import { getJobInputsHandler } from "./routes/api/v1/jobInputs.ts";

@@ -35,10 +35,10 @@ with no `Deno.*` or Workers-only calls. Only the runtime adapters are runtime-sp
 
 ## 1. S3 → R2
 
+- [x] Staging R2 bucket `compute-queues-staging`, with CORS and a 30-day expiry rule (`just cloudflare setup staging`)
 - [x] Blob store on `aws4fetch` (fetch + WebCrypto; R2, MinIO, any runtime) instead of the AWS SDK
-- [ ] Create R2 buckets for prod and staging, with an API token (needs Cloudflare account access)
-- [ ] CORS on R2 for browser PUTs
-- [ ] R2 lifecycle rule: objects expire after about a month
+- [ ] An R2 API token (Object Read & Write) for the Worker's S3 presigning: `just cloudflare secrets staging`
+- [ ] Production bucket, at cutover (`just cloudflare setup production`)
 - [ ] Switch the Deno Deploy env to R2 (it works there too). No copy needed, since data expires after a month
 
 ## 2. Runtime-neutral core
@@ -48,7 +48,8 @@ with no `Deno.*` or Workers-only calls. Only the runtime adapters are runtime-sp
 - [x] Bus interface (`setBroadcastChannelFactory`, `NoopBroadcastChannel`)
 - [x] `createApp()` is the API without static files; the Deno server (API + static files from disk) is `handlerDeno.ts`
 - [ ] `BaseDockerJobQueue.tick()` so the intervals can be driven from outside (needed for hibernation)
-- [ ] Switch hono to `npm:hono@4`, drop `handlerDeno`
+- [x] Switch hono to `npm:hono@4.13.13` (was a `deno.land/x` release candidate): one copy of hono for every runtime,
+      shared with `@hono/mcp`, and no `deno.land/x` left in the Worker bundle
 - [x] Drop the Deno-only imports from the Worker graph (std/fs → node:fs, the Deno static handler moved out), and delete
       the Deno shim
 
@@ -67,12 +68,16 @@ with no `Deno.*` or Workers-only calls. Only the runtime adapters are runtime-sp
 - [x] Docker compose `cloudflare` mode (`just dev cloudflare`, `just test cloudflare`): the full suite passes
 - [x] Logs in blob storage (R2/MinIO, or files in local mode), with a pointer in the store. They used to be one KV
       value, and Deno KV rejects values over 64 KiB ("Value too large"), so long logs were lost
-- [ ] `/mcp/ws` (the legacy MCP websocket) is not supported: it reads in-process queue state. Retire it or route it
+- [x] `/mcp/ws` retired: it served a second MCP implementation (~1900 lines in `app/api/src/routes/mcp/`) that read
+      in-process state across every queue, was never served by the local-mode worker, and cannot work with one Durable
+      Object per queue. Clients use Streamable HTTP at `/mcp`. `/mcp/info` is now generated from the one tool list
+      (`MCP_TOOLS`), which both servers use — it had been advertising tools that no longer existed
 
 ## 4. Staging
 
-- [ ] Cloudflare account: D1 databases, R2 buckets and secrets, staging subdomain route
-- [ ] `just cloudflare deploy staging`
+- [x] Staging D1 database and R2 bucket created; `just cloudflare setup <env>` is idempotent
+- [ ] R2 API token uploaded as Worker secrets
+- [ ] `just cloudflare deploy staging` (deploys to `compute-queues-staging.<subdomain>.workers.dev`)
 - [ ] `just test-url https://<staging>`
 - [ ] Attach a real worker and run the OpenThermo job end to end
 - [ ] Check reconnects after redeploy, long SSE streams, D1 latency from the queue DO
@@ -112,6 +117,9 @@ with no `Deno.*` or Workers-only calls. Only the runtime adapters are runtime-sp
   which then showed only the push lines.
 - Production deploys from main have failed since Oct 6: Deno Deploy reports "The revision failed". The last successful
   deploy was Aug 18.
+- A finished record whose results are gone is re-run correctly on a single-instance server (the local-mode worker, and
+  Cloudflare) but not on the multi-instance Deno stack: `resolveMostCorrectJob` prefers the _earliest_ Success, so the
+  dead record keeps winning over the fresh one the re-run produces. One more reason a queue belongs in one place.
 - Pre-existing flakes, reproduced on main on the same machine: MCP jobs reported "not on queue" or "unknown", and the
   local inputs/outputs and multi-segment path tests. Each stack passes in full on most runs (local 60/60, remote 64/64,
   cloudflare 63/64, the one failure an MCP flake).

@@ -1,5 +1,5 @@
 import type { Context, Hono } from "hono";
-import { serveStatic } from "hono/middleware";
+import { serveStatic } from "hono/deno";
 
 import { createApp } from "@/handlerHono.ts";
 

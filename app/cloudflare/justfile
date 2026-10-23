@@ -53,12 +53,18 @@ build-api: bundle
     if [ -d ../../docs/dist/docs ]; then cp -r ../../docs/dist/docs .assets/docs; fi
     echo -e "✅ .assets $(du -sh .assets | cut -f1)"
 
-# Run the Worker locally in workerd (local D1 + Durable Objects; blobs: MinIO on :9100)
+# Run the Worker locally in workerd (local D1 + Durable Objects). Blobs need an
+# S3-compatible endpoint; AWS_ENDPOINT overrides the default below:
+#   docker run -d --name minio -p 9400:9000 -e MINIO_ROOT_USER=minioaccesskey123123 \
+#     -e MINIO_ROOT_PASSWORD=minioaccesskey123123 -e MINIO_REGION=us-west-2 \
+#     minio/minio:RELEASE.2024-04-28T17-53-50Z server /data
+
+# The full stack (`just dev cloudflare`) runs its own MinIO and needs none of this.
 dev +args="": build-api
     {{ WRANGLER }} dev --port {{ PORT }} --ip 0.0.0.0 \
         --var AWS_ACCESS_KEY_ID:${AWS_ACCESS_KEY_ID:-minioaccesskey123123} \
         --var AWS_SECRET_ACCESS_KEY:${AWS_SECRET_ACCESS_KEY:-minioaccesskey123123} \
-        --var AWS_ENDPOINT:${AWS_ENDPOINT:-http://localhost:9100} \
+        --var AWS_ENDPOINT:${AWS_ENDPOINT:-http://localhost:9400} \
         --var AWS_REGION:${AWS_REGION:-us-west-2} \
         --var AWS_S3_BUCKET:${AWS_S3_BUCKET:-localbucket} \
         {{ args }}
