@@ -43,7 +43,7 @@
         {
           "binding": "DB",
           "database_name": "compute-queues-staging",
-          "database_id": "00000000-0000-0000-0000-000000000000"
+          "database_id": "3733bd14-a6e5-43fd-b41d-fea6f4531310"
         }
       ],
       "triggers": { "crons": ["* * * * *"] },

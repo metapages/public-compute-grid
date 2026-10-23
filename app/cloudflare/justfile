@@ -67,23 +67,32 @@ dev +args="": build-api
 setup env="staging":
     #!/usr/bin/env bash
     set -euo pipefail
+    # --update-config=false: wrangler otherwise offers to add its own binding to
+    # wrangler.jsonc, which duplicates the bindings declared there by hand (and
+    # named them identically for D1 and R2, which wrangler then refuses to load).
+    # CI=true keeps it from prompting at all. No R2 *binding* is wanted: the
+    # Worker reaches R2 over its S3 API with presigned URLs.
+    export CI=true
     suffix=$([ "{{ env }}" = "production" ] && echo "" || echo "-{{ env }}")
     db="compute-queues${suffix}"
     bucket="compute-queues${suffix}"
 
     id=$({{ WRANGLER }} d1 list --json | deno eval --quiet "const dbs = JSON.parse(await new Response(Deno.stdin.readable).text()); console.log(dbs.find((d) => d.name === '${db}')?.uuid ?? '')")
     if [ -z "$id" ]; then
-        {{ WRANGLER }} d1 create "${db}"
+        {{ WRANGLER }} d1 create "${db}" --update-config=false
         id=$({{ WRANGLER }} d1 list --json | deno eval --quiet "const dbs = JSON.parse(await new Response(Deno.stdin.readable).text()); console.log(dbs.find((d) => d.name === '${db}')?.uuid ?? '')")
     fi
     deno run --allow-read --allow-write scripts/set-d1-id.ts "${db}" "${id}"
 
     if ! {{ WRANGLER }} r2 bucket info "${bucket}" >/dev/null 2>&1; then
-        {{ WRANGLER }} r2 bucket create "${bucket}"
+        {{ WRANGLER }} r2 bucket create "${bucket}" --update-config=false
     fi
     {{ WRANGLER }} r2 bucket cors set "${bucket}" --file r2-cors.json --force
-    # Data is a cache, not storage: everything expires after a month
-    {{ WRANGLER }} r2 bucket lifecycle add "${bucket}" expire-30-days --expire-days 30 --force || true
+    # Data is a cache, not storage: everything expires after a month. Adding a
+    # rule that already exists is an API error, so only add it once.
+    if ! {{ WRANGLER }} r2 bucket lifecycle list "${bucket}" 2>/dev/null | grep -q "expire-30-days"; then
+        {{ WRANGLER }} r2 bucket lifecycle add "${bucket}" expire-30-days --expire-days 30 --force
+    fi
 
     echo -e ""
     echo -e "{{ bold }}Next:{{ normal }} create an R2 API token (Object Read & Write, bucket ${bucket}) in the dashboard,"
@@ -111,6 +120,10 @@ deploy env="staging": build
     else
         {{ WRANGLER }} deploy --env {{ env }}
     fi
+
+# Run any wrangler command with the repo's credentials (CLOUDFLARE_API_TOKEN from .env)
+wrangler +args="":
+    {{ WRANGLER }} {{ args }}
 
 # Typecheck the Cloudflare entry
 @check:
