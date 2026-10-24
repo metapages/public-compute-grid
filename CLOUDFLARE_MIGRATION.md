@@ -122,6 +122,17 @@ one Durable Object per queue, cron every minute).
 
 ## Findings along the way
 
+- `std/fs` cannot be replaced with plain `node:fs` for the worker's file handling: doing so made a served job input come
+  back empty in the docker stack (CI failed on the inputs/outputs and multi-segment-path tests, locally it passed).
+  `shared/fs.ts` now dispatches — Deno's own calls on Deno, `node:fs` on Workers and Node — because `std/fs` reads Deno
+  globals at import time and `jobtools.ts` is in the Worker's module graph.
+- `get_job_status` swallowed both of its lookup failures and returned a job with no state, so an unreachable or
+  overloaded API was indistinguishable from an absent job. It now reports the two apart, and `waitForJobCompletion` says
+  which of four things happened, so a CI timeout explains itself.
+- CI has a single self-hosted runner workspace, and `test.yml` runs `local mode` and `remote mode` concurrently with no
+  `needs:`, so both jobs check out into the same directory. Worth serializing them; it is a plausible source of the
+  wandering failures seen in this repo's history.
+
 - A submission costs ~360ms of server-side work on Cloudflare, dominated by `queueJobAdd` doing several D1 writes one
   after another plus an R2 PUT for `definition.json`. `KvStore.atomic()` already exists and D1 runs a batch as a single
   round trip, so batching that path is the obvious optimization. Not blocking: jobs run for seconds to minutes.
