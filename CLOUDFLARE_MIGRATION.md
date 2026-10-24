@@ -104,9 +104,37 @@ one Durable Object per queue, cron every minute).
 
 ## 6. Cost: hibernation
 
-- [ ] Hibernatable WebSockets and alarms in place of intervals. Today a queue's DO stays awake while it has a socket or
-      a live interval
-- [ ] Rehydrate queue state from the store on wake
+Measured, not assumed. `accept()` bills duration for the whole time a socket is connected, at 128 MB assumed per object:
+0.125 GB x 2.59M s = **~324,000 GB-s per month per always-connected queue**, against 400,000 GB-s/month included. So the
+first always-on queue is free and each additional one is **~$3/month** ($12.50/million GB-s). WebSocket messages and
+alarm invocations are billed as requests (1M/month included, then $0.15/million), which the current 5s/10s broadcasts
+also consume.
+
+A throwaway probe on real Cloudflare settled the design question the docs leave ambiguous:
+
+| probe                                      | result                                               |
+| ------------------------------------------ | ---------------------------------------------------- |
+| hibernatable socket + a 5s repeating alarm | one instance across 20 alarms — never hibernated     |
+| hibernatable socket, no timers             | two constructions — hibernated, in-memory state gone |
+
+So **a pending repeating alarm prevents hibernation**: swapping `setInterval` for `setAlarm` saves nothing. Hibernation
+requires no periodic timers at all while a queue is idle, which means making the queue event-driven:
+
+- [ ] Worker liveness from `webSocketClose`/`webSocketError` instead of the 5s poll, with a timer only while jobs are
+      actually assigned to a worker
+- [ ] Push job states on change only (clients already get a snapshot on connect); drop the 10s re-push
+- [ ] Evict finished jobs with a one-shot alarm set when a job finishes, not a 60s poll
+- [ ] Run the conflict and bad-job checks on enqueue rather than on a timer
+- [ ] `ctx.acceptWebSocket` plus `webSocketMessage`/`Close`/`Error`, with per-socket identity in `serializeAttachment`
+      and queue state rehydrated from the store on wake
+- [ ] Persist log buffers incrementally: they are in memory only until a job finishes, so an eviction mid-job loses them
+      today. This also makes logs survive a crash
+- [ ] All of it behind the scheduler seam, because `BaseDockerJobQueue` is shared with the Deno server, where the
+      periodic channel broadcasts are how instances converge, and with the local-mode worker
+
+This is the largest remaining item and it touches the core queue used by three runtimes. It is a cost optimisation, not
+a correctness fix, and the bill only bites with many always-on queues — so it is sequenced after cutover unless that
+number is large.
 
 ## 7. Cleanup (before Deno Deploy shuts down)
 
