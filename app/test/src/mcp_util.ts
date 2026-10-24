@@ -38,6 +38,12 @@ export interface MCPResponse {
 export interface McpJobStatus {
   success?: boolean;
   jobId?: string;
+  /** false when the API answered but has no record of the job */
+  found?: boolean;
+  /** set when the API itself could not be reached, so the state is unknown */
+  error?: string;
+  lookupFailures?: string[];
+  note?: string;
   viewUrl?: string;
   status?: {
     state?: string;
@@ -269,9 +275,22 @@ export async function waitForJobCompletion(
   const startTime = Date.now();
 
   let lastState: string | undefined;
+  let polls = 0;
+  let unreachablePolls = 0;
+  let lastFailure: string | undefined;
+  let everFound = false;
   while (Date.now() - startTime < timeoutMs) {
     const status = await mcpGetJobStatus({ queue, jobId });
+    polls++;
     lastState = status.status?.state;
+    if (status.found) {
+      everFound = true;
+    }
+    // get_job_status reports an unreachable API separately from an absent job
+    if (status.success === false) {
+      unreachablePolls++;
+      lastFailure = status.lookupFailures?.join("; ") ?? status.error;
+    }
 
     if (lastState === "Finished" || lastState === "Cancelled") {
       return status;
@@ -280,12 +299,20 @@ export async function waitForJobCompletion(
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
 
-  // Report the state it was stuck in: "Queued" means it never got a worker
-  // slot, "Running" means the container itself was slow, and undefined means
-  // the job is not on the queue at all. Without this a CI timeout says nothing.
-  throw new Error(
-    `Job ${jobId} did not complete within ${timeoutMs}ms (last state: ${lastState ?? "not on queue"})`,
-  );
+  // Say which of the three happened, because they have different fixes:
+  // "Queued" never got a worker slot, "Running" was a slow container, no state
+  // at all means the queue has no record of the job (never submitted, replaced
+  // by a later job in its namespace, or expired), and a failed lookup means the
+  // API was unreachable and the state is simply unknown.
+  const why = lastState
+    ? `last state: ${lastState}`
+    : unreachablePolls > 0
+    ? `the job API was unreachable on ${unreachablePolls}/${polls} polls, so the state is unknown` +
+      (lastFailure ? ` (last failure: ${lastFailure})` : "")
+    : everFound
+    ? "the API knows the job but reported no state"
+    : `the API has no record of the job on queue ${queue}`;
+  throw new Error(`Job ${jobId} did not complete within ${timeoutMs}ms (${why})`);
 }
 
 /**
