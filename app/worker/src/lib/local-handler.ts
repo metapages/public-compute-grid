@@ -127,21 +127,31 @@ const uploadHandler = async (c: Context) => {
       return c.text("No file uploaded");
     }
 
-    // Create a file write stream
-    const file = await Deno.open(fullFilePath, {
+    // Write to a temporary file and rename it into place. Keys are content
+    // hashes, so the same file can be uploaded twice at once; truncating the
+    // live file in place handed concurrent readers an empty or partial file.
+    const tmpFilePath = `${fullFilePath}.${crypto.randomUUID()}.tmp`;
+    const file = await Deno.open(tmpFilePath, {
       write: true,
       create: true,
       truncate: true,
       mode: 0o777,
     });
 
-    // Stream the request body directly to the file
-    await stream.pipeTo(file.writable);
     try {
-      // https://github.com/denoland/deno/issues/14210
-      file.close();
-    } catch (_) {
-      // pass
+      // Stream the request body directly to the file
+      await stream.pipeTo(file.writable);
+      await Deno.rename(tmpFilePath, fullFilePath);
+    } catch (err) {
+      await Deno.remove(tmpFilePath).catch(() => {});
+      throw err;
+    } finally {
+      try {
+        // https://github.com/denoland/deno/issues/14210
+        file.close();
+      } catch (_) {
+        // pass
+      }
     }
 
     return c.text(`file saved to ${fullFilePath}`);

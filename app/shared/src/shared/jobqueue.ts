@@ -1282,6 +1282,35 @@ export class BaseDockerJobQueue {
 
     const jobId = enqueued.id;
 
+    // A finished record whose results are gone (isFinishedJobMissingResults)
+    // has to be let go of by every server before this job can be queued again.
+    // Dropping it in the db is not enough: the other servers still hold it in
+    // memory, and Finished beats Queued when they resolve our Queued broadcast
+    // against their copy - so the job goes straight back to Finished without
+    // ever running, which is exactly how it stays stuck.
+    //
+    // Finished/Deleted is the one finished state that loses to a newly queued
+    // job, and broadcasting it also tells the workers to drop the job from
+    // their own caches. The enqueue below then wins everywhere.
+    const existingJob = this.state.jobs[jobId] ||
+      await this.db.getFinishedJob(jobId);
+    if (
+      existingJob &&
+      await this.db.isFinishedJobMissingResults(jobId, existingJob)
+    ) {
+      console.log(
+        `${this.addressShortString} ${
+          getJobColorizedString(jobId)
+        } 🧟 finished record has no results left: deleting it everywhere so the job runs again`,
+      );
+      await this.stateChangeJobFinished(jobId, {
+        type: DockerJobState.Finished,
+        reason: DockerJobFinishedReason.Deleted,
+        time: Date.now(),
+        namespace: "*",
+      });
+    }
+
     // save to db
     const inMemoryJob = await this.db.queueJobAdd({
       queue: this.address,

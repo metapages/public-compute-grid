@@ -188,6 +188,10 @@ test mode="remote" +args="": _build_shared check (_validate_mode mode)
     export AWS_REGION="us-west-2"
     export AWS_S3_BUCKET="localbucket"
 
+    # The test service must idle: test-in-docker execs the one suite run. Its
+    # default command is the `just dev` watch run, which would race this one.
+    export TEST_SERVICE_COMMAND="tail -f /dev/null"
+
     docker rm "${STACK}-worker-1" 2>/dev/null || true
     just shared/build
     # tests don't need the browser but dir needs to exist

@@ -42,6 +42,21 @@ let getJsonFromS3: <T>(key: string) => Promise<T | undefined>;
 const definitionCache = new LRUMap<string, DockerJobDefinitionInputRefs>(200);
 
 /**
+ * Finished reasons whose record is handed straight back to a later submission
+ * of the same job instead of running it again (see resolveMostCorrectJob), and
+ * that a worker only ever reports together with a result.
+ *
+ * JobReplacedByClient is also served from the record, but it is created without
+ * a result, so a missing result says nothing about it. Cancelled, WorkerLost
+ * and Deleted already re-queue on their own.
+ */
+const FINISHED_REASONS_SERVED_FROM_RECORD: DockerJobFinishedReason[] = [
+  DockerJobFinishedReason.Success,
+  DockerJobFinishedReason.Error,
+  DockerJobFinishedReason.TimedOut,
+];
+
+/**
  *  /job/:jobId/<s3 key to definition.json>
  *  /job/:jobId/<s3 key to result.json>
  *  /job-queue-namespace/:jobId/:queue/:namespace/true
@@ -164,6 +179,19 @@ export class DB {
         existingInMemoryJob = await this.queueJobGet({ queue, jobId });
       }
 
+      // Both the queue record and the finished record can promise results that
+      // are gone (see isFinishedJobMissingResults), and either one is enough to
+      // answer this submission with a finished job that has nothing behind it.
+      // Check both, and if either is dead, drop it and run the job.
+      let droppedDeadFinishedRecord = false;
+      if (
+        existingInMemoryJob &&
+        await this.isFinishedJobMissingResults(jobId, existingInMemoryJob)
+      ) {
+        existingInMemoryJob = null;
+        droppedDeadFinishedRecord = true;
+      }
+
       if (existingInMemoryJob) {
         const tentativeEnqueudJob = setJobStateQueued(existingInMemoryJob, { time: now });
         const mostCorrectJob = resolveMostCorrectJob(existingInMemoryJob, tentativeEnqueudJob);
@@ -182,7 +210,24 @@ export class DB {
       // ok here means that the job *can* be set to Queued
       // but before that, we need to check if the job is finished
 
-      const existingFinishedJob = await this.getFinishedJob(jobId);
+      let existingFinishedJob = await this.getFinishedJob(jobId);
+      if (
+        existingFinishedJob &&
+        await this.isFinishedJobMissingResults(jobId, existingFinishedJob)
+      ) {
+        existingFinishedJob = null;
+        droppedDeadFinishedRecord = true;
+      }
+
+      if (droppedDeadFinishedRecord) {
+        console.log(
+          `${getQueueColorizedString(queue)} ${
+            getJobColorizedString(jobId)
+          } 🧟 finished record has no results left: running the job again`,
+        );
+        await this.deleteFinishedJob(jobId);
+      }
+
       // console.log(`🌎 queueJobAdd existsingFinishedJob ${jobId}`, existingFinishedJob);
       if (existingFinishedJob) {
         const tentativeEnqueudJob = setJobStateQueued(existingFinishedJob, { time: now });
@@ -221,7 +266,15 @@ export class DB {
       const control = job?.control || {};
       const definitionS3Key = formatDefinitionS3Key(jobId);
 
-      if (!existingFinishedJob && !definitionCache.has(definitionS3Key)) {
+      // `droppedDeadFinishedRecord`: the definition expires on its own clock, so
+      // when a job's results have gone its definition may be gone too, and no
+      // worker can run a job without it. This submission carries the
+      // definition, so write it rather than trust the in-process cache, which
+      // only records that this process wrote it at some point.
+      if (
+        !existingFinishedJob &&
+        (droppedDeadFinishedRecord || !definitionCache.has(definitionS3Key))
+      ) {
         await putJsonToS3(
           definitionS3Key,
           job.definition,
@@ -229,40 +282,35 @@ export class DB {
         definitionCache.set(definitionS3Key, job.definition);
       }
 
-      if (existingNamespaces.length === 0 && !existingFinishedJob) {
-        await this.kv
-          .atomic()
-          .set(["job", jobId], definitionS3Key, { expireIn: JobDataCacheDurationMilliseconds })
-          // if the value in "job-queue-namespace" is false, then the job is not
-          // part of that namespace anymore
-          .set(["job-queue-namespace", jobId, queue, namespace], true, {
-            expireIn: JobDataCacheDurationMilliseconds,
-          })
-          .set(["queue", queue, jobId], inMemoryJob, {
-            expireIn: JobDataCacheDurationMilliseconds,
-          })
-          .commit();
+      // The definition pointer is (re)set every time a job is queued, not only
+      // the first time it is seen on any queue. It expires on its own clock, so
+      // a long-lived job id can keep a record saying "Finished" while nothing
+      // can find its definition any more - and a job without a definition
+      // cannot be run by any worker. Re-setting it here is idempotent (the key
+      // is derived from the job id) and keeps it alive for as long as the job
+      // is still being submitted.
+      await this.kv
+        .atomic()
+        .set(["job", jobId], definitionS3Key, { expireIn: JobDataCacheDurationMilliseconds })
+        // if the value in "job-queue-namespace" is false, then the job is not
+        // part of that namespace anymore
+        .set(["job-queue-namespace", jobId, queue, namespace], true, {
+          expireIn: JobDataCacheDurationMilliseconds,
+        })
+        .set(["queue", queue, jobId], inMemoryJob, {
+          expireIn: JobDataCacheDurationMilliseconds,
+        })
+        .commit();
 
-        // don't await this, it's not critical
-        // this.appendToJobHistory({
-        //   queue,
-        //   jobId,
-        //   value: {
-        //     type: DockerJobState.Queued,
-        //     time: Date.now(),
-        //   },
-        // });
-      } else {
-        await this.kv
-          .atomic()
-          .set(["job-queue-namespace", jobId, queue, namespace], true, {
-            expireIn: JobDataCacheDurationMilliseconds,
-          })
-          .set(["queue", queue, jobId], inMemoryJob, {
-            expireIn: JobDataCacheDurationMilliseconds,
-          })
-          .commit();
-      }
+      // don't await this, it's not critical
+      // this.appendToJobHistory({
+      //   queue,
+      //   jobId,
+      //   value: {
+      //     type: DockerJobState.Queued,
+      //     time: Date.now(),
+      //   },
+      // });
 
       if (control) {
         // partition jobs that might be shared by the same namespace
@@ -647,6 +695,36 @@ export class DB {
     const entry = await this.kv.get<InMemoryDockerJob>(["job-finished", jobId]);
     // console.log(`🌎 getFinishedJob ${jobId}`, entry.value);
     return entry.value;
+  }
+
+  /**
+   * Does this finished record promise results that are no longer there?
+   *
+   * A job id is a hash of the job definition, so submitting the same job again
+   * is a cache hit: the finished record is handed back and the job does not
+   * run. That is only valid while the results the record refers to are still
+   * there. The record lives in kv and the results live in blob storage, each
+   * with its own expiry, and the results can also be deleted on their own. A
+   * record that outlives its results then answers every later submission with
+   * "Finished" and nothing behind it - permanently, and for every client of
+   * every queue, since the same definition hashes to the same id everywhere.
+   * The job can never run again.
+   *
+   * Callers treat such a record as absent, so the job is queued and run.
+   */
+  async isFinishedJobMissingResults(
+    jobId: string,
+    job: InMemoryDockerJob,
+  ): Promise<boolean> {
+    if (job?.state !== DockerJobState.Finished) {
+      return false;
+    }
+    const reason = job.finishedReason as DockerJobFinishedReason | undefined;
+    if (!reason || !FINISHED_REASONS_SERVED_FROM_RECORD.includes(reason)) {
+      return false;
+    }
+    const results = await this.getJobFinishedResults(jobId);
+    return !results?.finished?.result;
   }
 
   async setFinishedJob(jobId: string, value: InMemoryDockerJob): Promise<InMemoryDockerJob> {

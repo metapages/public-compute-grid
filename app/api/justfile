@@ -28,6 +28,7 @@ dev +args="": _build_shared
 @check: _build_shared
     deno check src/server.ts
     echo "✅ api typescript compilation"
+    just check-deploy
 
 # Lint
 @lint:
@@ -77,34 +78,56 @@ _serve:
 # Perform a fresh build and deploy to deno deploy
 deploy: build
     #!/usr/bin/env bash
-    # The new deno deploy does not like workspaces, so we must
-    # modify a workspace into a standalone app for the api
     set -euo pipefail
     deploy=$(mktemp -d)
-    tmp=$(mktemp)
-    cp deno.json $deploy/
-    cp -r src $deploy/
-    mkdir -p $deploy/app/browser
-    cp -r ../browser/dist $deploy/app/browser/
-    cp -r ../shared/src $deploy/shared
-    # the mcp package: /mcp routes import its server factory and view-url helpers
-    cp -r ../mcp/src $deploy/mcp
-    # the docs site, served at /docs (root "docs/dist" in handlerHono.ts)
-    mkdir -p $deploy/docs
-    cp -r ../../docs/dist $deploy/docs/
-    jq --slurpfile src ../../deno.json '.imports = $src[0].imports' deno.json > $deploy/deno.json
-    jq --slurpfile src ../../deno.json '.unstable = $src[0].unstable' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json
-    jq --slurpfile src ../../deno.json '.nodeModulesDir = $src[0].nodeModulesDir' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json
-    jq '.imports["@/"] = "./src/"' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json
-    jq '.imports["@metapages/compute-queues-shared"] = "./shared/mod.ts"' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json
-    jq '.imports["@shared/"] = "./shared/shared/"' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json
-    # mirror the exports map in app/mcp/deno.json, which the workspace normally resolves
-    jq '.imports["@metapages/compute-queues-mcp"] = "./mcp/mod.ts"' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json
-    jq '.imports["@metapages/compute-queues-mcp/server-factory"] = "./mcp/server-factory.ts"' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json
-    jq '.imports["@metapages/compute-queues-mcp/view-url"] = "./mcp/util/view-url.ts"' $deploy/deno.json > "$tmp" && mv "$tmp" $deploy/deno.json
+    just _deploy-dir "$deploy" true
     cd $deploy/
     du -sh .
     deno deploy --prod
+
+# Assemble the standalone deploy dir (no assets) and typecheck it, catching import map gaps before deno deploy does
+check-deploy: _build_shared
+    #!/usr/bin/env bash
+    set -euo pipefail
+    deploy=$(mktemp -d)
+    trap 'rm -rf "$deploy"' EXIT
+    just _deploy-dir "$deploy" false
+    # Run outside the workspace: only the generated deno.json may resolve imports
+    cd "$deploy" && deno check --quiet src/server.ts
+    echo "✅ api deploy bundle resolves and typechecks"
+
+# The new deno deploy does not like workspaces, so we must modify a workspace into a standalone app for the api
+_deploy-dir deploy assets="true":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    deploy="{{ deploy }}"
+    tmp=$(mktemp)
+    cp -r src $deploy/
+    cp -r ../shared/src $deploy/shared
+    # the mcp package: /mcp routes import its server factory and helpers
+    cp -r ../mcp/src $deploy/mcp
+    if [ "{{ assets }}" = "true" ]; then
+        mkdir -p $deploy/app/browser
+        cp -r ../browser/dist $deploy/app/browser/
+        # the docs site, served at /docs (root "docs/dist" in handlerHono.ts)
+        mkdir -p $deploy/docs
+        cp -r ../../docs/dist $deploy/docs/
+    fi
+    jq --slurpfile root ../../deno.json --slurpfile mcp ../mcp/deno.json '
+        .imports = $root[0].imports
+        | .unstable = $root[0].unstable
+        | .nodeModulesDir = $root[0].nodeModulesDir
+        | .imports["@/"] = "./src/"
+        | .imports["@metapages/compute-queues-shared"] = "./shared/mod.ts"
+        | .imports["@shared/"] = "./shared/shared/"
+        # mirror the whole exports map of app/mcp/deno.json, which the workspace normally resolves:
+        # "./foo" -> "./src/x.ts" becomes "@metapages/compute-queues-mcp/foo" -> "./mcp/x.ts"
+        | .imports += ($mcp[0].exports | to_entries | map({
+            key: ("@metapages/compute-queues-mcp" + (.key | ltrimstr("."))),
+            value: ("./mcp/" + (.value | ltrimstr("./src/")))
+          }) | from_entries)
+    ' deno.json > "$tmp"
+    mv "$tmp" $deploy/deno.json
 
 # Delete generate assets and caches
 clean:
