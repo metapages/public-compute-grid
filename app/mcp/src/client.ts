@@ -9,6 +9,23 @@ export interface JobQueueClient {
 
 export type FetchFunction = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
+/**
+ * The server explains refusals in the response body — a 409 from a submit says
+ * the queue did not take the job, for instance. Throwing only the status code
+ * threw that explanation away, so read it and put it in the error.
+ */
+const failed = async (what: string, response: Response): Promise<Error> => {
+  let detail = "";
+  try {
+    detail = (await response.text()).trim();
+  } catch (err) {
+    detail = `(the response body could not be read: ${(err as Error).message})`;
+  }
+  return new Error(
+    `${what}: ${response.status} ${response.statusText}${detail ? ` — ${detail}` : ""}`,
+  );
+};
+
 export class WorkerMetapageClient implements JobQueueClient {
   /** Where this process sends its own HTTP requests. */
   public baseUrl: string;
@@ -37,7 +54,7 @@ export class WorkerMetapageClient implements JobQueueClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to submit job: ${response.status} ${response.statusText}`);
+      throw await failed("Failed to submit job", response);
     }
 
     const result = await response.json();
@@ -54,7 +71,7 @@ export class WorkerMetapageClient implements JobQueueClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to get job status: ${response.status} ${response.statusText}`);
+      throw await failed("Failed to get job status", response);
     }
 
     const result = await response.json();
@@ -71,7 +88,7 @@ export class WorkerMetapageClient implements JobQueueClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to get job result: ${response.status} ${response.statusText}`);
+      throw await failed("Failed to get job result", response);
     }
 
     return await response.json();
@@ -90,7 +107,7 @@ export class WorkerMetapageClient implements JobQueueClient {
       { headers: { "Content-Type": "application/json" } },
     );
     if (!response.ok) {
-      throw new Error(`Failed to get job result: ${response.status} ${response.statusText}`);
+      throw await failed("Failed to get job result", response);
     }
     const body = await response.json();
     return body?.data?.finished?.result;
@@ -105,7 +122,7 @@ export class WorkerMetapageClient implements JobQueueClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to list jobs: ${response.status} ${response.statusText}`);
+      throw await failed("Failed to list jobs", response);
     }
 
     return await response.json();
@@ -127,7 +144,7 @@ export class WorkerMetapageClient implements JobQueueClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to cancel job: ${response.status} ${response.statusText}`);
+      throw await failed("Failed to cancel job", response);
     }
   }
 
@@ -138,7 +155,7 @@ export class WorkerMetapageClient implements JobQueueClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to upload file: ${response.status} ${response.statusText}`);
+      throw await failed("Failed to upload file", response);
     }
 
     return key;
@@ -150,7 +167,7 @@ export class WorkerMetapageClient implements JobQueueClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to download file: ${response.status} ${response.statusText}`);
+      throw await failed("Failed to download file", response);
     }
 
     return await response.arrayBuffer();

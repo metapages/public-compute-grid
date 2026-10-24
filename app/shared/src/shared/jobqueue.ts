@@ -1272,12 +1272,18 @@ export class BaseDockerJobQueue {
   }
 
   // Mark methods that could be overridden as protected
-  public async stateChangeJobEnqueue(enqueued: EnqueueJob): Promise<void> {
-    // console.log(`${this.addressShortString} 🌎 stateChangeJobEnqueue`, enqueued);
-
+  /**
+   * Returns the queued job, or undefined when it was not added — the job was
+   * removed or replaced while this submission was in flight. Callers must not
+   * treat undefined as success: an HTTP submit that answers 200 for a job the
+   * queue never took leaves the client polling forever for a job that is not
+   * there, which is exactly how that failure used to present.
+   */
+  public async stateChangeJobEnqueue(enqueued: EnqueueJob): Promise<InMemoryDockerJob | undefined> {
     if (!enqueued?.definition) {
-      // console.log(`enqueueJob but bad state ${JSON.stringify(enqueued).substring(0, 100)}`);
-      return;
+      throw new Error(
+        `Cannot enqueue job ${enqueued?.id ?? "(no id)"} on queue ${this.address}: the job has no definition`,
+      );
     }
 
     const jobId = enqueued.id;
@@ -1320,18 +1326,24 @@ export class BaseDockerJobQueue {
 
     // console.log(`${this.addressShortString} 🌎 stateChangeJobEnqueue inMemoryJob:`, inMemoryJob);
 
-    if (inMemoryJob) {
-      this.state.jobs[jobId] = inMemoryJob;
-    } else {
-      // if no job is return by queueJobAdd it means the job no longer exists
-      return;
+    if (!inMemoryJob) {
+      // queueJobAdd returning nothing means the job no longer exists: it was
+      // removed or superseded between this submission and the write.
+      console.log(
+        `${this.addressShortString} ${
+          getJobColorizedString(jobId)
+        } ❗ not queued: the job was removed or replaced while being submitted`,
+      );
+      return undefined;
     }
+    this.state.jobs[jobId] = inMemoryJob;
     this.checkForSourceConflicts();
 
     // broadcast first
     // enqueueing a job should broadcast the whole queue
     this.broadcastJobStatesToChannel();
     this.broadcastJobStatesToWebsockets();
+    return inMemoryJob;
   }
 
   protected async removeOldFinishedJobsFromQueue() {
