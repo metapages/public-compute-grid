@@ -103,56 +103,67 @@ deployd`) with a **14400s (4h) TTL**, and `mtfm.io` is hosted on **Google Cloud 
 (`ns-cloud-*.googledomains.com`), not Cloudflare. `js.mtfm.io` points at the same Deno Deploy IP, so the zone carries
 other services too.
 
-### Decisions needed before starting
+DNS is deliberately **not** on the critical path. Production runs first on its own `workers.dev` hostname, with its own
+D1 and R2, while `container.mtfm.io` keeps pointing at Deno Deploy. Nothing about phase 5a can affect production
+traffic.
 
-- **How `container.mtfm.io` reaches a Worker.** A Worker can only serve a hostname that belongs to a zone on this
-  Cloudflare account, and `mtfm.io` is not one. Two routes:
-  1. **Delegate just the subdomain** (recommended): add `container.mtfm.io` to Cloudflare as its own zone and add NS
-     records for it in Google Cloud DNS. Nothing else under `mtfm.io` moves, so `js.mtfm.io` and the rest are untouched.
-     Confirm subdomain zones are available on the account's plan before committing to this.
-  2. **Move the whole `mtfm.io` zone** to Cloudflare (nameserver change at the registrar). More blast radius: every
-     record has to be copied first, and `js.mtfm.io` and anything else in the zone move with it.
-- **Old job results.** Results live in the current S3 bucket; after cutover the Worker reads R2, so results from before
-  the cutover return 404 until they would have expired anyway (~1 month). A job id is the hash of its definition, so
-  resubmitting re-runs the job and produces a fresh result. Accept that, or copy the bucket, or add a temporary
-  read-through to S3. Confirm nothing depends on month-old results.
-- **`/mcp/ws` is gone.** Production still advertises the legacy tool list (`create_job`, `execute_job`, …) at
-  `/mcp/info` and still serves `/mcp/ws`; both go away. `/mcp` (Streamable HTTP) is unaffected. Confirm no client is
-  pointed at `/mcp/ws`.
+### 5a. Production on workers.dev (no DNS, no effect on the current deployment)
 
-### Infrastructure to create
-
+- [ ] An R2 API token with **Object Read & Write**. Scoping it to _all_ buckets in the account covers staging and
+      production in one go and avoids the mis-scoped-token trap (a token scoped elsewhere fails every request with
+      `403 AccessDenied`, which reads like a signing bug)
 - [ ] `just cloudflare setup production` — D1 `compute-queues`, R2 `compute-queues` with CORS and the 35-day expiry
-      rule, and the real `database_id` written into `wrangler.jsonc`. **Commit that id.**
-- [ ] An R2 API token (Object Read & Write, scoped to `compute-queues`), then
-      `R2_ACCESS_KEY_ID=… R2_SECRET_ACCESS_KEY=… just cloudflare secrets production`
-- [ ] The zone/delegation chosen above, then a Workers **Custom Domain** for `container.mtfm.io` on the `compute-queues`
-      Worker (add it to `wrangler.jsonc` as a route so it is in version control)
-- [ ] GitHub repo secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, and a `production` option in
-      `.github/workflows/deploy-cloudflare.yml`
-
-### Before any traffic moves
-
+      rule, and the real `database_id` written into `wrangler.jsonc`. **Commit that id**
+- [ ] `R2_ACCESS_KEY_ID=… R2_SECRET_ACCESS_KEY=… just cloudflare secrets production`
 - [ ] Publish a worker release so deployed workers pick up the quiet-while-idle cadence (bump `app/worker/mod.json`).
-      Without it queues stay resident: old workers re-register every 10s. They keep working either way
-- [ ] `just cloudflare deploy production` — live on its own hostname, serving no real traffic yet
-- [ ] Verify production **before** the DNS flip: `just test-url https://<the custom domain>` (or via a hosts override
-      while DNS still points at Deno Deploy), then attach a real worker and run the OpenThermo job end to end
-- [ ] Check the blob path specifically: upload, `exists`, download, and a job's outputs, since this is the first use of
-      the production R2 bucket and token
-- [ ] Lower the `container.mtfm.io` TTL in Google Cloud DNS to 60s and **wait out the old 4h TTL** before cutting over
+      Without it queues stay resident: older workers re-register every 10s. They keep working either way
+- [ ] `just cloudflare deploy production` → live at `compute-queues.<account subdomain>.workers.dev`
+- [ ] Validate there, against the real production infrastructure:
+  - [ ] `just test-url https://compute-queues.<subdomain>.workers.dev` (the full contract suite with a real worker)
+  - [ ] Blobs specifically — upload, `exists`, download, and a job's outputs — since this is the first use of the
+        production bucket and token
+  - [ ] The OpenThermo build end to end through `cq`
+  - [ ] Cron firing (`wrangler tail` shows scheduled invocations) and hibernation (the queue's `serverId` changes across
+        an idle window while a worker stays attached)
+- [ ] Optional soft launch: point one real worker, or one queue, at the workers.dev hostname and use it for real work.
+      Jobs land in production D1/R2, which is harmless — data expires and job ids are content hashes — but it does mean
+      production storage is no longer pristine, so keep functional testing on staging if that matters
 
-### Cutover
+Note: datarefs embed absolute URLs, so jobs submitted against the workers.dev origin carry input URLs on that origin.
+They keep resolving as long as the workers.dev hostname stays enabled, which is a reason to leave it on after cutover.
 
-- [ ] Point `container.mtfm.io` at the Worker (A record → the Custom Domain). Watch `wrangler tail`, queue status, and
-      that workers reconnect — they use ReconnectingWebSocket, so they reattach on their own
-- [ ] Confirm, on production: a job submitted and followed to completion, build and run logs, outputs served from R2,
-      `/`, `/docs`, `/mcp`, and the cron firing (scheduled invocations in `wrangler tail`)
+### 5b. DNS, when you are ready
+
+A Worker can only serve a hostname in a zone on this Cloudflare account, and `mtfm.io` is not one. Two routes:
+
+1. **Delegate just the subdomain** (recommended): add `container.mtfm.io` to Cloudflare as its own zone and add NS
+   records for it in Google Cloud DNS. Nothing else under `mtfm.io` moves, so `js.mtfm.io` and the rest are untouched.
+   Confirm subdomain zones are available on the account's plan first
+2. **Move the whole `mtfm.io` zone** to Cloudflare (nameserver change at the registrar). Every record has to be copied
+   first, and `js.mtfm.io` and anything else in the zone move with it
+
+- [ ] Whichever route, then a Workers **Custom Domain** for `container.mtfm.io` on the `compute-queues` Worker, added to
+      `wrangler.jsonc` so it is in version control
+- [ ] Lower the `container.mtfm.io` TTL in Google Cloud DNS to 60s and **wait out the old 4h TTL**
+- [ ] Smoke-test the custom domain before the flip (a hosts override works while DNS still points at Deno Deploy)
+- [ ] Flip the record. Watch `wrangler tail`, queue status, and that workers reconnect — they use ReconnectingWebSocket,
+      so they reattach on their own
+- [ ] Confirm on the real hostname: a job submitted and followed to completion, build and run logs, outputs from R2,
+      `/`, `/docs`, `/mcp`, cron
 - [ ] Watch for 48h. Leave Deno Deploy running and untouched for ~2 weeks
 
-**Rollback:** restore the A record. Deno Deploy is current — its deploys from main were broken from Oct 6 and fixed on
-Oct 21 (#310/#311), and the last two runs succeeded — so rollback lands on current code. Jobs submitted during the
+**Rollback:** restore the A record. Deno Deploy is current — its deploys from main broke on Oct 6 and were fixed on Oct
+21 (#310/#311), and the last two runs succeeded — so rollback lands on current code. Jobs submitted during the
 Cloudflare window live in D1/R2 and will not be visible after a rollback; resubmitting re-runs them.
+
+### Decisions that still need an answer
+
+- **Old job results.** After cutover the Worker reads R2, so results from before it return 404 until they would have
+  expired anyway (~1 month). Job ids are content hashes, so resubmitting re-runs the job. Accept that, copy the bucket,
+  or add a temporary read-through to S3
+- **`/mcp/ws` is gone.** Production still serves it and still advertises the legacy tool list (`create_job`,
+  `execute_job`, …) at `/mcp/info`; both go away. `/mcp` (Streamable HTTP) is unaffected. Confirm no client uses
+  `/mcp/ws`
 
 ## 6. Cost: hibernation
 

@@ -3,6 +3,11 @@
 {
   "$schema": "https://unpkg.com/wrangler@4.151.3/config-schema.json",
   "name": "compute-queues",
+  // Reachable at compute-queues.<account subdomain>.workers.dev. Production is
+  // validated there first, with its own D1 and R2, while container.mtfm.io
+  // still points at Deno Deploy — so DNS is not on the critical path. The
+  // custom domain for container.mtfm.io is added here at cutover.
+  "workers_dev": true,
   "main": "dist/worker.js",
   "no_bundle": true,
   "compatibility_date": "2026-10-01",
