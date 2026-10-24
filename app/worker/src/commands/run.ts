@@ -329,9 +329,29 @@ export async function connectToServer(
     dockerJobQueue.register();
   });
 
+  // How chatty this worker is on an idle queue decides whether the server can
+  // sleep. A Cloudflare Durable Object hibernates after roughly 10-15s of
+  // silence, and anything it receives wakes it, so pinging every 5s around the
+  // clock keeps it resident (and billed) even when nothing is happening.
+  //
+  // While this worker has jobs the server is busy anyway, so ping often and
+  // notice a broken connection quickly. While it is idle, ping slowly: there
+  // is no work to stall, and the queue gets to sleep. Receiving work switches
+  // back to the fast cadence immediately, because that arrives as a message.
+  const PING_INTERVAL_BUSY = ms("5s") as number;
+  const PING_INTERVAL_IDLE = ms("30s") as number;
+  const SILENCE_TOLERANCE_BUSY = ms("10s") as number;
+  const SILENCE_TOLERANCE_IDLE = ms("90s") as number;
+  const isBusy = () => Object.keys(dockerJobQueue.queue).length > 0;
+  const pingInterval = () => (isBusy() ? PING_INTERVAL_BUSY : PING_INTERVAL_IDLE);
+  const silenceTolerance = () => (isBusy() ? SILENCE_TOLERANCE_BUSY : SILENCE_TOLERANCE_IDLE);
+
   // let closed = false;
   // const pingInterval =
   setInterval(() => {
+    if (Date.now() - _timeLastPing < pingInterval()) {
+      return;
+    }
     if (rws.readyState === rws.OPEN) {
       // console.log("🌳 pinging");
       try {
@@ -361,24 +381,26 @@ export async function connectToServer(
     dockerJobQueue.stopPeriodicRegistration();
   });
 
-  const intervalSinceNoTrafficToTriggerReconnect = ms("10s") as number;
   const reconnectCheckInterval = ms("3s") as number;
   const reconnectCheck = () => {
     const timeSinceLastPong = Date.now() - timeLastPong;
     const timeSinceLastMessage = Date.now() - lastMessageReceived;
+    // Tolerate the quiet an idle queue is entitled to: these thresholds have to
+    // sit above the ping cadence, or the worker reconnects on its own silence.
+    const tolerance = silenceTolerance();
 
     if (
-      timeSinceLastPong >= intervalSinceNoTrafficToTriggerReconnect &&
+      timeSinceLastPong >= tolerance &&
       rws.readyState === rws.OPEN
     ) {
       console.log(
         `🚨 Reconnecting because no PONG since ${humanizeDuration(timeSinceLastPong)} >= ${
-          humanizeDuration(intervalSinceNoTrafficToTriggerReconnect)
+          humanizeDuration(tolerance)
         }`,
       );
       rws.reconnect();
     } else if (
-      timeSinceLastMessage >= (ms("30s") as number) &&
+      timeSinceLastMessage >= tolerance * 3 &&
       rws.readyState === rws.OPEN
     ) {
       console.log(
@@ -410,13 +432,19 @@ export async function connectToServer(
   // watchdog below see ~56 years of silence and reconnect immediately.
   let timeSinceLastJobStates = Date.now();
 
-  const twentySeconds = ms("20s") as number;
   setInterval(() => {
-    if (Date.now() - timeSinceLastJobStates > twentySeconds) {
+    // Only while this worker has jobs. A server that is sleeping because the
+    // queue is idle sends no JobStates at all, and reconnecting over that
+    // would wake it every 20s forever — the opposite of the point.
+    if (!isBusy()) {
+      return;
+    }
+    const silence = Date.now() - timeSinceLastJobStates;
+    if (silence > SILENCE_TOLERANCE_BUSY * 2) {
       console.log(
-        `🚨 Reconnecting because no JobStates since ${humanizeDuration(Date.now() - timeSinceLastJobStates)} >= ${
-          humanizeDuration(twentySeconds)
-        }`,
+        `🚨 Reconnecting because no JobStates since ${humanizeDuration(silence)} >= ${
+          humanizeDuration(SILENCE_TOLERANCE_BUSY * 2)
+        } while running jobs`,
       );
       rws.reconnect();
     }

@@ -104,37 +104,40 @@ one Durable Object per queue, cron every minute).
 
 ## 6. Cost: hibernation
 
-Measured, not assumed. `accept()` bills duration for the whole time a socket is connected, at 128 MB assumed per object:
-0.125 GB x 2.59M s = **~324,000 GB-s per month per always-connected queue**, against 400,000 GB-s/month included. So the
-first always-on queue is free and each additional one is **~$3/month** ($12.50/million GB-s). WebSocket messages and
-alarm invocations are billed as requests (1M/month included, then $0.15/million), which the current 5s/10s broadcasts
-also consume.
+**Done.** An idle queue now sleeps: verified on staging by watching the queue's `serverId` (regenerated per isolate)
+change across an idle window, with a job run before and after to prove the rebuilt queue works.
 
-A throwaway probe on real Cloudflare settled the design question the docs leave ambiguous:
+Measured first, because the docs are ambiguous and the design depends on it:
 
-| probe                                      | result                                               |
-| ------------------------------------------ | ---------------------------------------------------- |
-| hibernatable socket + a 5s repeating alarm | one instance across 20 alarms — never hibernated     |
-| hibernatable socket, no timers             | two constructions — hibernated, in-memory state gone |
+| probe on real Cloudflare                   | result                                                  |
+| ------------------------------------------ | ------------------------------------------------------- |
+| hibernatable socket + a 5s repeating alarm | one instance across 20 alarms — never hibernated        |
+| hibernatable socket, no timers             | hibernated, in-memory state gone                        |
+| pokes every 8s / 20s / 45s                 | resident at 8s; hibernated between pokes at 20s and 45s |
 
-So **a pending repeating alarm prevents hibernation**: swapping `setInterval` for `setAlarm` saves nothing. Hibernation
-requires no periodic timers at all while a queue is idle, which means making the queue event-driven:
+So the eviction threshold is roughly 10-15s of total silence, _any_ pending timer prevents hibernation, and swapping
+`setInterval` for `setAlarm` saves nothing.
 
-- [ ] Worker liveness from `webSocketClose`/`webSocketError` instead of the 5s poll, with a timer only while jobs are
-      actually assigned to a worker
-- [ ] Push job states on change only (clients already get a snapshot on connect); drop the 10s re-push
-- [ ] Evict finished jobs with a one-shot alarm set when a job finishes, not a 60s poll
-- [ ] Run the conflict and bad-job checks on enqueue rather than on a timer
-- [ ] `ctx.acceptWebSocket` plus `webSocketMessage`/`Close`/`Error`, with per-socket identity in `serializeAttachment`
-      and queue state rehydrated from the store on wake
-- [ ] Persist log buffers incrementally: they are in memory only until a job finishes, so an eviction mid-job loses them
-      today. This also makes logs survive a crash
-- [ ] All of it behind the scheduler seam, because `BaseDockerJobQueue` is shared with the Deno server, where the
-      periodic channel broadcasts are how instances converge, and with the local-mode worker
+- [x] `periodicWork: false` for the Durable Object. Five timers kept it resident: four in the queue constructor plus a
+      per-connection health check. Deno keeps all of them, unchanged, by default
+- [x] `maintenance()` runs from an alarm, scheduled only while `hasWorkInFlight()` — a job queued, running, or finished
+      within the last minute and still to be evicted
+- [x] Sockets accepted with `ctx.acceptWebSocket`, with `webSocketMessage`/`Close`/`Error` dispatching into a shim that
+      looks like the WebSocket `BaseDockerJobQueue` expects, so the queue itself is untouched
+- [x] A worker's registration is kept in its socket attachment and replayed on wake, so a rebuilt queue knows its
+      workers before it does any maintenance and does not requeue their running jobs
+- [x] `webSocketClose` completes the closing handshake — without it the peer waits forever for its own close
+- [x] The worker is quiet while idle: pings every 30s instead of 5s and re-registers every 2 minutes instead of every
+      10s, switching back to the fast cadence the moment it has jobs. Its reconnect watchdogs follow the same cadence,
+      and the JobStates watchdog only applies while it has work, since a sleeping server pushes nothing
+- [x] Backwards compatible: no protocol change, so older workers keep working exactly as before. They ping every 10s,
+      which keeps their queue resident — they lose the saving, not the function
+- [ ] Log buffers do **not** need incremental persistence after all: a running job keeps `hasWorkInFlight()` true, so
+      the object stays resident for the whole job and the buffers cannot be lost to an eviction
 
-This is the largest remaining item and it touches the core queue used by three runtimes. It is a cost optimisation, not
-a correctness fix, and the bill only bites with many always-on queues — so it is sequenced after cutover unless that
-number is large.
+`setWebSocketAutoResponse` looked like the answer and is not usable here: the worker reads its own id back out of
+`PONG <id>` and re-registers when it is missing, and auto-response can only reply with a fixed string. Making the reply
+static made every worker re-register on every ping.
 
 ## 7. Cleanup (before Deno Deploy shuts down)
 

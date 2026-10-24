@@ -1505,12 +1505,13 @@ export class BaseDockerJobQueue {
 
         if (messageString === "PING") {
           lastPingTime = Date.now();
-          // Static reply: Cloudflare's setWebSocketAutoResponse answers a fixed
-          // request with a fixed response without waking the Durable Object,
-          // and it can only do that if the reply carries no per-worker detail.
-          // Workers match on startsWith("PONG"), so this stays compatible.
+          // The worker reads its own id back out of this reply and re-registers
+          // if it is missing ("Server does not recognize us"), so the id has to
+          // stay. That rules out setWebSocketAutoResponse, which can only send a
+          // fixed string: intercepting PING would make every worker think it
+          // had been forgotten and re-register on every ping.
           connection.socket.send(
-            "PONG",
+            "PONG " + (workerRegistration?.id || "unknown"),
           );
           return;
         }

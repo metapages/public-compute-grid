@@ -11,10 +11,11 @@
  *   only while `hasWorkInFlight()` — a job queued, running, or recently
  *   finished and still to be evicted. Idle queue, no alarm, object sleeps.
  *
- * - Workers PING every 5s, which would wake the object constantly, so
- *   `setWebSocketAutoResponse` answers PING with PONG inside Cloudflare's
- *   network without waking us (measured: 5s pings, zero handler calls, still
- *   hibernated).
+ * - A worker's PING cannot be auto-responded, even though that would keep it
+ *   from waking us: the worker reads its own id back out of the PONG and
+ *   re-registers when it is missing, and setWebSocketAutoResponse can only
+ *   reply with a fixed string. The worker instead pings slowly while it is idle
+ *   (see app/worker/src/commands/run.ts), which is what lets us sleep.
  *
  * - `BaseDockerJobQueue` attaches `addEventListener` to a socket and keeps
  *   per-connection state in those closures. Hibernation delivers messages to
@@ -47,10 +48,6 @@ interface SocketAttachment {
   registration?: string;
 }
 
-declare const WebSocketRequestResponsePair: {
-  new (request: string, response: string): unknown;
-};
-
 /**
  * The platform surface this object uses. Hand-declared, like the bindings in
  * worker.ts: the Cloudflare types are not among the ambient types here, and
@@ -68,7 +65,6 @@ interface DurableObjectStateLike {
   storage: DurableObjectStorageLike;
   getWebSockets(tag?: string): HibernatableWebSocket[];
   acceptWebSocket(ws: WebSocket, tags?: string[]): void;
-  setWebSocketAutoResponse(pair: unknown): void;
 }
 
 /** A WebSocket accepted for hibernation, which carries an attachment. */
@@ -237,12 +233,14 @@ export class QueueDurableObjectBase<Env extends QueueDurableObjectEnv> extends D
     role: SocketRole,
     queueName: string,
   ): Promise<void> {
+    // Build the queue first. ensureQueue re-attaches every socket the object
+    // already has, and once this one is accepted it is one of them — doing it
+    // the other way round attached it twice, so the queue saw two connections
+    // for one socket.
+    await this.ensureQueue(queueName);
     this.doState.acceptWebSocket(socket, [role]);
-    // Answered in Cloudflare's network, so a worker's 5s PING never wakes us
-    this.doState.setWebSocketAutoResponse(new WebSocketRequestResponsePair("PING", "PONG") as never);
     const attachment: SocketAttachment = { role, queue: queueName };
     (socket as HibernatableWebSocket).serializeAttachment(attachment);
-    await this.ensureQueue(queueName);
     await this.attachSocket(socket, attachment);
   }
 
