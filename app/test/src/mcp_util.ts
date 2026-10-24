@@ -279,10 +279,12 @@ export async function waitForJobCompletion(
   let unreachablePolls = 0;
   let lastFailure: string | undefined;
   let everFound = false;
+  let lastFound: boolean | undefined;
   while (Date.now() - startTime < timeoutMs) {
     const status = await mcpGetJobStatus({ queue, jobId });
     polls++;
     lastState = status.status?.state;
+    lastFound = status.found;
     if (status.found) {
       everFound = true;
     }
@@ -309,8 +311,11 @@ export async function waitForJobCompletion(
     : unreachablePolls > 0
     ? `the job API was unreachable on ${unreachablePolls}/${polls} polls, so the state is unknown` +
       (lastFailure ? ` (last failure: ${lastFailure})` : "")
+    : lastFound
+    ? "the API returned the job with no state at all"
     : everFound
-    ? "the API knows the job but reported no state"
+    ? `the job was on queue ${queue} and then disappeared from it: a later job in the same namespace replaces the ` +
+      `one before it, and a finished job is dropped from the queue about a minute later`
     : `the API has no record of the job on queue ${queue}`;
   throw new Error(`Job ${jobId} did not complete within ${timeoutMs}ms (${why})`);
 }
