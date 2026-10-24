@@ -97,10 +97,62 @@ one Durable Object per queue, cron every minute).
 
 ## 5. Cutover
 
-- [ ] Lower the DNS TTL
-- [ ] Point `container.mtfm.io` at the Worker
-- [ ] Monitor for 48h. Rollback is pointing DNS back at Deno Deploy
-- [ ] Replace `deploy.yml` with `just cloudflare deploy production`
+Assumes PR #313 is merged. Today `container.mtfm.io` is an **A record to 69.67.170.170** (Deno Deploy,
+`server:
+deployd`) with a **14400s (4h) TTL**, and `mtfm.io` is hosted on **Google Cloud DNS**
+(`ns-cloud-*.googledomains.com`), not Cloudflare. `js.mtfm.io` points at the same Deno Deploy IP, so the zone carries
+other services too.
+
+### Decisions needed before starting
+
+- **How `container.mtfm.io` reaches a Worker.** A Worker can only serve a hostname that belongs to a zone on this
+  Cloudflare account, and `mtfm.io` is not one. Two routes:
+  1. **Delegate just the subdomain** (recommended): add `container.mtfm.io` to Cloudflare as its own zone and add NS
+     records for it in Google Cloud DNS. Nothing else under `mtfm.io` moves, so `js.mtfm.io` and the rest are untouched.
+     Confirm subdomain zones are available on the account's plan before committing to this.
+  2. **Move the whole `mtfm.io` zone** to Cloudflare (nameserver change at the registrar). More blast radius: every
+     record has to be copied first, and `js.mtfm.io` and anything else in the zone move with it.
+- **Old job results.** Results live in the current S3 bucket; after cutover the Worker reads R2, so results from before
+  the cutover return 404 until they would have expired anyway (~1 month). A job id is the hash of its definition, so
+  resubmitting re-runs the job and produces a fresh result. Accept that, or copy the bucket, or add a temporary
+  read-through to S3. Confirm nothing depends on month-old results.
+- **`/mcp/ws` is gone.** Production still advertises the legacy tool list (`create_job`, `execute_job`, …) at
+  `/mcp/info` and still serves `/mcp/ws`; both go away. `/mcp` (Streamable HTTP) is unaffected. Confirm no client is
+  pointed at `/mcp/ws`.
+
+### Infrastructure to create
+
+- [ ] `just cloudflare setup production` — D1 `compute-queues`, R2 `compute-queues` with CORS and the 35-day expiry
+      rule, and the real `database_id` written into `wrangler.jsonc`. **Commit that id.**
+- [ ] An R2 API token (Object Read & Write, scoped to `compute-queues`), then
+      `R2_ACCESS_KEY_ID=… R2_SECRET_ACCESS_KEY=… just cloudflare secrets production`
+- [ ] The zone/delegation chosen above, then a Workers **Custom Domain** for `container.mtfm.io` on the `compute-queues`
+      Worker (add it to `wrangler.jsonc` as a route so it is in version control)
+- [ ] GitHub repo secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, and a `production` option in
+      `.github/workflows/deploy-cloudflare.yml`
+
+### Before any traffic moves
+
+- [ ] Publish a worker release so deployed workers pick up the quiet-while-idle cadence (bump `app/worker/mod.json`).
+      Without it queues stay resident: old workers re-register every 10s. They keep working either way
+- [ ] `just cloudflare deploy production` — live on its own hostname, serving no real traffic yet
+- [ ] Verify production **before** the DNS flip: `just test-url https://<the custom domain>` (or via a hosts override
+      while DNS still points at Deno Deploy), then attach a real worker and run the OpenThermo job end to end
+- [ ] Check the blob path specifically: upload, `exists`, download, and a job's outputs, since this is the first use of
+      the production R2 bucket and token
+- [ ] Lower the `container.mtfm.io` TTL in Google Cloud DNS to 60s and **wait out the old 4h TTL** before cutting over
+
+### Cutover
+
+- [ ] Point `container.mtfm.io` at the Worker (A record → the Custom Domain). Watch `wrangler tail`, queue status, and
+      that workers reconnect — they use ReconnectingWebSocket, so they reattach on their own
+- [ ] Confirm, on production: a job submitted and followed to completion, build and run logs, outputs served from R2,
+      `/`, `/docs`, `/mcp`, and the cron firing (scheduled invocations in `wrangler tail`)
+- [ ] Watch for 48h. Leave Deno Deploy running and untouched for ~2 weeks
+
+**Rollback:** restore the A record. Deno Deploy is current — its deploys from main were broken from Oct 6 and fixed on
+Oct 21 (#310/#311), and the last two runs succeeded — so rollback lands on current code. Jobs submitted during the
+Cloudflare window live in D1/R2 and will not be visible after a rollback; resubmitting re-runs them.
 
 ## 6. Cost: hibernation
 
@@ -139,11 +191,17 @@ So the eviction threshold is roughly 10-15s of total silence, _any_ pending time
 `PONG <id>` and re-registers when it is missing, and auto-response can only reply with a fixed string. Making the reply
 static made every worker re-register on every ping.
 
-## 7. Cleanup (before Deno Deploy shuts down)
+## 7. Cleanup (after the watch period, before Deno Deploy shuts down)
 
-- [ ] Remove the Redis bus and its env vars
-- [ ] Shut down the Deno Deploy app and the S3 bucket
-- [ ] Update the repo skill, READMEs and `docs/` ("Deployed to Deno Deploy")
+- [ ] Replace `.github/workflows/deploy.yml` (Deno Deploy) with the Cloudflare deploy on push to main
+- [ ] Add `just test cloudflare` to CI, so the Worker path cannot rot
+- [ ] Remove the Redis bus: `REDIS_URL`/`DENO_BROADCAST_REDIS_URL`, the compose service, and the
+      `@metapages/deno-redis-broadcastchannel` dependency. One Durable Object per queue means there is nothing to
+      coordinate between instances
+- [ ] Delete the Deno Deploy app and the old S3 bucket
+- [ ] Update everything that says the API is deployed to Deno Deploy: the `compute-queues-repo` skill, `README`s,
+      `docs/`, and `app/api/justfile`'s deploy recipe
+- [ ] Consider a stricter worker version gate once workers have upgraded, so a stale worker cannot keep a queue awake
 
 ## Later: Node and unification
 
