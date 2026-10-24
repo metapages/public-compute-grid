@@ -2,9 +2,10 @@ import path from "node:path";
 
 import { LRUMap } from "mnemonist";
 import { retryAsync } from "retry";
-import { ensureDir } from "std/fs";
+import { ensureDir } from "./fs.ts";
 import { join } from "std/path";
-import { getKv } from "@shared/kv.ts";
+import { getEnv } from "@shared/env.ts";
+import { getKv, type KvStore } from "@shared/kv.ts";
 import {
   type ConsoleLogLine,
   type DataRef,
@@ -23,6 +24,7 @@ import { addJobProcessSubmissionWebhook } from "@shared/webhooks.ts";
 import { JobDataCacheDurationMilliseconds, JobLogsDurationMilliseconds } from "./constants.ts";
 import {
   formatDefinitionS3Key,
+  formatLogsS3Key,
   formatResultsS3Key,
   getJobColorizedString,
   getQueueColorizedString,
@@ -32,8 +34,6 @@ import {
   setJobStateQueued,
   setJobStateRunning,
 } from "./util.ts";
-
-const AWS_SECRET_ACCESS_KEY = Deno.env.get("AWS_SECRET_ACCESS_KEY");
 
 let deleteFromS3: (key: string) => Promise<void>;
 let putJsonToS3: (key: string, data: unknown) => Promise<void>;
@@ -63,10 +63,10 @@ const FINISHED_REASONS_SERVED_FROM_RECORD: DockerJobFinishedReason[] = [
  *  /queue/:queue/:jobId/InMemoryJob.json
  */
 export class DB {
-  private kv: Deno.Kv;
+  private kv: KvStore;
   private dataDirectory: string;
 
-  private constructor(kv: Deno.Kv, dataDirectory: string) {
+  private constructor(kv: KvStore, dataDirectory: string) {
     this.kv = kv;
     this.dataDirectory = dataDirectory;
   }
@@ -77,7 +77,7 @@ export class DB {
     // Use the provided dataDirectory or default to TMPDIR
     const effectiveDataDirectory = dataDirectory || "/tmp/worker-metapage-io";
 
-    if (!AWS_SECRET_ACCESS_KEY) {
+    if (!getEnv("AWS_SECRET_ACCESS_KEY")) {
       // Ensure the directory exists and has correct permissions if not using S3
       await ensureDir(effectiveDataDirectory);
       await Deno.chmod(effectiveDataDirectory, 0o777);
@@ -96,7 +96,7 @@ export class DB {
   private static async setupStorageFunctions(
     dataDirectory: string,
   ): Promise<void> {
-    if (AWS_SECRET_ACCESS_KEY) {
+    if (getEnv("AWS_SECRET_ACCESS_KEY")) {
       // Import S3 functions
       ({ deleteFromS3, putJsonToS3, getJsonFromS3 } = await import(
         "@shared/s3.ts"
@@ -912,20 +912,41 @@ export class DB {
    * terminal state (see BaseDockerJobQueue.flushLogBuffer).
    */
   async storeBuildLogs(jobId: string, logs: ConsoleLogLine[]): Promise<void> {
-    await this.kv.set(["build-logs", jobId], logs, { expireIn: JobLogsDurationMilliseconds });
+    await this.storeLogs(jobId, "build", logs);
   }
 
   async getBuildLogs(jobId: string): Promise<ConsoleLogLine[] | null> {
-    const entry = await this.kv.get<ConsoleLogLine[]>(["build-logs", jobId]);
-    return entry.value;
+    return await this.getLogs(jobId, "build");
   }
 
   async storeRunLogs(jobId: string, logs: ConsoleLogLine[]): Promise<void> {
-    await this.kv.set(["run-logs", jobId], logs, { expireIn: JobLogsDurationMilliseconds });
+    await this.storeLogs(jobId, "run", logs);
   }
 
   async getRunLogs(jobId: string): Promise<ConsoleLogLine[] | null> {
-    const entry = await this.kv.get<ConsoleLogLine[]>(["run-logs", jobId]);
-    return entry.value;
+    return await this.getLogs(jobId, "run");
+  }
+
+  /**
+   * The lines go to blob storage and the store keeps a pointer: a long build's
+   * log is far bigger than a store value may be (64 KiB on Deno KV, ~2 MB a
+   * row on D1), and logs that didn't fit used to be dropped.
+   */
+  private async storeLogs(jobId: string, kind: "build" | "run", logs: ConsoleLogLine[]): Promise<void> {
+    const key = formatLogsS3Key(jobId, kind);
+    await putJsonToS3(key, logs);
+    await this.kv.set([`${kind}-logs`, jobId], { key }, { expireIn: JobLogsDurationMilliseconds });
+  }
+
+  private async getLogs(jobId: string, kind: "build" | "run"): Promise<ConsoleLogLine[] | null> {
+    const entry = await this.kv.get<ConsoleLogLine[] | { key: string }>([`${kind}-logs`, jobId]);
+    if (!entry.value) {
+      return null;
+    }
+    // Stored inline before logs moved to blob storage
+    if (Array.isArray(entry.value)) {
+      return entry.value;
+    }
+    return (await getJsonFromS3<ConsoleLogLine[]>(entry.value.key)) ?? null;
   }
 }

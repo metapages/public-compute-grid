@@ -1,0 +1,30 @@
+# Deploy the api + browser to Cloudflare Workers (issue #308). Manual for now:
+# production stays on deploy.yml (Deno Deploy) until cutover.
+name: Cloudflare deploy api+browser
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: "Environment"
+        required: true
+        default: "staging"
+        type: choice
+        options:
+          - staging
+
+jobs:
+  cloudflare-deploy:
+    name: Cloudflare deploy (${{ inputs.env }})
+    runs-on: [self-hosted]
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: "0"
+
+      - name: wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: just cloudflare deploy ${{ inputs.env }}

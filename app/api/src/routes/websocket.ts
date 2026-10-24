@@ -1,5 +1,5 @@
 import { ApiDockerJobQueue, userJobQueues } from "@/docker-jobs/ApiDockerJobQueue.ts";
-import { SERVER_INSTANCE_ID } from "@/util/id.ts";
+import { getServerInstanceId } from "@/util/id.ts";
 
 export interface WebsocketUrlParameters {
   token: string;
@@ -12,7 +12,7 @@ export const getApiDockerJobQueue = async (
     // TODO: hydrate queue from some kind of persistence
     // actually the queue should handle that itself
     const jobQueue = new ApiDockerJobQueue({
-      serverId: SERVER_INSTANCE_ID,
+      serverId: getServerInstanceId(),
       address: queue,
     });
     await jobQueue.setup();
@@ -60,7 +60,7 @@ export async function wsHandlerWorker(
     if (!userJobQueues[token]) {
       // TODO: hydrate queue from some kind of persistence
       userJobQueues[token] = new ApiDockerJobQueue({
-        serverId: SERVER_INSTANCE_ID,
+        serverId: getServerInstanceId(),
         address: token,
       });
       await userJobQueues[token].setup();

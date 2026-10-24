@@ -1,5 +1,5 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import type { CallToolRequest, ReadResourceRequest } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolRequest, ReadResourceRequest, Tool } from "@modelcontextprotocol/sdk/types.js";
 import {
   CallToolRequestSchema,
   ListResourcesRequestSchema,
@@ -7,7 +7,8 @@ import {
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import { WorkerMetapageClient } from "./client.ts";
+import { getEnv } from "@metapages/compute-queues-shared";
+import { type FetchFunction, WorkerMetapageClient } from "./client.ts";
 import {
   cancelJobTool,
   followJobTool,
@@ -22,6 +23,21 @@ import {
   submitJobTool,
   uploadFileTool,
 } from "./tools/index.ts";
+
+/**
+ * Every tool this server serves, in the order a client sees them. Exported so
+ * the servers that mount it (the API and the local-mode worker) can describe
+ * themselves at /mcp/info without keeping their own copy of the list, which
+ * went stale: both advertised tools that no longer existed.
+ */
+export const MCP_TOOLS: Tool[] = [
+  submitJobTool,
+  followJobTool,
+  getJobStatusTool,
+  listJobsTool,
+  cancelJobTool,
+  uploadFileTool,
+];
 
 /**
  * Build the MCP server. Transport-agnostic on purpose: the same server is
@@ -41,11 +57,13 @@ export const createMcpServer = (opts?: {
    * tool's self-call fail. Links still need the public origin to be clickable.
    */
   publicUrl?: string;
+  /** How the tools send requests to the API; global fetch by default. */
+  fetch?: FetchFunction;
 }): Server => {
   const baseUrl = opts?.baseUrl ||
-    Deno.env.get("WORKER_METAPAGE_URL") ||
+    getEnv("WORKER_METAPAGE_URL") ||
     "https://container.mtfm.io";
-  const client = new WorkerMetapageClient(baseUrl, opts?.publicUrl);
+  const client = new WorkerMetapageClient(baseUrl, opts?.publicUrl, opts?.fetch);
 
   const server = new Server(
     { name: "worker-metapage-io", version: "1.0.0" },
@@ -60,16 +78,7 @@ export const createMcpServer = (opts?: {
     },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, () => ({
-    tools: [
-      submitJobTool,
-      followJobTool,
-      getJobStatusTool,
-      listJobsTool,
-      cancelJobTool,
-      uploadFileTool,
-    ],
-  }));
+  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: MCP_TOOLS }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest, extra: unknown) => {
     switch (request.params.name) {

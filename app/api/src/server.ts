@@ -7,7 +7,7 @@ import { createHandler } from "metapages/worker/routing/handlerDeno";
 // workspace layout, which breaks a relative path out of app/api/src.
 import "@shared/webhooks-cron.ts";
 
-import { handlerHttp } from "@/handlerHono.ts";
+import { handlerHttp } from "@/handlerDeno.ts";
 import { handleWebsocketConnection } from "@/handlerWs.ts";
 
 const port = parseInt(Deno.env.get("PORT") || "8000");

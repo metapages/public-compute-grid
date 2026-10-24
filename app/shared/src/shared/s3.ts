@@ -1,101 +1,136 @@
-import {
-  DeleteObjectCommand,
-  GetObjectCommand,
-  ListBucketsCommand,
-  PutObjectCommand,
-  S3Client,
-} from "aws-sdk/client-s3";
-import { getSignedUrl } from "aws-sdk/s3-request-presigner";
+import { AwsClient } from "aws4fetch";
 import fetchRetry from "fetch-retry";
 import { ms } from "ms";
 
-const fetch = fetchRetry(globalThis.fetch);
+import { getEnv } from "./env.ts";
 
-// import { S3Client } from 'https://deno.land/x/s3_lite_client@0.7.0/mod.ts';
+const fetchWithRetry = fetchRetry(globalThis.fetch);
+
 const OneDayInSeconds = (ms("1 day") as number) / 1000;
 
-const Bucket: string = Deno.env.get("AWS_S3_BUCKET") || "metaframe-asman-test";
-const AWS_REGION: string = Deno.env.get("AWS_REGION") || "us-west-2";
-const AWS_ENDPOINT: string | undefined = Deno.env.get("AWS_ENDPOINT");
-const AWS_ACCESS_KEY_ID: string = Deno.env.get("AWS_ACCESS_KEY_ID")!;
-const AWS_SECRET_ACCESS_KEY: string = Deno.env.get("AWS_SECRET_ACCESS_KEY")!;
-
-export const bucketParams = {
-  Bucket,
-  ContentType: "application/octet-stream",
-};
-
-const config = {
-  sslEnabled: AWS_ACCESS_KEY_ID?.includes("minio") ? false : true,
-  credentials: {
-    accessKeyId: AWS_ACCESS_KEY_ID,
-    secretAccessKey: AWS_SECRET_ACCESS_KEY,
-  },
-  region: AWS_REGION,
-  endpoint: AWS_ENDPOINT,
-  forcePathStyle: AWS_ENDPOINT ? true : undefined,
-  signatureVersion: "v4",
-  // Add connection timeout settings for better stability
-  requestHandler: {
-    // Increase timeout for S3 operations
-    requestTimeout: 30000, // 30 seconds
-  },
-  // Add retry configuration for the AWS SDK
-  maxAttempts: 3,
-  retryMode: "adaptive" as const,
-};
-
-export const s3Client = new S3Client(config);
-try {
-  // ListBuckets takes no bucket-scoped input; this is just a connectivity check.
-  const _data = await s3Client.send(new ListBucketsCommand({}));
-  // console.log(
-  //   "ListBucketsCommand Buckets:",
-  //   _data?.Buckets?.map((b) => b.Name),
-  // );
-  // console.log("S3 Configuration:", {
-  //   bucket: Bucket,
-  //   region: AWS_REGION,
-  //   endpoint: AWS_ENDPOINT,
-  //   sslEnabled: config.sslEnabled,
-  //   forcePathStyle: config.forcePathStyle,
-  //   maxAttempts: config.maxAttempts,
-  //   retryMode: config.retryMode,
-  // });
-} catch (err) {
-  console.error(`Failed to ListBucketsCommand: ${err}`);
-  console.error("S3 Configuration (failed):", {
-    bucket: Bucket,
-    region: AWS_REGION,
-    endpoint: AWS_ENDPOINT,
-    sslEnabled: config.sslEnabled,
-    forcePathStyle: config.forcePathStyle,
-    maxAttempts: config.maxAttempts,
-    retryMode: config.retryMode,
-  });
+export interface BlobStoreConfig {
+  /** S3 API endpoint. R2: https://<account>.r2.cloudflarestorage.com. Unset means AWS. */
+  endpoint?: string;
+  /** R2: "auto" */
+  region: string;
+  bucket: string;
+  accessKeyId: string;
+  secretAccessKey: string;
 }
+
+/**
+ * Blob storage over the S3 API: Cloudflare R2 in production, MinIO locally.
+ *
+ * Signs requests with aws4fetch rather than the AWS SDK: it is plain fetch +
+ * WebCrypto, so the same code runs in Workers, Deno, Node and the browser, and
+ * it is what Cloudflare recommends for R2.
+ */
+export class S3BlobStore {
+  private readonly client: AwsClient;
+  private readonly config: BlobStoreConfig;
+
+  constructor(config: BlobStoreConfig) {
+    this.config = config;
+    this.client = new AwsClient({
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+      region: config.region,
+      service: "s3",
+    });
+  }
+
+  /** Path-style for custom endpoints (R2, MinIO), virtual-hosted for AWS. */
+  objectUrl(key?: string): URL {
+    const path = key === undefined ? "" : key.split("/").map(encodeURIComponent).join("/");
+    if (this.config.endpoint) {
+      return new URL(`${this.config.endpoint.replace(/\/$/, "")}/${this.config.bucket}/${path}`);
+    }
+    return new URL(`https://${this.config.bucket}.s3.${this.config.region}.amazonaws.com/${path}`);
+  }
+
+  private async presign(method: "GET" | "PUT", key: string, expiresInSeconds: number): Promise<string> {
+    const url = this.objectUrl(key);
+    url.searchParams.set("X-Amz-Expires", String(Math.floor(expiresInSeconds)));
+    const signed = await this.client.sign(url.toString(), { method, aws: { signQuery: true } });
+    return signed.url;
+  }
+
+  presignGet(key: string, expiresInSeconds = OneDayInSeconds): Promise<string> {
+    return this.presign("GET", key, expiresInSeconds);
+  }
+
+  presignPut(key: string, expiresInSeconds = OneDayInSeconds): Promise<string> {
+    return this.presign("PUT", key, expiresInSeconds);
+  }
+
+  async exists(key: string): Promise<boolean> {
+    const response = await this.client.fetch(this.objectUrl(key).toString(), { method: "HEAD" });
+    await response.body?.cancel();
+    if (response.status === 404) {
+      return false;
+    }
+    if (!response.ok) {
+      throw new Error(`HEAD ${key} failed: ${response.status}`);
+    }
+    return true;
+  }
+
+  async delete(key: string): Promise<void> {
+    const response = await this.client.fetch(this.objectUrl(key).toString(), { method: "DELETE" });
+    await response.body?.cancel();
+    if (!response.ok && response.status !== 404) {
+      throw new Error(`DELETE ${key} failed: ${response.status}`);
+    }
+  }
+
+  /** HeadBucket: an R2 token scoped to one bucket may not list buckets. */
+  async checkConnection(): Promise<void> {
+    const response = await this.client.fetch(this.objectUrl().toString(), { method: "HEAD" });
+    await response.body?.cancel();
+    if (!response.ok) {
+      throw new Error(`HEAD bucket ${this.config.bucket} failed: ${response.status}`);
+    }
+  }
+}
+
+export const blobStoreConfigFromEnv = (): BlobStoreConfig => ({
+  endpoint: getEnv("AWS_ENDPOINT") || undefined,
+  region: getEnv("AWS_REGION") || "us-west-2",
+  bucket: getEnv("AWS_S3_BUCKET") || "metaframe-asman-test",
+  accessKeyId: getEnv("AWS_ACCESS_KEY_ID") || "",
+  secretAccessKey: getEnv("AWS_SECRET_ACCESS_KEY") || "",
+});
+
+let blobStore: S3BlobStore | undefined;
+
+/** The process-wide blob store, configured from the environment on first use. */
+export const getBlobStore = (): S3BlobStore => {
+  if (!blobStore) {
+    const config = blobStoreConfigFromEnv();
+    blobStore = new S3BlobStore(config);
+    blobStore.checkConnection().catch((err) => {
+      console.error(`Blob store connection check failed: ${err}`, {
+        bucket: config.bucket,
+        region: config.region,
+        endpoint: config.endpoint,
+      });
+    });
+  }
+  return blobStore;
+};
 
 export const putJsonToS3 = async (
   key: string,
   data: unknown,
 ): Promise<void> => {
-  const command = new PutObjectCommand({
-    ...bucketParams,
-    Key: key,
-    ContentType: "application/json",
-  });
+  const urlUpload = await getBlobStore().presignPut(key);
 
-  const urlUpload = await getSignedUrl(s3Client, command, {
-    expiresIn: OneDayInSeconds,
-  });
-
-  const responseUpload = await fetch(urlUpload, {
+  const responseUpload = await fetchWithRetry(urlUpload, {
     method: "PUT",
     redirect: "follow",
     body: JSON.stringify(data),
     headers: { "Content-Type": "application/json" },
-    // Add timeout to prevent hanging requests
-    signal: AbortSignal.timeout(30000), // 30 second timeout
+    signal: AbortSignal.timeout(30000),
   });
 
   if (!responseUpload.ok) {
@@ -145,7 +180,6 @@ export const getJsonFromS3 = async <T>(key: string): Promise<T | undefined> => {
   try {
     const result = await getObject(key);
     if (!result) {
-      // console.warn(`getJsonFromS3: No data returned for key ${key}`);
       return undefined;
     }
     return JSON.parse(result) as T;
@@ -163,32 +197,17 @@ export const getJsonFromS3 = async <T>(key: string): Promise<T | undefined> => {
   }
 };
 
-export const deleteFromS3 = (Key: string): Promise<void> => {
-  return new Promise((resolve /* , reject */) => {
-    const deleteObjectCommand = new DeleteObjectCommand({
-      ...bucketParams,
-      Key,
-    });
-
-    s3Client
-      .send(deleteObjectCommand)
-      .then(() => {
-        resolve();
-      })
-      .catch((err: unknown) => {
-        console.log(`Ignored error deleting object ${Key} from S3: ${err}`);
-        resolve();
-        // swallow errors
-      });
-  });
+export const deleteFromS3 = async (key: string): Promise<void> => {
+  try {
+    await getBlobStore().delete(key);
+  } catch (err) {
+    // swallow errors
+    console.log(`Ignored error deleting object ${key} from S3: ${err}`);
+  }
 };
 
-const getObject = async (Key: string): Promise<string | undefined> => {
-  const command = new GetObjectCommand({ ...bucketParams, Key });
-
-  const url = await getSignedUrl(s3Client, command, {
-    expiresIn: OneDayInSeconds,
-  });
+const getObject = async (key: string): Promise<string | undefined> => {
+  const url = await getBlobStore().presignGet(key);
 
   // Retry logic for handling transient network errors
   const maxRetries = 3;
@@ -197,37 +216,28 @@ const getObject = async (Key: string): Promise<string | undefined> => {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const response = await fetch(url, {
-        // @ts-ignore: TS2353
         method: "GET",
-        // @ts-ignore: TS2353
         redirect: "follow",
-        // Add timeout to prevent hanging requests
-        signal: AbortSignal.timeout(30000), // 30 second timeout
+        signal: AbortSignal.timeout(30000),
       });
 
       if (response.status === 404) {
+        await response.body?.cancel();
         return undefined;
       }
 
       if (!response.ok) {
+        await response.body?.cancel();
         throw new Error(
           `Failed to fetch from S3: status ${response.status} ${url}`,
         );
       }
 
-      const text = await response.text();
-      return text;
+      return await response.text();
     } catch (err) {
       lastError = err as Error;
 
-      // Check if this is a retryable error
-      const isRetryable = isRetryableError(err as Error);
-
-      if (!isRetryable || attempt === maxRetries) {
-        // console.error(
-        //   `getObject failed for key ${Key} after ${attempt} attempts:`,
-        //   err,
-        // );
+      if (!isRetryableError(err as Error) || attempt === maxRetries) {
         throw err;
       }
 
@@ -237,7 +247,7 @@ const getObject = async (Key: string): Promise<string | undefined> => {
         5000,
       );
       console.warn(
-        `getObject attempt ${attempt} failed for key ${Key}, retrying in ${delay}ms:`,
+        `getObject attempt ${attempt} failed for key ${key}, retrying in ${delay}ms:`,
         err,
       );
       await new Promise((resolve) => setTimeout(resolve, delay));

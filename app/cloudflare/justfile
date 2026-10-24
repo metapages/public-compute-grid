@@ -1,0 +1,157 @@
+set shell := ["bash", "-c"]
+set dotenv-load := true
+set export := true
+
+# Pinned; run through npx so the deno workspace never sees wrangler's npm tree
+
+WRANGLER := "npx --yes wrangler@4.151.3"
+PORT := env_var_or_default("PORT", "8787")
+bold := '\033[1m'
+normal := '\033[0m'
+green := "\\e[32m"
+
+@_help:
+    just --list --unsorted
+    echo -e ""
+    echo -e "    The compute-queues API + browser app on Cloudflare Workers"
+    echo -e "    Migration issue 🔗    {{ green }}https://github.com/metapages/public-compute-grid/issues/308{{ normal }}"
+    echo -e ""
+
+# Bundle the worker (dist/worker.js) and assemble static assets (.assets)
+build: bundle assets
+
+# Bundle the worker with deno (it resolves the workspace import maps; wrangler can't)
+bundle:
+    mkdir -p dist
+    deno bundle --quiet --platform=browser --external 'cloudflare:*' src/worker.ts -o dist/worker.js
+    echo -e "✅ dist/worker.js $(du -h dist/worker.js | cut -f1)"
+
+# Browser app at /, docs at /docs (builds them if missing)
+assets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -f ../browser/dist/index.html ]; then just ../browser/build; fi
+    if [ ! -d ../../docs/dist/docs ]; then just ../../docs/build; fi
+    rm -rf .assets
+    mkdir -p .assets
+    cp -r ../browser/dist/. .assets/
+    cp -r ../../docs/dist/docs .assets/docs
+    echo -e "✅ .assets $(du -sh .assets | cut -f1)"
+
+# Bundle, plus whatever browser/docs builds exist (no building them): enough for the tests
+build-api: bundle
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rm -rf .assets
+    mkdir -p .assets
+    if [ -f ../browser/dist/index.html ]; then
+        cp -r ../browser/dist/. .assets/
+    else
+        echo '<!doctype html><html><head><base target="_parent" /></head><body>api only</body></html>' > .assets/index.html
+    fi
+    cp ../browser/public/llms.txt .assets/llms.txt
+    if [ -d ../../docs/dist/docs ]; then cp -r ../../docs/dist/docs .assets/docs; fi
+    echo -e "✅ .assets $(du -sh .assets | cut -f1)"
+
+# Run the Worker locally in workerd (local D1 + Durable Objects). Blobs need an
+# S3-compatible endpoint; AWS_ENDPOINT overrides the default below:
+#   docker run -d --name minio -p 9400:9000 -e MINIO_ROOT_USER=minioaccesskey123123 \
+#     -e MINIO_ROOT_PASSWORD=minioaccesskey123123 -e MINIO_REGION=us-west-2 \
+#     minio/minio:RELEASE.2024-04-28T17-53-50Z server /data
+
+# The full stack (`just dev cloudflare`) runs its own MinIO and needs none of this.
+dev +args="": build-api
+    {{ WRANGLER }} dev --port {{ PORT }} --ip 0.0.0.0 \
+        --var AWS_ACCESS_KEY_ID:${AWS_ACCESS_KEY_ID:-minioaccesskey123123} \
+        --var AWS_SECRET_ACCESS_KEY:${AWS_SECRET_ACCESS_KEY:-minioaccesskey123123} \
+        --var AWS_ENDPOINT:${AWS_ENDPOINT:-http://localhost:9400} \
+        --var AWS_REGION:${AWS_REGION:-us-west-2} \
+        --var AWS_S3_BUCKET:${AWS_S3_BUCKET:-localbucket} \
+        {{ args }}
+
+# One-time Cloudflare resources for an env (idempotent): D1 database, R2 bucket + CORS + expiry [staging|production]
+setup env="staging":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # --update-config=false: wrangler otherwise offers to add its own binding to
+    # wrangler.jsonc, which duplicates the bindings declared there by hand (and
+    # named them identically for D1 and R2, which wrangler then refuses to load).
+    # CI=true keeps it from prompting at all. No R2 *binding* is wanted: the
+    # Worker reaches R2 over its S3 API with presigned URLs.
+    export CI=true
+    suffix=$([ "{{ env }}" = "production" ] && echo "" || echo "-{{ env }}")
+    db="compute-queues${suffix}"
+    bucket="compute-queues${suffix}"
+
+    id=$({{ WRANGLER }} d1 list --json | deno eval --quiet "const dbs = JSON.parse(await new Response(Deno.stdin.readable).text()); console.log(dbs.find((d) => d.name === '${db}')?.uuid ?? '')")
+    if [ -z "$id" ]; then
+        {{ WRANGLER }} d1 create "${db}" --update-config=false
+        id=$({{ WRANGLER }} d1 list --json | deno eval --quiet "const dbs = JSON.parse(await new Response(Deno.stdin.readable).text()); console.log(dbs.find((d) => d.name === '${db}')?.uuid ?? '')")
+    fi
+    deno run --allow-read --allow-write scripts/set-d1-id.ts "${db}" "${id}"
+
+    if ! {{ WRANGLER }} r2 bucket info "${bucket}" >/dev/null 2>&1; then
+        {{ WRANGLER }} r2 bucket create "${bucket}" --update-config=false
+    fi
+    {{ WRANGLER }} r2 bucket cors set "${bucket}" --file r2-cors.json --force
+    # Data is a cache, not storage. This MUST stay longer than
+    # JobDataCacheDurationMilliseconds (4 weeks, shared/constants.ts): a finished
+    # job record that outlives the results it points at is served as a cache hit
+    # with nothing behind it, and since a job id is the hash of its definition,
+    # that job can then never run again. Adding a rule that already exists is an
+    # API error, so only add it once.
+    rules=$({{ WRANGLER }} r2 bucket lifecycle list "${bucket}" 2>/dev/null || true)
+    # expire-30-days was this rule's earlier name, and 30 days left only two days
+    # of margin over the record TTL
+    if echo "${rules}" | grep -q "expire-30-days"; then
+        {{ WRANGLER }} r2 bucket lifecycle remove "${bucket}" --name expire-30-days
+    fi
+    if ! echo "${rules}" | grep -q "expire-35-days"; then
+        {{ WRANGLER }} r2 bucket lifecycle add "${bucket}" expire-35-days --expire-days 35 --force
+    fi
+
+    echo -e ""
+    echo -e "{{ bold }}Next:{{ normal }} create an R2 API token (Object Read & Write, bucket ${bucket}) in the dashboard,"
+    echo -e "then: AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... just cloudflare secrets {{ env }}"
+
+# Upload the R2 S3-API credentials as Worker secrets [staging|production].
+# Reads R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY (from .env, or the environment),
+# falling back to AWS_*. The R2_* names exist so the credentials can live in
+# .env without being picked up by the dev and test stacks, which read AWS_* and
+# default them to the local MinIO. Inside the Worker they are AWS_*, which is
+
+# what the blob store reads.
+secrets env="staging":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    access_key="${R2_ACCESS_KEY_ID:-${AWS_ACCESS_KEY_ID:-}}"
+    secret_key="${R2_SECRET_ACCESS_KEY:-${AWS_SECRET_ACCESS_KEY:-}}"
+    : "${access_key:?set R2_ACCESS_KEY_ID (the R2 API token access key id)}"
+    : "${secret_key:?set R2_SECRET_ACCESS_KEY (the R2 API token secret)}"
+    account=$({{ WRANGLER }} whoami --json | deno eval --quiet "const w = JSON.parse(await new Response(Deno.stdin.readable).text()); console.log(w.accounts?.[0]?.id ?? '')")
+    # Deliberately not AWS_ENDPOINT: that is set to the local MinIO for dev and
+    # test work, and uploading it here would point the deployment at localhost.
+    endpoint="${R2_ENDPOINT:-https://${CLOUDFLARE_ACCOUNT_ID:-$account}.r2.cloudflarestorage.com}"
+    envflag=$([ "{{ env }}" = "production" ] && echo "" || echo "--env {{ env }}")
+    printf '%s' "$access_key" | {{ WRANGLER }} secret put AWS_ACCESS_KEY_ID $envflag
+    printf '%s' "$secret_key" | {{ WRANGLER }} secret put AWS_SECRET_ACCESS_KEY $envflag
+    printf '%s' "$endpoint" | {{ WRANGLER }} secret put AWS_ENDPOINT $envflag
+
+# Deploy [env: staging|production]
+deploy env="staging": build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{ env }}" = "production" ]; then
+        {{ WRANGLER }} deploy
+    else
+        {{ WRANGLER }} deploy --env {{ env }}
+    fi
+
+# Run any wrangler command with the repo's credentials (CLOUDFLARE_API_TOKEN from .env)
+wrangler +args="":
+    {{ WRANGLER }} {{ args }}
+
+# Typecheck the Cloudflare entry
+@check:
+    deno check src/worker.ts
+    echo "✅ cloudflare typescript compilation"

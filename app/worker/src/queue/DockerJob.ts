@@ -222,6 +222,12 @@ export const dockerJobExecute = (args: DockerJobArgs): DockerJobExecution => {
     return s;
   });
 
+  // Nothing reads these transforms' output. Drain it: otherwise each stops
+  // accepting input once ~32 KB (its two buffers) backs up, and every log line
+  // after a job's first ~32 KB of output is silently lost.
+  grabberOutStream.resume();
+  grabberErrStream.resume();
+
   const finish = async () => {
     if (isKilled.value) {
       return;

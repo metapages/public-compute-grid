@@ -108,7 +108,7 @@ export async function handleFollowJob(
   let outcome: { state: string; reason?: string };
   let timedOut = false;
   try {
-    outcome = await followJobStream(client.baseUrl, queue, jobId, onEvent, signal);
+    outcome = await followJobStream(client.baseUrl, queue, jobId, onEvent, signal, client.fetch);
   } catch (err) {
     if (timeoutController.signal.aborted) {
       timedOut = true;

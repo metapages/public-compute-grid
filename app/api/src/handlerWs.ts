@@ -1,5 +1,4 @@
 import { wsHandlerClient, wsHandlerWorker } from "@/routes/websocket.ts";
-import { attachMCPWebSocket } from "@/routes/mcp/websocket.ts";
 
 export const handleWebsocketConnection = (
   socket: WebSocket,
@@ -8,13 +7,10 @@ export const handleWebsocketConnection = (
   const urlBlob = new URL(request.url);
   const pathTokens = urlBlob.pathname.split("/").filter((x) => x !== "");
 
-  // Every websocket upgrade is dispatched here, before Hono sees it — so a
-  // `app.get("/mcp/ws", …)` route can never fire and MCP clients were silently
-  // closed with "Unknown type". Route them here instead.
-  if (pathTokens[0] === "mcp" && pathTokens[1] === "ws") {
-    attachMCPWebSocket(socket);
-    return;
-  }
+  // Note: there is no MCP websocket transport. /mcp/ws used to serve a second
+  // MCP implementation that lived in routes/mcp/, read in-process queue state
+  // across every queue, and was never served by the local-mode worker. MCP
+  // clients use Streamable HTTP at /mcp, which both servers serve.
 
   // previous deprecated routes, now queues always start with /q/<:queueId>
   let queueKey = pathTokens[0];
