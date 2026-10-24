@@ -129,9 +129,13 @@ one Durable Object per queue, cron every minute).
 - `get_job_status` swallowed both of its lookup failures and returned a job with no state, so an unreachable or
   overloaded API was indistinguishable from an absent job. It now reports the two apart, and `waitForJobCompletion` says
   which of four things happened, so a CI timeout explains itself.
-- CI has a single self-hosted runner workspace, and `test.yml` runs `local mode` and `remote mode` concurrently with no
-  `needs:`, so both jobs check out into the same directory. Worth serializing them; it is a plausible source of the
-  wandering failures seen in this repo's history.
+- CI's two jobs run on two different org runners (`mini1` and `mini2`), not on one machine: they share nothing, so
+  serializing them would achieve nothing. They are also slower than a dev machine, which is why timing-sensitive
+  failures show up there and not locally. (An earlier guess that they shared one workspace was wrong — the repo-level
+  runner list shows one runner, but the org-level runners that actually take these jobs are not visible from it.)
+- A submit could answer 200 for a job the queue never took: `stateChangeJobEnqueue` returned void and gave up silently
+  when `queueJobAdd` declined, so the caller polled forever. It now returns the queued job, and the submit handlers
+  answer 409. The MCP client also dropped response bodies from its errors, so the server's explanation never surfaced.
 
 - A submission costs ~360ms of server-side work on Cloudflare, dominated by `queueJobAdd` doing several D1 writes one
   after another plus an R2 PUT for `definition.json`. `KvStore.atomic()` already exists and D1 runs a batch as a single
