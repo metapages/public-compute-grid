@@ -267,9 +267,15 @@ Deno.test(
         if (jobId === targetJobId && job.state === DockerJobState.Finished) resolveFinished();
       }
     };
-    const { promise: opened, resolve: resolveOpened } = Promise.withResolvers<void>();
+    const { promise: opened, resolve: resolveOpened, reject: rejectOpened } = Promise.withResolvers<void>();
     socket.onopen = () => resolveOpened();
+    // Without these the test would hang on a refused or failed upgrade and the
+    // timeout would say nothing about why
+    socket.onerror = () => rejectOpened(new Error(`websocket to ${wsUrl} errored before opening`));
+    socket.onclose = (event) =>
+      rejectOpened(new Error(`websocket to ${wsUrl} closed before opening: ${event.code} ${event.reason}`));
     await opened;
+    socket.onclose = null;
 
     try {
       const marker = nonce();
@@ -283,7 +289,13 @@ Deno.test(
       const { promise: closed, resolve: resolveClosed } = Promise.withResolvers<void>();
       socket.onclose = () => resolveClosed();
       socket.close();
+      // The server has to finish the closing handshake; do not hang if it does not
+      const closeTimer = setTimeout(
+        () => resolveClosed(),
+        5000,
+      );
       await closed;
+      clearTimeout(closeTimer);
     }
   },
 );

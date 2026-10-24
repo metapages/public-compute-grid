@@ -369,12 +369,22 @@ export class BaseDockerJobQueue {
   protected _intervalCheckForDuplicateJobsSameSource: ReturnType<typeof setInterval> | undefined;
   protected _intervalRemoveOldFinishedJobsFromQueue: ReturnType<typeof setInterval> | undefined;
 
+  /**
+   * Whether this queue runs its own maintenance timers. A Cloudflare Durable
+   * Object passes false and drives `maintenance()` from an alarm instead: any
+   * timer at all — including a per-connection one — keeps the object resident
+   * and billed, so an idle queue can only sleep if nothing is scheduled.
+   */
+  protected readonly periodicWork: boolean;
+
   constructor(opts: {
     serverId: string;
     address: string;
     dataDirectory?: string;
+    periodicWork?: boolean;
   }) {
     const { serverId, address, dataDirectory } = opts;
+    this.periodicWork = opts.periodicWork ?? true;
 
     this.address = address;
     this.addressShortString = getQueueColorizedString(address);
@@ -402,25 +412,6 @@ export class BaseDockerJobQueue {
     this.channel.addEventListener("close", () => {
       console.log(`🚨 Broadcast channel closed`);
     });
-
-    this._intervalWorkerBroadcast = setInterval(() => {
-      this.broadcastWorkersToChannel();
-      this.requeueJobsFromMissingWorkers();
-    }, INTERVAL_WORKERS_BROADCAST);
-
-    this._intervalJobsBroadcast = setInterval(() => {
-      this.broadcastJobStatesToWebsockets();
-      this.broadcastJobStatesToChannel();
-    }, INTERVAL_JOBS_BROADCAST);
-
-    this._intervalCheckForDuplicateJobsSameSource = setInterval(() => {
-      this.checkForSourceConflicts();
-      this.checkForBadJobs();
-    }, INTERVAL_CHECK_FOR_DUPLICATE_JOBS_SAME_SOURCE);
-
-    this._intervalRemoveOldFinishedJobsFromQueue = setInterval(() => {
-      this.removeOldFinishedJobsFromQueue();
-    }, INTERVAL_REMOVE_OLD_FINISHED_JOBS_FROM_QUEUE);
 
     // channel listener
     // When a new message comes in from other instances, add it
@@ -624,6 +615,70 @@ export class BaseDockerJobQueue {
         console.error(`🌘 channelEmitter error`, err);
       }
     };
+
+    if (this.periodicWork) {
+      this.startMaintenanceTimers();
+    }
+  }
+
+  /** The timers the Deno servers run: unchanged cadence, unchanged behaviour. */
+  private startMaintenanceTimers() {
+    this._intervalWorkerBroadcast = setInterval(() => {
+      this.broadcastWorkersToChannel();
+      this.requeueJobsFromMissingWorkers();
+    }, INTERVAL_WORKERS_BROADCAST);
+
+    this._intervalJobsBroadcast = setInterval(() => {
+      this.broadcastJobStatesToWebsockets();
+      this.broadcastJobStatesToChannel();
+    }, INTERVAL_JOBS_BROADCAST);
+
+    this._intervalCheckForDuplicateJobsSameSource = setInterval(() => {
+      this.checkForSourceConflicts();
+      this.checkForBadJobs();
+    }, INTERVAL_CHECK_FOR_DUPLICATE_JOBS_SAME_SOURCE);
+
+    this._intervalRemoveOldFinishedJobsFromQueue = setInterval(() => {
+      this.removeOldFinishedJobsFromQueue();
+    }, INTERVAL_REMOVE_OLD_FINISHED_JOBS_FROM_QUEUE);
+  }
+
+  /**
+   * Is anything actually happening on this queue? A job still to run or
+   * running, or one that finished recently enough that it still has to be
+   * evicted from the queue. When this is false there is nothing for
+   * maintenance to do, so a runtime that can sleep should stop scheduling it.
+   */
+  public hasWorkInFlight(): boolean {
+    const now = Date.now();
+    for (const job of Object.values(this.state.jobs)) {
+      if (job.state === DockerJobState.Queued || job.state === DockerJobState.Running) {
+        return true;
+      }
+      if (
+        job.state === DockerJobState.Finished &&
+        now - (job.time ?? 0) < MAX_TIME_FINISHED_JOB_IN_QUEUE
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * One pass of the work those timers do, for a runtime that schedules it
+   * itself (the Durable Object, from an alarm). One method on purpose: the
+   * separate cadences serve the always-resident servers, and a queue that runs
+   * this only while work is in flight does not need four of them.
+   */
+  public async maintenance(): Promise<void> {
+    this.broadcastWorkersToChannel();
+    this.requeueJobsFromMissingWorkers();
+    this.broadcastJobStatesToWebsockets();
+    this.broadcastJobStatesToChannel();
+    this.checkForSourceConflicts();
+    this.checkForBadJobs();
+    await this.removeOldFinishedJobsFromQueue();
   }
 
   /**
@@ -1450,8 +1505,12 @@ export class BaseDockerJobQueue {
 
         if (messageString === "PING") {
           lastPingTime = Date.now();
+          // Static reply: Cloudflare's setWebSocketAutoResponse answers a fixed
+          // request with a fixed response without waking the Durable Object,
+          // and it can only do that if the reply carries no per-worker detail.
+          // Workers match on startsWith("PONG"), so this stays compatible.
           connection.socket.send(
-            "PONG " + (workerRegistration?.id || "unknown"),
+            "PONG",
           );
           return;
         }
@@ -1592,8 +1651,12 @@ export class BaseDockerJobQueue {
     }
     await this.sendJobStatesToWebsocket(connection.socket);
 
-    // Monitor worker connection health
-    const healthCheckInterval = setInterval(() => {
+    // Monitor worker connection health. Diagnostic only — it logs and takes no
+    // action — but it is still a timer, and one timer anywhere keeps a Durable
+    // Object resident. It also reads lastPingTime, which a runtime that
+    // auto-responds to PING never updates, so it would log silence that is not
+    // real. Off wherever the runtime schedules its own maintenance.
+    const healthCheckInterval = !this.periodicWork ? undefined : setInterval(() => {
       const timeSinceLastPing = Date.now() - lastPingTime;
       const uptime = Date.now() - connectionStartTime;
 
@@ -1622,7 +1685,9 @@ export class BaseDockerJobQueue {
 
     // Clean up interval when connection closes
     connection.socket.addEventListener("close", () => {
-      clearInterval(healthCheckInterval);
+      if (healthCheckInterval !== undefined) {
+        clearInterval(healthCheckInterval);
+      }
     });
   }
 

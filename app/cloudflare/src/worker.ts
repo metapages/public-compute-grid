@@ -13,10 +13,9 @@
  */
 import { store } from "./setup.ts";
 
-import { DurableObject } from "cloudflare:workers";
+import { QueueDurableObjectBase } from "./queue-do.ts";
 
 import { createApp } from "@/handlerHono.ts";
-import { handleWebsocketConnection } from "@/handlerWs.ts";
 import { createMcpServer } from "@metapages/compute-queues-mcp/server-factory";
 import { serveMcpStreamableHttp } from "@metapages/compute-queues-mcp/streamable-http";
 import { retryUnsuccessfulWebhooks } from "@shared/webhooks.ts";
@@ -89,17 +88,40 @@ const serveJobPage = async (env: Env, request: Request): Promise<Response> => {
   );
 };
 
-export class QueueDurableObject extends DurableObject<Env> {
-  fetch(request: Request): Promise<Response> | Response {
-    if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
-      const pair = new WebSocketPair();
-      const client = pair[0];
-      const server = pair[1] as WebSocket & { accept(): void };
-      server.accept();
-      handleWebsocketConnection(server, request);
-      return new Response(null, { status: 101, webSocket: client } as ResponseInit);
+export class QueueDurableObject extends QueueDurableObjectBase<Env> {
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const queueName = queueForPath(url.pathname);
+    if (!queueName) {
+      return new Response(`Not a queue path: ${url.pathname}`, { status: 404 });
     }
-    return handle(request);
+
+    if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
+      // /q/<queue>/worker vs /q/<queue>/client|browser — the only websocket
+      // paths routed here (handlerWs.ts has the same mapping for Deno).
+      const tokens = url.pathname.split("/").filter((x) => x !== "");
+      const kind = tokens[0] === "q" ? tokens[2] : tokens[1];
+      const role = kind === "worker" ? "worker" : "client";
+      if (kind !== "worker" && kind !== "client" && kind !== "browser") {
+        return new Response(`Unknown websocket endpoint: ${url.pathname}`, { status: 404 });
+      }
+      const pair = new WebSocketPair();
+      try {
+        await this.acceptSocket(pair[1], role, queueName);
+      } catch (err) {
+        console.error(`Could not attach a ${role} socket to queue ${queueName}:`, err);
+        return new Response(`Could not attach the ${role} socket: ${(err as Error).message}`, { status: 500 });
+      }
+      await this.scheduleMaintenance();
+      return new Response(null, { status: 101, webSocket: pair[0] } as ResponseInit);
+    }
+
+    // An HTTP submit or cancel can create work, so re-check afterwards whether
+    // maintenance needs to be running.
+    await this.ensureQueue(queueName);
+    const response = await handle(request);
+    await this.scheduleMaintenance();
+    return response;
   }
 }
 
