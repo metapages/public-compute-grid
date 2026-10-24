@@ -137,9 +137,14 @@ one Durable Object per queue, cron every minute).
   when `queueJobAdd` declined, so the caller polled forever. It now returns the queued job, and the submit handlers
   answer 409. The MCP client also dropped response bodies from its errors, so the server's explanation never surfaced.
 
-- A submission costs ~360ms of server-side work on Cloudflare, dominated by `queueJobAdd` doing several D1 writes one
-  after another plus an R2 PUT for `definition.json`. `KvStore.atomic()` already exists and D1 runs a batch as a single
-  round trip, so batching that path is the obvious optimization. Not blocking: jobs run for seconds to minutes.
+- Submission latency, measured against staging (medians, warm connection): a fresh job **410ms**, resubmitting an
+  already-finished job **249ms**. The writes in `queueJobAdd` are already one `kv.atomic()` batch, i.e. a single D1
+  round trip, so there is no write batching left to do. The fresh path is the expensive one: it PUTs `definition.json`
+  to R2 and does a handful of D1 reads, where a resubmission short-circuits on the cached record and skips both.
+- `isFinishedJobMissingResults` is not on the expensive path, despite looking like it: it returns with no I/O at all
+  unless the record is already Finished with Success/Error/TimedOut, and its one read is R2, not D1 — so it cannot join
+  a D1 batch, and a fresh submission never pays for it. Nothing to win there; the numbers above are why.
+- None of this is blocking: jobs run for seconds to minutes.
 
 - Fixed: the worker lost all job output after the first ~32 KB. Its log-grabbing transform streams were never read, so
   they stopped accepting data once their buffers filled (`DockerJob.ts`, now drained with `resume()`).
