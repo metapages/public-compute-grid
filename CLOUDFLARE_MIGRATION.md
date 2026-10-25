@@ -224,7 +224,7 @@ static made every worker re-register on every ping.
 ## Findings along the way
 
 - A queue's Durable Object could drop its worker the moment the object was rebuilt, leaving every job Queued:
-  `getApiDockerJobQueue` memoizes queues in a module-level map, which is per *isolate*, not per Durable Object. A new
+  `getApiDockerJobQueue` memoizes queues in a module-level map, which is per _isolate_, not per Durable Object. A new
   instantiation in a reused isolate got back a queue still holding the previous one's websockets, and Cloudflare refuses
   to let one Durable Object use another's I/O (`Cannot perform I/O on behalf of a different Durable Object`). The queue
   read that as a dead worker and removed it. The object now discards whatever the map holds and builds its own queue,
