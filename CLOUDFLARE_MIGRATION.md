@@ -230,6 +230,17 @@ static made every worker re-register on every ping.
   read that as a dead worker and removed it. The object now discards whatever the map holds and builds its own queue,
   whose sockets come from `ctx.getWebSockets()`. It only reproduced on production because it needs the isolate to be
   reused after an eviction — staging never hit it, and neither did `wrangler dev`.
+- The local `just test cloudflare` stack fails exactly one test per run, a different one each time (a 120s timeout in
+  the websocket test, or an MCP job reported as "disappeared from the queue: a later job in the same namespace replaces
+  the one before it"). Cause is test isolation, not the Workers stack: the whole suite shares queue `local1`, and the
+  concurrency test floods it, so a slower run lets a later job in the same namespace evict an earlier one. Worth fixing
+  before `just test cloudflare` goes into CI — give each test its own queue/namespace.
+- Seen once, unexplained: a worker registered (the server listed it in `/status`) and then received nothing at all — no
+  PONG, no JobStates — while all four job tests timed out. Its own 90s watchdog reported "no PONG since 15 minutes",
+  i.e. 15 minutes of silence surfaced in one step with no intervening check, which is what a suspended host looks like
+  rather than a lost socket. Not reproducible: the same suite then passed 10/10 against both staging and production. If
+  it recurs with the host demonstrably awake, the suspect is a send from the Durable Object reaching a socket that is no
+  longer delivering.
 - Validating within seconds of a deploy gives false failures: the first production contract run went 6/4 with jobs stuck
   Queued while the objects were still restarting on the new version. The same suite passed 10/10 a few minutes later.
   Give a deploy a moment before testing it.
