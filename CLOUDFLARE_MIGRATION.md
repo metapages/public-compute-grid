@@ -3,6 +3,11 @@
 Deno Deploy shuts down in about 6 months. We're doing this now, while we have the time. The S3 bucket is also being shut
 down, so blobs move to R2.
 
+**This is a replacement, not a parallel run.** PR #313 makes Cloudflare _the_ deployment: push to `main` deploys the
+Worker, nothing deploys to Deno Deploy any more, and no Deno-Deploy-specific plumbing stays behind. The only step that
+cannot land in the PR is DNS, because `container.mtfm.io` has to be in a zone on this Cloudflare account first — see
+[The domain](#the-domain).
+
 **Overview:** the API becomes a Cloudflare Worker (`app/cloudflare`). Each queue gets its own Durable Object, which
 holds that queue's websockets and in-memory state, so the Redis bus goes away. The store is D1. Blobs go to R2 through
 the S3 API, with MinIO as the local stand-in. The browser and docs are served as Workers Static Assets. Webhook retry
@@ -95,19 +100,13 @@ one Durable Object per queue, cron every minute).
 - [x] D1 latency through the queue DO: ~360ms of server-side work per submission (sequential submit ~458ms against a
       ~99ms warm-connection baseline). See the latency finding below
 
-## 5. Cutover
+## 5. Deploy
 
-Assumes PR #313 is merged. Today `container.mtfm.io` is an **A record to 69.67.170.170** (Deno Deploy,
-`server:
-deployd`) with a **14400s (4h) TTL**, and `mtfm.io` is hosted on **Google Cloud DNS**
-(`ns-cloud-*.googledomains.com`), not Cloudflare. `js.mtfm.io` points at the same Deno Deploy IP, so the zone carries
-other services too.
+**Cloudflare is the deployment.** Merging PR #313 replaces the Deno Deploy workflow with the Cloudflare one, so push to
+`main` → `.github/workflows/deploy.yml` → `just cloudflare deploy production`. Nothing deploys to Deno Deploy any more;
+there is no parallel-run period and no split between "old" and "new" production.
 
-DNS is deliberately **not** on the critical path. Production runs first on its own `workers.dev` hostname, with its own
-D1 and R2, while `container.mtfm.io` keeps pointing at Deno Deploy. Nothing about phase 5a can affect production
-traffic.
-
-### 5a. Production on workers.dev (no DNS, no effect on the current deployment)
+Production infrastructure exists and is validated:
 
 - [x] An R2 API token with **Object Read & Write**. Scoping it to _all_ buckets in the account covers staging and
       production in one go and avoids the mis-scoped-token trap (a token scoped elsewhere fails every request with
@@ -115,25 +114,27 @@ traffic.
 - [x] `just cloudflare setup production` — D1 `compute-queues`, R2 `compute-queues` with CORS and the 35-day expiry
       rule, and the real `database_id` written into `wrangler.jsonc`. **Commit that id**
 - [x] `R2_ACCESS_KEY_ID=… R2_SECRET_ACCESS_KEY=… just cloudflare secrets production`
-- [ ] Publish a worker release so deployed workers pick up the quiet-while-idle cadence (bump `app/worker/mod.json`).
-      Without it queues stay resident: older workers re-register every 10s. They keep working either way
 - [x] `just cloudflare deploy production` → live at **https://compute-queues.dion19.workers.dev**
-- [x] Validate there, against the real production infrastructure:
+- [x] Validated there, against the real production infrastructure:
   - [x] `just test-url https://compute-queues.dion19.workers.dev` — 10/10 in 24s
-  - [x] Blobs specifically — upload, `exists`, download, and a job's outputs — since this is the first use of the
-        production bucket and token
+  - [x] Blobs specifically — upload, `exists`, download, and a job's outputs — the first use of the production bucket
+        and token
   - [x] The OpenThermo build end to end through `cq` — built from the git commit, ran `tests/C2v.log`, exit 0, output
         file returned
   - [x] Cron firing (`wrangler tail` shows the `* * * * *` invocations) and hibernation (after a 60s idle window the
         object was evicted and rebuilt — the log shows the socket being re-attached — and the next job ran, exit 0)
-- [ ] Optional soft launch: point one real worker, or one queue, at the workers.dev hostname and use it for real work.
-      Jobs land in production D1/R2, which is harmless — data expires and job ids are content hashes — but it does mean
-      production storage is no longer pristine, so keep functional testing on staging if that matters
+  - [x] MCP over Streamable HTTP at `/mcp`: `initialize`, `tools/list` (the six current tools) and a real `tools/call`
+- [ ] Publish a worker release so deployed workers pick up the quiet-while-idle cadence (bump `app/worker/mod.json`).
+      Without it queues stay resident: older workers re-register every 10s. They keep working either way
 
-Note: datarefs embed absolute URLs, so jobs submitted against the workers.dev origin carry input URLs on that origin.
-They keep resolving as long as the workers.dev hostname stays enabled, which is a reason to leave it on after cutover.
+**Rollback** is `wrangler rollback`, or a redeploy of a previous Worker version — not a return to Deno Deploy.
 
-### 5b. DNS, when you are ready
+### The domain
+
+One manual step remains, and it needs DNS access rather than code. Today `container.mtfm.io` is an **A record to
+69.67.170.170** (Deno Deploy, `server: deployd`) with a **14400s (4h) TTL**, and `mtfm.io` is hosted on **Google Cloud
+DNS** (`ns-cloud-*.googledomains.com`). `js.mtfm.io` points at the same Deno Deploy IP, so the zone carries other
+services too.
 
 A Worker can only serve a hostname in a zone on this Cloudflare account, and `mtfm.io` is not one. Two routes:
 
@@ -144,26 +145,27 @@ A Worker can only serve a hostname in a zone on this Cloudflare account, and `mt
    first, and `js.mtfm.io` and anything else in the zone move with it
 
 - [ ] Whichever route, then a Workers **Custom Domain** for `container.mtfm.io` on the `compute-queues` Worker, added to
-      `wrangler.jsonc` so it is in version control
+      `wrangler.jsonc` so it is in version control. Not added yet on purpose: `routes` for a zone this account does not
+      hold makes every deploy fail
 - [ ] Lower the `container.mtfm.io` TTL in Google Cloud DNS to 60s and **wait out the old 4h TTL**
-- [ ] Smoke-test the custom domain before the flip (a hosts override works while DNS still points at Deno Deploy)
-- [ ] Flip the record. Watch `wrangler tail`, queue status, and that workers reconnect — they use ReconnectingWebSocket,
-      so they reattach on their own
+- [ ] Smoke-test the custom domain before the flip (a hosts override works while DNS still points at the old A record)
+- [ ] Flip the record. Workers use ReconnectingWebSocket, so they reattach on their own
 - [ ] Confirm on the real hostname: a job submitted and followed to completion, build and run logs, outputs from R2,
       `/`, `/docs`, `/mcp`, cron
-- [ ] Watch for 48h. Leave Deno Deploy running and untouched for ~2 weeks
 
-**Rollback:** restore the A record. Deno Deploy is current — its deploys from main broke on Oct 6 and were fixed on Oct
-21 (#310/#311), and the last two runs succeeded — so rollback lands on current code. Jobs submitted during the
-Cloudflare window live in D1/R2 and will not be visible after a rollback; resubmitting re-runs them.
+**Keep `workers_dev: true` after the domain is live.** Uploaded inputs are stored as absolute `url` DataRefs
+(`${address}/f/<hash>`, `app/shared/src/shared/jobtools.ts`), so jobs submitted against the workers.dev origin carry
+input URLs on that hostname and resolve only while it answers. The blobs themselves are in the same R2 bucket either
+way. Job ids are hashes of the definition and the hostname is inside it for jobs with file inputs, so the same job
+submitted after the domain change hashes differently and simply runs again — which is fine, nothing needs carrying over.
 
 ### Decisions
 
 - **Old job results: nothing to carry over.** Decided — jobs have a 30-day lifespan anyway, so everything in the old
-  bucket is deletable. No bucket copy and no read-through to S3: after cutover, results from before it return 404 (job
-  ids are content hashes, so resubmitting re-runs them), and the old S3 bucket gets deleted in cleanup.
-- **`/mcp/ws` is gone.** Production still serves it and still advertises the legacy tool list (`create_job`,
-  `execute_job`, …) at `/mcp/info`; both go away. `/mcp` (Streamable HTTP) is unaffected and verified on production:
+  bucket is disposable. No bucket copy and no read-through to S3: results from before the switch return 404 (job ids are
+  content hashes, so resubmitting re-runs them).
+- **`/mcp/ws` is gone.** The old deployment serves it and advertises the legacy tool list (`create_job`, `execute_job`,
+  …) at `/mcp/info`; both go away with it. `/mcp` (Streamable HTTP) is the replacement and is verified on the Worker:
   `initialize`, `tools/list` (the six current tools) and a real `tools/call` all answer. Confirm no client uses
   `/mcp/ws`
 
@@ -204,17 +206,24 @@ So the eviction threshold is roughly 10-15s of total silence, _any_ pending time
 `PONG <id>` and re-registers when it is missing, and auto-response can only reply with a fixed string. Making the reply
 static made every worker re-register on every ping.
 
-## 7. Cleanup (after the watch period, before Deno Deploy shuts down)
+## 7. Cleanup
 
-- [ ] Replace `.github/workflows/deploy.yml` (Deno Deploy) with the Cloudflare deploy on push to main
-- [ ] Add `just test cloudflare` to CI, so the Worker path cannot rot
-- [ ] Remove the Redis bus: `REDIS_URL`/`DENO_BROADCAST_REDIS_URL`, the compose service, and the
-      `@metapages/deno-redis-broadcastchannel` dependency. One Durable Object per queue means there is nothing to
-      coordinate between instances
-- [ ] Delete the Deno Deploy app and the old S3 bucket
-- [ ] Update everything that says the API is deployed to Deno Deploy: the `compute-queues-repo` skill, `README`s,
-      `docs/`, and `app/api/justfile`'s deploy recipe
+Nothing here is required for the migration — this PR already removes the Deno Deploy workflow, deploy recipes and
+`DENO_DEPLOY_TOKEN`, and updates the docs and the repo skill.
+
+- [ ] Remove the Deno Deploy era environment variables and secrets from wherever they are still set (the Deno Deploy
+      project, local `.env` files, CI secrets): `DENO_DEPLOY_TOKEN`, `DENO_KV_URL`, `DENO_KV_ACCESS_TOKEN`, `REDIS_URL`
+      / `DENO_BROADCAST_REDIS_URL`. **None of these exist on Cloudflare and none should be added**: the Worker has
+      exactly `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT` as secrets and `AWS_REGION`, `AWS_S3_BUCKET`
+      as vars (verified with `wrangler secret list`). D1 replaces Deno KV and one Durable Object per queue replaces the
+      Redis bus, so there is nothing to configure in their place
+- [ ] Delete the Deno Deploy app and the old S3 bucket whenever convenient — jobs have a 30-day lifespan, so the
+      bucket's contents are all disposable
+- [ ] Add `just test cloudflare` to CI, so the Worker path cannot rot — blocked on #314
 - [ ] Consider a stricter worker version gate once workers have upgraded, so a stale worker cannot keep a queue awake
+
+Note: the Redis bus and the Deno api server stay in the tree. They are what the `local` and `remote` docker stacks and
+the local-mode worker run, and those are development and test targets, not deployments.
 
 ## Later: Node and unification
 

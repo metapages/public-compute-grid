@@ -140,9 +140,11 @@ Local stack is HTTPS via mkcert at `https://worker-metaframe.localhost`; run `mk
 
 ## Deployment topology
 
-- Push to `main` → `.github/workflows/deploy.yml` → `just app/api/deploy`, which assembles a standalone dir (the api
-  `src/`, `app/browser/dist`, `shared/`, `docs/dist`) and runs `deno deploy --prod`. **If you add a new served
-  directory, add it to that copy list or it will 404 in production.**
+- Push to `main` → `.github/workflows/deploy.yml` → `just cloudflare deploy production`, which bundles the Worker
+  (`app/cloudflare/dist`), assembles the static assets (`app/cloudflare/.assets`: the browser build plus `docs/dist`)
+  and runs `wrangler deploy`. **If you add a new served directory, add it to the `assets` recipe in
+  `app/cloudflare/justfile` or it will 404 in production.** The api also still runs on Deno for the local and remote
+  docker stacks and for the local-mode worker — that is not a deployment target.
 - Bumping `app/worker/mod.json` version → worker binary + docker images published, git tag pushed.
 
 ## Editing rules of thumb
