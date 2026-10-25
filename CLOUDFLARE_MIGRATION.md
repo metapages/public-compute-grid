@@ -157,13 +157,14 @@ A Worker can only serve a hostname in a zone on this Cloudflare account, and `mt
 21 (#310/#311), and the last two runs succeeded — so rollback lands on current code. Jobs submitted during the
 Cloudflare window live in D1/R2 and will not be visible after a rollback; resubmitting re-runs them.
 
-### Decisions that still need an answer
+### Decisions
 
-- **Old job results.** After cutover the Worker reads R2, so results from before it return 404 until they would have
-  expired anyway (~1 month). Job ids are content hashes, so resubmitting re-runs the job. Accept that, copy the bucket,
-  or add a temporary read-through to S3
+- **Old job results: nothing to carry over.** Decided — jobs have a 30-day lifespan anyway, so everything in the old
+  bucket is deletable. No bucket copy and no read-through to S3: after cutover, results from before it return 404 (job
+  ids are content hashes, so resubmitting re-runs them), and the old S3 bucket gets deleted in cleanup.
 - **`/mcp/ws` is gone.** Production still serves it and still advertises the legacy tool list (`create_job`,
-  `execute_job`, …) at `/mcp/info`; both go away. `/mcp` (Streamable HTTP) is unaffected. Confirm no client uses
+  `execute_job`, …) at `/mcp/info`; both go away. `/mcp` (Streamable HTTP) is unaffected and verified on production:
+  `initialize`, `tools/list` (the six current tools) and a real `tools/call` all answer. Confirm no client uses
   `/mcp/ws`
 
 ## 6. Cost: hibernation
