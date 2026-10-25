@@ -230,11 +230,23 @@ static made every worker re-register on every ping.
   read that as a dead worker and removed it. The object now discards whatever the map holds and builds its own queue,
   whose sockets come from `ctx.getWebSockets()`. It only reproduced on production because it needs the isolate to be
   reused after an eviction — staging never hit it, and neither did `wrangler dev`.
-- The local `just test cloudflare` stack fails exactly one test per run, a different one each time (a 120s timeout in
-  the websocket test, or an MCP job reported as "disappeared from the queue: a later job in the same namespace replaces
-  the one before it"). Cause is test isolation, not the Workers stack: the whole suite shares queue `local1`, and the
-  concurrency test floods it, so a slower run lets a later job in the same namespace evict an earlier one. Worth fixing
-  before `just test cloudflare` goes into CI — give each test its own queue/namespace.
+- The local `just test cloudflare` stack fails exactly one test per run (64/65), a different one each time, always a
+  late job test: the websocket test, the MCP workflow, the MCP concurrency test. Cause is saturation, not the Workers
+  stack — the whole suite shares queue `local1` and two workers running two jobs each, and one failure's state dump
+  showed ~15 jobs still Queued when its 120s ran out. `wrangler dev` is slow enough to push the late tests over their
+  timeouts. `just test remote` is 65/65 on the same code. Give each test its own queue before making
+  `just test cloudflare` a CI gate.
+- MinIO's Docker Hub images stopped being publicly pullable — every tag, `:latest` included, answers
+  `pull access denied` — which broke the `remote mode` CI job on every branch, main included, and every dev machine on a
+  cache miss. The stacks now run SeaweedFS, which is maintained, freely pullable, and verifies real SigV4 for both
+  header-signed and presigned requests. The traefik hostname stays `minio.worker-metaframe.localhost` on purpose: it is
+  in the mkcert SANs and in `/etc/hosts` on dev machines and both CI runners, and only the service behind it changed.
+  Internally it is `s3:9000`.
+- The bucket the local stacks use was only ever created by the `create-s3-bucket` compose step, whose guard required the
+  endpoint to contain "minio" — and on a fresh machine nothing else makes it, so the suite was relying on the
+  self-hosted runners keeping the S3 data directory between runs. `ensureBucket()` now lives on `S3BlobStore` (a
+  CreateBucket that treats 409 as success), the init step refuses to run against a hosted endpoint, and the api waits
+  for it (`service_completed_successfully`) instead of racing it.
 - Seen once, unexplained: a worker registered (the server listed it in `/status`) and then received nothing at all — no
   PONG, no JobStates — while all four job tests timed out. Its own 90s watchdog reported "no PONG since 15 minutes",
   i.e. 15 minutes of silence surfaced in one step with no intervening check, which is what a suspended host looks like

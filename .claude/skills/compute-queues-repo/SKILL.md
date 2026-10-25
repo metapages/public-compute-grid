@@ -118,7 +118,7 @@ Everything moving in or out of a container is a `DataRef` (`{value, type: base64
 Always `just`. Root `justfile` delegates to `app/*/justfile`.
 
 ```sh
-just dev                 # whole local stack (api + browser + worker + minio + denokv)
+just dev                 # whole local stack (api + browser + worker + s3 + denokv)
 just app/worker/local    # ⚡ just the local-mode worker — it serves the same API on :8000
                          #    (queue "local"), starts in seconds, no docker compose. Use this
                          #    to test anything that doesn't need the cloud API or the browser.

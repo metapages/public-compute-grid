@@ -183,7 +183,7 @@ test mode="remote" +args="": _build_shared check (_validate_mode mode)
     if [ "{{ mode }}" = "local" ]; then
         export AWS_ENDPOINT="https://minio.worker-metaframe.localhost:{{ APP_PORT }}"
     else
-        export AWS_ENDPOINT="http://minio:9000"
+        export AWS_ENDPOINT="http://s3:9000"
     fi
     export AWS_REGION="us-west-2"
     export AWS_S3_BUCKET="localbucket"

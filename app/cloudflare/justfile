@@ -55,9 +55,10 @@ build-api: bundle
 
 # Run the Worker locally in workerd (local D1 + Durable Objects). Blobs need an
 # S3-compatible endpoint; AWS_ENDPOINT overrides the default below:
-#   docker run -d --name minio -p 9400:9000 -e MINIO_ROOT_USER=minioaccesskey123123 \
-#     -e MINIO_ROOT_PASSWORD=minioaccesskey123123 -e MINIO_REGION=us-west-2 \
-#     minio/minio:RELEASE.2024-04-28T17-53-50Z server /data
+#   printf '{"identities":[{"name":"local","credentials":[{"accessKey":"minioaccesskey123123",\
+#     "secretKey":"minioaccesskey123123"}],"actions":["Admin","Read","Write","List","Tagging"]}]}' > /tmp/s3.json
+#   docker run -d --name s3 -p 9400:9000 -v /tmp/s3.json:/etc/s3.json chrislusf/seaweedfs:3.69 \
+#     server -ip.bind=0.0.0.0 -dir=/data -s3 -s3.port=9000 -s3.config=/etc/s3.json
 
 # The full stack (`just dev cloudflare`) runs its own MinIO and needs none of this.
 dev +args="": build-api

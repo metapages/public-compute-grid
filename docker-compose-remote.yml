@@ -9,8 +9,10 @@ services:
     depends_on:
       traefik:
         condition: service_started
-      minio:
+      s3:
         condition: service_healthy
+      create-s3-bucket:
+        condition: service_completed_successfully
       denokv:
         condition: service_started
       redis:
@@ -33,7 +35,7 @@ services:
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-minioaccesskey123123}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-minioaccesskey123123}
       - AWS_REGION=${AWS_REGION:-us-west-2}
-      - AWS_ENDPOINT=${AWS_ENDPOINT:-http://minio:9000}
+      - AWS_ENDPOINT=${AWS_ENDPOINT:-http://s3:9000}
       - AWS_S3_BUCKET=${AWS_S3_BUCKET:-localbucket}
       - DENO_KV_ACCESS_TOKEN=localdenoaccesstoken
       - DENO_KV_URL=http://denokv:4512
@@ -89,7 +91,7 @@ services:
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-minioaccesskey123123}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-minioaccesskey123123}
       - AWS_REGION=${AWS_REGION:-us-west-2}
-      - AWS_ENDPOINT=${AWS_ENDPOINT:-http://minio:9000}
+      - AWS_ENDPOINT=${AWS_ENDPOINT:-http://s3:9000}
       - AWS_S3_BUCKET=${AWS_S3_BUCKET:-localbucket}
       - DENO_KV_ACCESS_TOKEN=localdenoaccesstoken
       - DENO_KV_URL=http://denokv:4512
@@ -145,7 +147,7 @@ services:
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-minioaccesskey123123}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-minioaccesskey123123}
       - AWS_REGION=${AWS_REGION:-us-west-2}
-      - AWS_ENDPOINT=${AWS_ENDPOINT:-http://minio:9000}
+      - AWS_ENDPOINT=${AWS_ENDPOINT:-http://s3:9000}
       - AWS_S3_BUCKET=${AWS_S3_BUCKET:-localbucket}
       - DENO_KV_ACCESS_TOKEN=localdenoaccesstoken
       - DENO_KV_URL=http://denokv:4512
@@ -319,16 +321,16 @@ services:
   # ensure the s3 bucket exists in this stack
   create-s3-bucket:
     depends_on:
-      minio:
+      s3:
         condition: service_healthy
     image: denoland/deno:alpine-2.9.3
-    command: deno run --minimum-dependency-age=0 --watch --allow-all ./src/s3/create-bucket-development.ts
+    command: deno run --minimum-dependency-age=0 --allow-all ./src/s3/create-bucket-development.ts
     working_dir: /app/app/api
     environment:
       - NPM_CONFIG_REGISTRY=${NPM_CONFIG_REGISTRY:-}
       - AWS_ACCESS_KEY_ID=minioaccesskey123123
       - AWS_SECRET_ACCESS_KEY=minioaccesskey123123
-      - AWS_ENDPOINT=${AWS_ENDPOINT:-http://minio:9000}
+      - AWS_ENDPOINT=${AWS_ENDPOINT:-http://s3:9000}
       - AWS_S3_BUCKET=${AWS_S3_BUCKET:-localbucket}
       - DENO_DIR=/deno
       - DENO_INSTALL_ROOT=/deno
@@ -351,40 +353,55 @@ services:
       - deno:/deno
     networks:
       - default
-  minio:
+  # S3 for the local stacks. SeaweedFS rather than MinIO: MinIO's images stopped
+  # being publicly pullable (every tag, :latest included, answers "pull access
+  # denied"), which broke this stack on every machine and in CI at once.
+  # SeaweedFS is maintained, freely pullable, and verifies real SigV4 for both
+  # header-signed and presigned requests, which is what this stack exercises.
+  #
+  # Credentials are written into an identities file at start, so they stay
+  # environment-driven the way MINIO_ROOT_USER/PASSWORD were. Unlike MinIO it
+  # needs no server-URL setting: it signs against the Host header it receives,
+  # so presigned URLs minted for the traefik hostname verify as they arrive.
+  # The traefik hostname stays minio.worker-metaframe.localhost: it is in the
+  # mkcert SANs and in /etc/hosts on every dev machine and both CI runners, and
+  # only the service behind it changed. Internally it is reachable as s3:9000.
+  s3:
     depends_on:
       traefik:
         condition: service_started
-    image: minio/minio:RELEASE.2024-04-28T17-53-50Z
-    command: server --address 0.0.0.0:9000 /data
+    image: chrislusf/seaweedfs:3.69
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+          printf '{"identities":[{"name":"local","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List","Tagging"]}]}'
+          "$$AWS_ACCESS_KEY_ID" "$$AWS_SECRET_ACCESS_KEY" > /tmp/s3-identities.json &&
+          exec weed server -ip.bind=0.0.0.0 -dir=/data -s3 -s3.port=9000 -s3.config=/tmp/s3-identities.json
     expose:
       - "9000"
+    # /status on the S3 port answers unauthenticated; it takes ~20s to come up
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9000/status"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 24
     environment:
-      MINIO_SERVER_URL: https://minio.worker-metaframe.localhost:${APP_PORT:-443}
-      MINIO_BROWSER_REDIRECT_URL: https://minio.worker-metaframe.localhost:${APP_PORT:-443}
-      MINIO_REGION: ${AWS_REGION:-us-west-2}
-      MINIO_ROOT_PASSWORD: minioaccesskey123123
-      MINIO_ROOT_USER: minioaccesskey123123
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioaccesskey123123}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioaccesskey123123}
     extra_hosts:
       - host.docker.internal:host-gateway
       - minio.worker-metaframe.localhost:host-gateway
     restart: always
     volumes:
-      - ./app/.cache/minio:/data
+      - ./app/.cache/s3:/data
     networks:
       - default
     labels:
       - "custom.label=worker-metaframe.localhost"
       - "traefik.enable=true"
-      - "traefik.http.routers.minio.rule=Host(`minio.worker-metaframe.localhost`)"
-      - "traefik.http.routers.minio.entrypoints=websecure"
-      # Apply the CORS middleware to the router
-      - "traefik.http.routers.minio.middlewares=cors-middleware@file"
+      - "traefik.http.routers.s3.rule=Host(`minio.worker-metaframe.localhost`)"
+      - "traefik.http.routers.s3.entrypoints=websecure"
+      - "traefik.http.routers.s3.middlewares=cors-middleware@file"
 
   traefik:
     image: traefik:v3.6.14

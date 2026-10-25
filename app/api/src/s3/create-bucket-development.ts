@@ -1,32 +1,26 @@
-import { S3Client } from "s3-lite-client";
+/**
+ * Create the bucket the local stacks use.
+ *
+ * The dev and test stacks start an empty S3 server, so something has to make
+ * the bucket; nothing did, and the only reason the suite passed was that the
+ * self-hosted CI runners kept the S3 data directory between runs. Run as a
+ * one-shot step by the compose stacks, before the api and workers start.
+ *
+ * Refuses to touch a hosted endpoint: a local S3 is the only thing that should
+ * ever have its bucket created from here.
+ */
+import { blobStoreConfigFromEnv, S3BlobStore } from "@shared/s3.ts";
 
-const region = Deno.env.get("AWS_REGION")!;
-const AWS_ACCESS_KEY_ID = Deno.env.get("AWS_ACCESS_KEY_ID")!;
-const AWS_SECRET_ACCESS_KEY = Deno.env.get("AWS_SECRET_ACCESS_KEY")!;
-const AWS_ENDPOINT = Deno.env.get("AWS_ENDPOINT")!;
+const config = blobStoreConfigFromEnv();
 
-if (!AWS_ENDPOINT || !AWS_ENDPOINT.includes("minio")) {
-  console.log("Non minio endpoint, skipping bucket creation.");
-  Deno.exit(0);
+if (!config.endpoint) {
+  console.error("No AWS_ENDPOINT set: refusing to create a bucket on AWS. Nothing to do.");
+  Deno.exit(1);
+}
+if (/r2\.cloudflarestorage\.com|amazonaws\.com/.test(config.endpoint)) {
+  console.error(`AWS_ENDPOINT is a hosted endpoint (${config.endpoint}): refusing to create a bucket there.`);
+  Deno.exit(1);
 }
 
-const config = {
-  // this is from docker compose:
-  endPoint: "minio",
-  useSSL: false,
-  port: 9000,
-  region,
-  accessKey: AWS_ACCESS_KEY_ID,
-  secretKey: AWS_SECRET_ACCESS_KEY,
-  pathStyle: true,
-};
-
-const client = new S3Client(config);
-
-const existsResults = await client.bucketExists("localbucket");
-if (!existsResults) {
-  await client.makeBucket("localbucket");
-  console.log("👉 Bucket created: 'localbucket'");
-} else {
-  console.log("✅ Bucket already exists");
-}
+await new S3BlobStore(config).ensureBucket();
+console.log(`\u2705 bucket ${config.bucket} exists at ${config.endpoint}`);

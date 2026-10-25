@@ -83,6 +83,26 @@ export class S3BlobStore {
     }
   }
 
+  /**
+   * CreateBucket, for local stacks only: R2 and S3 buckets are created by
+   * `just cloudflare setup` and the console, with credentials that are not
+   * allowed to create buckets at all.
+   *
+   * Idempotent — an existing bucket answers 409 (BucketAlreadyExists, or
+   * BucketAlreadyOwnedByYou on AWS), which is success here.
+   */
+  async ensureBucket(): Promise<void> {
+    const response = await this.client.fetch(this.objectUrl().toString(), { method: "PUT" });
+    const body = response.ok ? "" : await response.text();
+    if (response.ok || response.status === 409) {
+      return;
+    }
+    throw new Error(
+      `Could not create bucket ${this.config.bucket} at ${this.config.endpoint ?? "AWS"}: ` +
+        `${response.status} ${body.slice(0, 300)}`,
+    );
+  }
+
   /** HeadBucket: an R2 token scoped to one bucket may not list buckets. */
   async checkConnection(): Promise<void> {
     const response = await this.client.fetch(this.objectUrl().toString(), { method: "HEAD" });
