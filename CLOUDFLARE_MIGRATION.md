@@ -129,6 +129,36 @@ Production infrastructure exists and is validated:
 
 **Rollback** is `wrangler rollback`, or a redeploy of a previous Worker version — not a return to Deno Deploy.
 
+### The two tokens
+
+Two unrelated credentials, easy to confuse:
+
+**`CLOUDFLARE_API_TOKEN`** — deploys the Worker. Must be available to Actions (org or repo secret) or the merge's deploy
+run fails. Cloudflare's own GitHub Actions guide says to use the **Edit Cloudflare Workers** template, which grants:
+
+| permission                | scope   | what we use it for                                                             |
+| ------------------------- | ------- | ------------------------------------------------------------------------------ |
+| Workers Scripts: Write    | account | the deploy itself: script, static assets, DO migration, cron, `secret put`     |
+| Account Settings: Read    | account | `wrangler.jsonc` has no `account_id`, so wrangler resolves the account         |
+| User Details: Read        | user    | `wrangler whoami`, which `just cloudflare secrets` parses for the account id   |
+| User Memberships: Read    | user    | same                                                                           |
+| Workers Routes: Write     | zone    | unused until the Custom Domain for `container.mtfm.io` is added, then required |
+| Workers R2 Storage: Write | account | `just cloudflare setup` (bucket, CORS, expiry rule) — not the deploy           |
+| Workers Tail: Read        | account | `wrangler tail` — not the deploy                                               |
+| Workers KV Storage: Write | account | nothing; we use D1, so this can be dropped when trimming                       |
+
+**Add D1: Edit** on top of the template for a token that runs `just cloudflare setup` (`wrangler d1 create`, and the
+`d1 info` idempotency check). A CI token that only deploys does not need it. Create it with the account as the account
+resource and _all_ zones for the zone resource, so it keeps working once `container.mtfm.io` becomes a zone here.
+
+**Mind the expiry.** The token currently in the local `.env` runs `2026-10-22` → **`2026-11-01`**. A 10-day token is
+fine for hand-driven setup and wrong for CI: the deploy would start failing a week after merge. Give the Actions token
+no expiry, or a long one, and treat the expiry date as a thing to diarise.
+
+**`R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`** — an **R2 API token** (Object Read & Write, all buckets), not a
+Cloudflare API token. It never goes near Actions: it is uploaded once to the Worker as the `AWS_*` secrets, which is how
+the Worker signs S3 requests to R2.
+
 ### The domain
 
 One manual step remains, and it needs DNS access rather than code. Today `container.mtfm.io` is an **A record to
