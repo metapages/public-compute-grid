@@ -109,22 +109,23 @@ traffic.
 
 ### 5a. Production on workers.dev (no DNS, no effect on the current deployment)
 
-- [ ] An R2 API token with **Object Read & Write**. Scoping it to _all_ buckets in the account covers staging and
+- [x] An R2 API token with **Object Read & Write**. Scoping it to _all_ buckets in the account covers staging and
       production in one go and avoids the mis-scoped-token trap (a token scoped elsewhere fails every request with
       `403 AccessDenied`, which reads like a signing bug)
-- [ ] `just cloudflare setup production` — D1 `compute-queues`, R2 `compute-queues` with CORS and the 35-day expiry
+- [x] `just cloudflare setup production` — D1 `compute-queues`, R2 `compute-queues` with CORS and the 35-day expiry
       rule, and the real `database_id` written into `wrangler.jsonc`. **Commit that id**
-- [ ] `R2_ACCESS_KEY_ID=… R2_SECRET_ACCESS_KEY=… just cloudflare secrets production`
+- [x] `R2_ACCESS_KEY_ID=… R2_SECRET_ACCESS_KEY=… just cloudflare secrets production`
 - [ ] Publish a worker release so deployed workers pick up the quiet-while-idle cadence (bump `app/worker/mod.json`).
       Without it queues stay resident: older workers re-register every 10s. They keep working either way
-- [ ] `just cloudflare deploy production` → live at `compute-queues.<account subdomain>.workers.dev`
-- [ ] Validate there, against the real production infrastructure:
-  - [ ] `just test-url https://compute-queues.<subdomain>.workers.dev` (the full contract suite with a real worker)
-  - [ ] Blobs specifically — upload, `exists`, download, and a job's outputs — since this is the first use of the
+- [x] `just cloudflare deploy production` → live at **https://compute-queues.dion19.workers.dev**
+- [x] Validate there, against the real production infrastructure:
+  - [x] `just test-url https://compute-queues.dion19.workers.dev` — 10/10 in 24s
+  - [x] Blobs specifically — upload, `exists`, download, and a job's outputs — since this is the first use of the
         production bucket and token
-  - [ ] The OpenThermo build end to end through `cq`
-  - [ ] Cron firing (`wrangler tail` shows scheduled invocations) and hibernation (the queue's `serverId` changes across
-        an idle window while a worker stays attached)
+  - [x] The OpenThermo build end to end through `cq` — built from the git commit, ran `tests/C2v.log`, exit 0, output
+        file returned
+  - [x] Cron firing (`wrangler tail` shows the `* * * * *` invocations) and hibernation (after a 60s idle window the
+        object was evicted and rebuilt — the log shows the socket being re-attached — and the next job ran, exit 0)
 - [ ] Optional soft launch: point one real worker, or one queue, at the workers.dev hostname and use it for real work.
       Jobs land in production D1/R2, which is harmless — data expires and job ids are content hashes — but it does mean
       production storage is no longer pristine, so keep functional testing on staging if that matters
@@ -222,6 +223,16 @@ static made every worker re-register on every ping.
 
 ## Findings along the way
 
+- A queue's Durable Object could drop its worker the moment the object was rebuilt, leaving every job Queued:
+  `getApiDockerJobQueue` memoizes queues in a module-level map, which is per *isolate*, not per Durable Object. A new
+  instantiation in a reused isolate got back a queue still holding the previous one's websockets, and Cloudflare refuses
+  to let one Durable Object use another's I/O (`Cannot perform I/O on behalf of a different Durable Object`). The queue
+  read that as a dead worker and removed it. The object now discards whatever the map holds and builds its own queue,
+  whose sockets come from `ctx.getWebSockets()`. It only reproduced on production because it needs the isolate to be
+  reused after an eviction — staging never hit it, and neither did `wrangler dev`.
+- Validating within seconds of a deploy gives false failures: the first production contract run went 6/4 with jobs stuck
+  Queued while the objects were still restarting on the new version. The same suite passed 10/10 a few minutes later.
+  Give a deploy a moment before testing it.
 - `std/fs` cannot be replaced with plain `node:fs` for the worker's file handling: doing so made a served job input come
   back empty in the docker stack (CI failed on the inputs/outputs and multi-segment-path tests, locally it passed).
   `shared/fs.ts` now dispatches — Deno's own calls on Deno, `node:fs` on Workers and Node — because `std/fs` reads Deno

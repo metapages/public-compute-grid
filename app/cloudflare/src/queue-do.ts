@@ -33,7 +33,7 @@
 import { DurableObject } from "cloudflare:workers";
 
 import { getApiDockerJobQueue } from "@/routes/websocket.ts";
-import type { ApiDockerJobQueue } from "@/docker-jobs/ApiDockerJobQueue.ts";
+import { type ApiDockerJobQueue, userJobQueues } from "@/docker-jobs/ApiDockerJobQueue.ts";
 import { WebsocketMessageTypeWorkerToServer } from "@shared/types.ts";
 
 /** How often maintenance runs while a queue has work in flight. */
@@ -166,6 +166,17 @@ export class QueueDurableObjectBase<Env extends QueueDurableObjectEnv> extends D
       await this.doState.storage.put("queueName", this.queueName);
     }
     if (!this.queue) {
+      // getApiDockerJobQueue memoizes queues in a module-level map, which is
+      // per *isolate*, not per Durable Object. A new instantiation in a reused
+      // isolate gets back a queue still holding the previous one's sockets, and
+      // Cloudflare refuses to let one Durable Object use another's I/O:
+      //
+      //   Cannot perform I/O on behalf of a different Durable Object
+      //
+      // The queue treats that as a dead worker and drops it, so jobs sit
+      // Queued forever. Discard whatever the map holds and build this
+      // instance's own queue, whose sockets come from ctx.getWebSockets().
+      delete userJobQueues[this.queueName];
       // Rehydrates the queue's jobs from the store; periodicWork: false because
       // a timer would keep this object resident (see the file comment).
       this.queue = await getApiDockerJobQueue(this.queueName, { periodicWork: false });

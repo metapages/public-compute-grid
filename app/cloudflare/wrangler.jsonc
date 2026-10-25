@@ -26,7 +26,7 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["QueueDurableObject"] }],
   "d1_databases": [
-    { "binding": "DB", "database_name": "compute-queues", "database_id": "00000000-0000-0000-0000-000000000000" }
+    { "binding": "DB", "database_name": "compute-queues", "database_id": "65559ba3-a031-407d-8cfa-1360def6ebb8" }
   ],
   "triggers": { "crons": ["* * * * *"] },
   "observability": { "enabled": true },
