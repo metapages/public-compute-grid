@@ -10,10 +10,12 @@
  * removed. The results are cached tho
  */
 
+import { LRUMapWithDelete } from "mnemonist";
 import { ms } from "ms";
 import { createNanoEvents, type Emitter } from "nanoevents";
 import { delay } from "std/async/delay";
 import { DB } from "@shared/db.ts";
+import { getEnv } from "@shared/env.ts";
 import {
   type BroadcastJobDefinitions,
   type BroadcastJobStates,
@@ -71,12 +73,39 @@ import { setJobStateFinished } from "../client.ts";
  * is the bus instead, in production and in the local multi-instance stack
  * alike. Native is only correct where a single process is the whole server —
  * the worker's `--mode=local`.
+ *
+ * On Cloudflare each queue lives in exactly one Durable Object, so there are no
+ * other instances to tell: the runtime installs a no-op channel with
+ * setBroadcastChannelFactory before any queue is created.
  */
-const redisUrl: string | undefined = Deno.env.get("DENO_BROADCAST_REDIS_URL") ||
-  Deno.env.get("REDIS_URL");
+const redisUrl: string | undefined = getEnv("DENO_BROADCAST_REDIS_URL") ||
+  getEnv("REDIS_URL");
 
-let CustomBroadcastChannel: typeof BroadcastChannel = BroadcastChannel;
+export type BroadcastChannelFactory = (name: string) => BroadcastChannel;
+
+/** A channel nobody else listens on, for runtimes with one instance per queue. */
+export class NoopBroadcastChannel extends EventTarget {
+  readonly name: string;
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onmessageerror: ((event: MessageEvent) => void) | null = null;
+  constructor(name: string) {
+    super();
+    this.name = name;
+  }
+  postMessage(_message: unknown): void {}
+  close(): void {}
+}
+
+let createBroadcastChannel: BroadcastChannelFactory = typeof BroadcastChannel === "function"
+  ? (name) => new BroadcastChannel(name)
+  : (name) => new NoopBroadcastChannel(name) as unknown as BroadcastChannel;
 export let usingRedisBroadcastChannel = false;
+
+/** Replace how queues create their cross-instance channel. Call before creating queues. */
+export const setBroadcastChannelFactory = (factory: BroadcastChannelFactory): void => {
+  createBroadcastChannel = factory;
+  usingRedisBroadcastChannel = false;
+};
 
 if (redisUrl) {
   // The library reads DENO_BROADCAST_REDIS_URL at import time and throws
@@ -86,7 +115,7 @@ if (redisUrl) {
     const { BroadcastChannelRedis } = await import(
       "@metapages/deno-redis-broadcastchannel"
     );
-    CustomBroadcastChannel = BroadcastChannelRedis;
+    createBroadcastChannel = (name) => new BroadcastChannelRedis(name) as unknown as BroadcastChannel;
     usingRedisBroadcastChannel = true;
     console.log(`🌺 broadcast channel: redis (${new URL(redisUrl).hostname})`);
   } catch (err) {
@@ -325,6 +354,14 @@ export class BaseDockerJobQueue {
    */
   private buildLogsBuffer: Map<string, ConsoleLogLine[]> = new Map();
   private runLogsBuffer: Map<string, ConsoleLogLine[]> = new Map();
+  /**
+   * Jobs whose logs were already flushed, with the pending append for lines
+   * that arrived after that (a worker can still be pushing the built image).
+   * Such lines are appended to the persisted log: buffering them would start a
+   * fresh buffer holding only the tail, which readers prefer over the full
+   * persisted log.
+   */
+  private flushedLogs = new LRUMapWithDelete<string, Promise<void>>(1000);
 
   // intervals
   protected _intervalWorkerBroadcast: ReturnType<typeof setInterval> | undefined;
@@ -332,12 +369,22 @@ export class BaseDockerJobQueue {
   protected _intervalCheckForDuplicateJobsSameSource: ReturnType<typeof setInterval> | undefined;
   protected _intervalRemoveOldFinishedJobsFromQueue: ReturnType<typeof setInterval> | undefined;
 
+  /**
+   * Whether this queue runs its own maintenance timers. A Cloudflare Durable
+   * Object passes false and drives `maintenance()` from an alarm instead: any
+   * timer at all — including a per-connection one — keeps the object resident
+   * and billed, so an idle queue can only sleep if nothing is scheduled.
+   */
+  protected readonly periodicWork: boolean;
+
   constructor(opts: {
     serverId: string;
     address: string;
     dataDirectory?: string;
+    periodicWork?: boolean;
   }) {
     const { serverId, address, dataDirectory } = opts;
+    this.periodicWork = opts.periodicWork ?? true;
 
     this.address = address;
     this.addressShortString = getQueueColorizedString(address);
@@ -353,7 +400,7 @@ export class BaseDockerJobQueue {
     this.clients = [];
     this.state = { jobs: {} };
 
-    this.channel = new CustomBroadcastChannel(address);
+    this.channel = createBroadcastChannel(address);
 
     this.channelEmitter = createNanoEvents<BroadcastMessageEvents>();
 
@@ -365,25 +412,6 @@ export class BaseDockerJobQueue {
     this.channel.addEventListener("close", () => {
       console.log(`🚨 Broadcast channel closed`);
     });
-
-    this._intervalWorkerBroadcast = setInterval(() => {
-      this.broadcastWorkersToChannel();
-      this.requeueJobsFromMissingWorkers();
-    }, INTERVAL_WORKERS_BROADCAST);
-
-    this._intervalJobsBroadcast = setInterval(() => {
-      this.broadcastJobStatesToWebsockets();
-      this.broadcastJobStatesToChannel();
-    }, INTERVAL_JOBS_BROADCAST);
-
-    this._intervalCheckForDuplicateJobsSameSource = setInterval(() => {
-      this.checkForSourceConflicts();
-      this.checkForBadJobs();
-    }, INTERVAL_CHECK_FOR_DUPLICATE_JOBS_SAME_SOURCE);
-
-    this._intervalRemoveOldFinishedJobsFromQueue = setInterval(() => {
-      this.removeOldFinishedJobsFromQueue();
-    }, INTERVAL_REMOVE_OLD_FINISHED_JOBS_FROM_QUEUE);
 
     // channel listener
     // When a new message comes in from other instances, add it
@@ -587,6 +615,70 @@ export class BaseDockerJobQueue {
         console.error(`🌘 channelEmitter error`, err);
       }
     };
+
+    if (this.periodicWork) {
+      this.startMaintenanceTimers();
+    }
+  }
+
+  /** The timers the Deno servers run: unchanged cadence, unchanged behaviour. */
+  private startMaintenanceTimers() {
+    this._intervalWorkerBroadcast = setInterval(() => {
+      this.broadcastWorkersToChannel();
+      this.requeueJobsFromMissingWorkers();
+    }, INTERVAL_WORKERS_BROADCAST);
+
+    this._intervalJobsBroadcast = setInterval(() => {
+      this.broadcastJobStatesToWebsockets();
+      this.broadcastJobStatesToChannel();
+    }, INTERVAL_JOBS_BROADCAST);
+
+    this._intervalCheckForDuplicateJobsSameSource = setInterval(() => {
+      this.checkForSourceConflicts();
+      this.checkForBadJobs();
+    }, INTERVAL_CHECK_FOR_DUPLICATE_JOBS_SAME_SOURCE);
+
+    this._intervalRemoveOldFinishedJobsFromQueue = setInterval(() => {
+      this.removeOldFinishedJobsFromQueue();
+    }, INTERVAL_REMOVE_OLD_FINISHED_JOBS_FROM_QUEUE);
+  }
+
+  /**
+   * Is anything actually happening on this queue? A job still to run or
+   * running, or one that finished recently enough that it still has to be
+   * evicted from the queue. When this is false there is nothing for
+   * maintenance to do, so a runtime that can sleep should stop scheduling it.
+   */
+  public hasWorkInFlight(): boolean {
+    const now = Date.now();
+    for (const job of Object.values(this.state.jobs)) {
+      if (job.state === DockerJobState.Queued || job.state === DockerJobState.Running) {
+        return true;
+      }
+      if (
+        job.state === DockerJobState.Finished &&
+        now - (job.time ?? 0) < MAX_TIME_FINISHED_JOB_IN_QUEUE
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * One pass of the work those timers do, for a runtime that schedules it
+   * itself (the Durable Object, from an alarm). One method on purpose: the
+   * separate cadences serve the always-resident servers, and a queue that runs
+   * this only while work is in flight does not need four of them.
+   */
+  public async maintenance(): Promise<void> {
+    this.broadcastWorkersToChannel();
+    this.requeueJobsFromMissingWorkers();
+    this.broadcastJobStatesToWebsockets();
+    this.broadcastJobStatesToChannel();
+    this.checkForSourceConflicts();
+    this.checkForBadJobs();
+    await this.removeOldFinishedJobsFromQueue();
   }
 
   /**
@@ -718,6 +810,11 @@ export class BaseDockerJobQueue {
     if (!logs.logs?.length) {
       return;
     }
+    const flushed = this.flushedLogs.get(logs.jobId);
+    if (flushed) {
+      this.flushedLogs.set(logs.jobId, flushed.then(() => this.appendPersistedLogs(logs)));
+      return;
+    }
     const buffer = BUILD_LOG_STEPS.has(logs.step) ? this.buildLogsBuffer : this.runLogsBuffer;
     const existing = buffer.get(logs.jobId) || [];
     const combined = existing.concat(logs.logs);
@@ -725,6 +822,18 @@ export class BaseDockerJobQueue {
       logs.jobId,
       combined.length > MAX_BUFFERED_LOG_LINES ? combined.slice(-MAX_BUFFERED_LOG_LINES) : combined,
     );
+  }
+
+  private async appendPersistedLogs(logs: JobStatusPayload): Promise<void> {
+    const isBuild = BUILD_LOG_STEPS.has(logs.step);
+    try {
+      const existing = (isBuild ? await this.db.getBuildLogs(logs.jobId) : await this.db.getRunLogs(logs.jobId)) ?? [];
+      const combined = existing.concat(logs.logs);
+      const capped = combined.length > MAX_BUFFERED_LOG_LINES ? combined.slice(-MAX_BUFFERED_LOG_LINES) : combined;
+      await (isBuild ? this.db.storeBuildLogs(logs.jobId, capped) : this.db.storeRunLogs(logs.jobId, capped));
+    } catch (err) {
+      console.error(`Failed to append late ${isBuild ? "build" : "run"} logs for job ${logs.jobId}:`, err);
+    }
   }
 
   /**
@@ -1122,6 +1231,9 @@ export class BaseDockerJobQueue {
     // what the caller needs to see.
     await this.flushLogBuffer(jobId, this.buildLogsBuffer, "build");
     await this.flushLogBuffer(jobId, this.runLogsBuffer, "run");
+    if (!this.flushedLogs.has(jobId)) {
+      this.flushedLogs.set(jobId, Promise.resolve());
+    }
 
     const { updatedInMemoryJob, subsequentStateChange } = await this.db.setJobFinished({
       queue: this.address,
@@ -1175,6 +1287,8 @@ export class BaseDockerJobQueue {
     jobId: string,
     change: StateChangeValueRunning,
   ): Promise<void> {
+    // Running again (e.g. requeued after a lost worker): buffer a fresh log
+    this.flushedLogs.delete(jobId);
     if (!this.state.jobs[jobId]) {
       // be robust, assume very little.
       const possibleMissedJob = await this.db.queueJobGet({
@@ -1213,12 +1327,18 @@ export class BaseDockerJobQueue {
   }
 
   // Mark methods that could be overridden as protected
-  public async stateChangeJobEnqueue(enqueued: EnqueueJob): Promise<void> {
-    // console.log(`${this.addressShortString} 🌎 stateChangeJobEnqueue`, enqueued);
-
+  /**
+   * Returns the queued job, or undefined when it was not added — the job was
+   * removed or replaced while this submission was in flight. Callers must not
+   * treat undefined as success: an HTTP submit that answers 200 for a job the
+   * queue never took leaves the client polling forever for a job that is not
+   * there, which is exactly how that failure used to present.
+   */
+  public async stateChangeJobEnqueue(enqueued: EnqueueJob): Promise<InMemoryDockerJob | undefined> {
     if (!enqueued?.definition) {
-      // console.log(`enqueueJob but bad state ${JSON.stringify(enqueued).substring(0, 100)}`);
-      return;
+      throw new Error(
+        `Cannot enqueue job ${enqueued?.id ?? "(no id)"} on queue ${this.address}: the job has no definition`,
+      );
     }
 
     const jobId = enqueued.id;
@@ -1261,18 +1381,24 @@ export class BaseDockerJobQueue {
 
     // console.log(`${this.addressShortString} 🌎 stateChangeJobEnqueue inMemoryJob:`, inMemoryJob);
 
-    if (inMemoryJob) {
-      this.state.jobs[jobId] = inMemoryJob;
-    } else {
-      // if no job is return by queueJobAdd it means the job no longer exists
-      return;
+    if (!inMemoryJob) {
+      // queueJobAdd returning nothing means the job no longer exists: it was
+      // removed or superseded between this submission and the write.
+      console.log(
+        `${this.addressShortString} ${
+          getJobColorizedString(jobId)
+        } ❗ not queued: the job was removed or replaced while being submitted`,
+      );
+      return undefined;
     }
+    this.state.jobs[jobId] = inMemoryJob;
     this.checkForSourceConflicts();
 
     // broadcast first
     // enqueueing a job should broadcast the whole queue
     this.broadcastJobStatesToChannel();
     this.broadcastJobStatesToWebsockets();
+    return inMemoryJob;
   }
 
   protected async removeOldFinishedJobsFromQueue() {
@@ -1379,6 +1505,11 @@ export class BaseDockerJobQueue {
 
         if (messageString === "PING") {
           lastPingTime = Date.now();
+          // The worker reads its own id back out of this reply and re-registers
+          // if it is missing ("Server does not recognize us"), so the id has to
+          // stay. That rules out setWebSocketAutoResponse, which can only send a
+          // fixed string: intercepting PING would make every worker think it
+          // had been forgotten and re-register on every ping.
           connection.socket.send(
             "PONG " + (workerRegistration?.id || "unknown"),
           );
@@ -1521,8 +1652,12 @@ export class BaseDockerJobQueue {
     }
     await this.sendJobStatesToWebsocket(connection.socket);
 
-    // Monitor worker connection health
-    const healthCheckInterval = setInterval(() => {
+    // Monitor worker connection health. Diagnostic only — it logs and takes no
+    // action — but it is still a timer, and one timer anywhere keeps a Durable
+    // Object resident. It also reads lastPingTime, which a runtime that
+    // auto-responds to PING never updates, so it would log silence that is not
+    // real. Off wherever the runtime schedules its own maintenance.
+    const healthCheckInterval = !this.periodicWork ? undefined : setInterval(() => {
       const timeSinceLastPing = Date.now() - lastPingTime;
       const uptime = Date.now() - connectionStartTime;
 
@@ -1551,7 +1686,9 @@ export class BaseDockerJobQueue {
 
     // Clean up interval when connection closes
     connection.socket.addEventListener("close", () => {
-      clearInterval(healthCheckInterval);
+      if (healthCheckInterval !== undefined) {
+        clearInterval(healthCheckInterval);
+      }
     });
   }
 

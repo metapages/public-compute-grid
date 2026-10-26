@@ -25,11 +25,11 @@ cyan := "\\e[36m"
     echo -e "       api local:             {{ green }}https://worker-metaframe.localhost:{{ APP_PORT }}/{{ normal }}"
     echo -e "       api production:        {{ green }}https://container.mtfm.io{{ normal }}"
     echo -e "       github repo:           {{ green }}https://github.com/metapages/public-compute-grid{{ normal }}"
-    echo -e "       api deployment config: {{ green }}https://dash.deno.com/projects/compute-queue-api{{ normal }}"
+    echo -e "       api deployment config: {{ green }}https://dash.cloudflare.com/?to=/:account/workers/services/view/compute-queues{{ normal }}"
 
 # Validate mode
 @_validate_mode mode="":
-    @if [ "{{ mode }}" = "remote" ] || [ "{{ mode }}" = "local" ]; then :; else echo "Error: Mode must be 'remote' or 'local'" >&2; exit 1; fi
+    @if [ "{{ mode }}" = "remote" ] || [ "{{ mode }}" = "local" ] || [ "{{ mode }}" = "cloudflare" ]; then :; else echo "Error: Mode must be 'remote', 'local' or 'cloudflare'" >&2; exit 1; fi
 
 # Start Development Environment
 @dev mode="remote" +args="": (_validate_mode mode)
@@ -42,6 +42,24 @@ cyan := "\\e[36m"
 # Runs All Functional Tests and checks code
 test-all:
     just app test-all
+
+# API contract tests against any deployment (e.g. staging), with a temporary local worker on a fresh queue
+test-url url:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    queue="contract-$(date +%s)-$RANDOM"
+    data_dir="$(mktemp -d)"
+    echo -e "Testing {{ url }} on queue ${queue}"
+    (cd app/worker && deno run --allow-all --unstable-kv --unstable-cron src/cli.ts run \
+        --cpus=2 --id="test-url-${queue}" --data-directory="${data_dir}" \
+        --api-address={{ url }} "${queue}" > "${data_dir}/worker.log" 2>&1) &
+    worker_pid=$!
+    trap 'kill ${worker_pid} 2>/dev/null || true; pkill -f "test-url-${queue}" 2>/dev/null || true' EXIT
+    for i in $(seq 1 60); do
+        if curl -sf "{{ url }}/q/${queue}/status" | grep -q "test-url-${queue}"; then break; fi
+        sleep 1
+    done
+    cd app/test && QUEUE_ID="${queue}" API_URL={{ url }} deno test --allow-all --unstable-kv src/contract_api_test.ts
 
 # target: worker (local-mode worker on :8000, queue "local" — the default) |
 # stack (the full compose stack, queue "local1") | prod (no redirect).
@@ -530,6 +548,13 @@ alias shared := _shared
 
 @_shared +args="":
     just app/shared/{{ args }}
+
+# cloudflare subdirectory commands (the API on Cloudflare Workers, issue #308)
+
+alias cloudflare := _cloudflare
+
+@_cloudflare +args="":
+    just app/cloudflare/{{ args }}
 
 # docs subdirectory commands (VitePress site served at /docs)
 

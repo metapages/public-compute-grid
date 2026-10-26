@@ -30,17 +30,19 @@
     "jsr:@std/text@^1.0.19": "1.0.19",
     "npm:@aws-sdk/client-s3@3.1146.0": "3.1146.0",
     "npm:@aws-sdk/s3-request-presigner@3.1146.0": "3.1146.0",
-    "npm:@hono/mcp@~0.3.1": "0.3.1_@modelcontextprotocol+sdk@1.30.0__zod@4.4.3_hono@4.13.0_hono-rate-limiter@0.5.3__hono@4.13.0_zod@4.4.3",
+    "npm:@hono/mcp@~0.3.1": "0.3.1_@modelcontextprotocol+sdk@1.30.0__zod@4.4.3_hono@4.13.13",
     "npm:@metapages/hash-query@0.4.8": "0.4.8_react@19.2.8",
     "npm:@metapages/metapage@1.10.14": "1.10.14_react@19.2.8",
     "npm:@modelcontextprotocol/sdk@^1.17.1": "1.30.0_zod@4.4.3",
     "npm:@types/dockerode@^3.3.42": "3.3.47",
+    "npm:aws4fetch@1.0.20": "1.0.20",
     "npm:bytes@3.1.2": "3.1.2",
     "npm:crypto-random-string@5.0.0": "5.0.0",
     "npm:dockerode@^5.0.1": "5.0.1",
     "npm:esbuild@0.25.5": "0.25.5",
     "npm:fast-deep-equal@*": "3.1.3",
     "npm:fetch-retry@6": "6.0.0",
+    "npm:hono@4.13.13": "4.13.13",
     "npm:humanize-duration@^3.32.1": "3.34.0",
     "npm:json-diff@^1.0.6": "1.0.6",
     "npm:klaw@4.1.0": "4.1.0",
@@ -551,7 +553,7 @@
       ],
       "bin": true
     },
-    "@hono/mcp@0.3.1_@modelcontextprotocol+sdk@1.30.0__zod@4.4.3_hono@4.13.0_hono-rate-limiter@0.5.3__hono@4.13.0_zod@4.4.3": {
+    "@hono/mcp@0.3.1_@modelcontextprotocol+sdk@1.30.0__zod@4.4.3_hono@4.13.13": {
       "integrity": "sha512-EB2rTyyl27qT8KtvEysgfcLK2jhp4KBb5+XyJ5/bcKNA64usp6qyuUWja9X4QB8Rx9U/yhZHGpfI96Xa/jem4Q==",
       "dependencies": [
         "@modelcontextprotocol/sdk",
@@ -561,7 +563,7 @@
         "zod"
       ]
     },
-    "@hono/node-server@2.0.12_hono@4.13.0": {
+    "@hono/node-server@2.0.12_hono@4.13.13": {
       "integrity": "sha512-eWpQYr67tqJLeaSUl0Q+TquuYfUdTibpOJlUMV2FfUP7+KqCC5TufnwnlXL6mobZBJbGAYRd7ZvEBDCbLInjhg==",
       "dependencies": [
         "hono"
@@ -910,6 +912,9 @@
       "dependencies": [
         "safer-buffer"
       ]
+    },
+    "aws4fetch@1.0.20": {
+      "integrity": "sha512-/djoAN709iY65ETD6LKCtyyEI04XIBP5xVvfmNxsEP0uJB5tyaGBztSryRr4HqMStr9R06PisQE7m9zDTXKu6g=="
     },
     "base64-arraybuffer@1.0.2": {
       "integrity": "sha512-I3yl4r9QB5ZRY3XuJVEPfc2XhZO6YweFPI+UovAzn+8/hb3oJ6lnysaFcjVpkCPfVWFUDvoZ8kmVDP7WyRtYtQ=="
@@ -1290,14 +1295,14 @@
     "heap@0.2.7": {
       "integrity": "sha512-2bsegYkkHO+h/9MGbn6KWcE45cHZgPANo5LXF7EvWdT0yT2EguSVO1nDgU5c8+ZOPwp2vMNa7YFsJhVcDR9Sdg=="
     },
-    "hono-rate-limiter@0.5.3_hono@4.13.0": {
+    "hono-rate-limiter@0.5.3_hono@4.13.13": {
       "integrity": "sha512-M0DxbVMpPELEzLi0AJg1XyBHLGJXz7GySjsPoK+gc5YeeBsdGDGe+2RvVuCAv8ydINiwlbxqYMNxUEyYfRji/A==",
       "dependencies": [
         "hono"
       ]
     },
-    "hono@4.13.0": {
-      "integrity": "sha512-jhunvfHWxd7J5EFfSgH4xsYJzSe/lfqbUCxiyyeaQasUsXeEHXtzVid+7EOGByc5JnFa23SSFL3Y2RV/z1T+eQ=="
+    "hono@4.13.13": {
+      "integrity": "sha512-CQ46U0ZkAGmbT/4UxdzzGJpacP2IeKgY4a5/tOI9AABbpOMfK739wfDXmv1usCk+3RkKj1hQy4/fjhiwa2xlrA=="
     },
     "http-errors@2.0.1": {
       "integrity": "sha512-4FbRdAX+bSdmo4AUFuS0WNiPz8NgFt+r8ThgNWmlrjQjt1Q7ZR9+zTlce2859x4KSXrwIsaeTqDoKQmtP8pLmQ==",
@@ -2315,11 +2320,13 @@
       "npm:@metapages/metapage@1.10.14",
       "npm:@modelcontextprotocol/sdk@^1.17.1",
       "npm:@types/dockerode@^3.3.42",
+      "npm:aws4fetch@1.0.20",
       "npm:bytes@3.1.2",
       "npm:dockerode@^5.0.1",
       "npm:esbuild@0.25.5",
       "npm:fast-deep-equal@*",
       "npm:fetch-retry@6",
+      "npm:hono@4.13.13",
       "npm:humanize-duration@^3.32.1",
       "npm:json-diff@^1.0.6",
       "npm:klaw@4.1.0",

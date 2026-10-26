@@ -1,0 +1,297 @@
+# The api on the Cloudflare Workers runtime (issue #308): `wrangler dev` runs
+# the bundled Worker in workerd, with local D1 and Durable Objects, behind the
+# same traefik host as the remote stack. MinIO stands in for R2 (both speak the
+# S3 API). There is no redis and no denokv: each queue lives in one Durable
+# Object, and the store is D1.
+#
+# The Worker is bundled on the host before `up` (`just cloudflare build-api`):
+# deno resolves the workspace import maps, wrangler only serves the result and
+# reloads when dist/ or .assets/ change.
+services:
+  api:
+    depends_on:
+      traefik:
+        condition: service_started
+      s3:
+        condition: service_healthy
+      create-s3-bucket:
+        condition: service_completed_successfully
+    # not -slim: workerd needs the system CA certificates
+    image: node:22-bookworm
+    working_dir: /app/app/cloudflare
+    command: >-
+      npx --yes wrangler@4.151.3 dev
+      --ip 0.0.0.0 --port 8787
+      --persist-to /wrangler-state
+      --show-interactive-dev-session=false
+      --test-scheduled
+      --var AWS_ACCESS_KEY_ID:minioaccesskey123123
+      --var AWS_SECRET_ACCESS_KEY:minioaccesskey123123
+      --var AWS_ENDPOINT:http://s3:9000
+      --var AWS_REGION:us-west-2
+      --var AWS_S3_BUCKET:localbucket
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:8787/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    expose:
+      - "8787"
+    environment:
+      - CI=true
+      - WRANGLER_SEND_METRICS=false
+      - NPM_CONFIG_REGISTRY=${NPM_CONFIG_REGISTRY:-}
+    volumes:
+      - ./app/cloudflare:/app/app/cloudflare
+      - npm_cache:/root/.npm
+      - wrangler_state:/wrangler-state
+    networks:
+      - default
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    labels:
+      - "traefik.enable=true"
+      - "custom.label=worker-metaframe.localhost"
+      - "traefik.http.routers.api.rule=Host(`worker-metaframe.localhost`)"
+      - "traefik.http.routers.api.tls=true"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.services.api.loadbalancer.server.port=8787"
+    logging:
+      driver: ${LOGGING_API:-json-file}
+
+  # wrangler dev never fires Cron Triggers: this does, through --test-scheduled.
+  # More often than production's once a minute, so retries show up quickly.
+  # wrangler refuses /cdn-cgi/ requests not addressed to localhost, hence Host.
+  cron:
+    depends_on:
+      api:
+        condition: service_healthy
+    image: curlimages/curl:8.11.1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - 'while true; do curl -s -o /dev/null -H "Host: localhost:8787" "http://api:8787/cdn-cgi/handler/scheduled?cron=*+*+*+*+*"; sleep 20; done'
+    networks:
+      - default
+
+  worker:
+    depends_on:
+      api:
+        condition: service_healthy
+    entrypoint: [
+      "deno",
+      "run",
+      "--minimum-dependency-age=0",
+      "--unsafely-ignore-certificate-errors",
+      "--watch",
+      "--allow-all",
+      "--unstable-kv",
+      "--unstable-broadcast-channel",
+      "--unstable-cron",
+      "src/cli.ts",
+    ]
+    command: run --id=test-worker1 --cpus=2 --gpus=0 --api-address=http://api:8787 --data-directory ${WORKER_DATA_DIRECTORY:-/tmp/worker-metapage-io-dev1} local1
+    build:
+      context: .
+      dockerfile: app/worker/Dockerfile
+      target: worker
+    environment:
+      - DEV_ONLY_EXTERNAL_SERVER_ADDRESS=https://worker-metaframe.localhost:${APP_PORT:-443}
+      - CONTAINER_MTFM_IO_DISABLE_KILLING_UNKNOWN_JOBS=true
+      - APP_PORT=${APP_PORT:-443}
+      - IGNORE_CERTIFICATE_ERRORS=true
+      - NPM_CONFIG_REGISTRY=${NPM_CONFIG_REGISTRY:-}
+      - DENO_DIR=/deno
+      - DENO_INSTALL_ROOT=/deno
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET:-localbucket}
+    volumes:
+      - ./deno.json:/app/deno.json
+      - ./deno.lock:/app/deno.lock:ro
+      - ./app/shared:/app/app/shared
+      - ./app/mcp:/app/app/mcp
+      - ./app/worker:/app/app/worker
+      - ./app/browser/dist:/app/app/browser/dist
+      - ./app/api:/app/app/api
+      - /tmp:/tmp
+      - /var/run/docker.sock:/var/run/docker.sock
+      - deno:/deno
+      - node_modules:/app/node_modules
+    extra_hosts:
+      - host.docker.internal:host-gateway
+      - minio.worker-metaframe.localhost:host-gateway
+      - worker-metaframe.localhost:host-gateway
+    networks:
+      - default
+    logging:
+      driver: ${LOGGING_WORKER:-json-file}
+
+  worker2:
+    depends_on:
+      api:
+        condition: service_healthy
+    entrypoint: [
+      "deno",
+      "run",
+      "--minimum-dependency-age=0",
+      "--unsafely-ignore-certificate-errors",
+      "--watch",
+      "--allow-all",
+      "--unstable-kv",
+      "--unstable-broadcast-channel",
+      "--unstable-cron",
+      "src/cli.ts",
+    ]
+    command: run --id=test-worker2 --cpus=2 --gpus=0 --api-address=http://api:8787 --data-directory ${WORKER_DATA_DIRECTORY:-/tmp/worker-metapage-io-dev2}-2 local1
+    build:
+      context: .
+      dockerfile: app/worker/Dockerfile
+      target: worker
+    environment:
+      - DEV_ONLY_EXTERNAL_SERVER_ADDRESS=https://worker-metaframe.localhost:${APP_PORT:-443}
+      - CONTAINER_MTFM_IO_DISABLE_KILLING_UNKNOWN_JOBS=true
+      - APP_PORT=${APP_PORT:-443}
+      - IGNORE_CERTIFICATE_ERRORS=true
+      - NPM_CONFIG_REGISTRY=${NPM_CONFIG_REGISTRY:-}
+      - DENO_DIR=/deno
+      - DENO_INSTALL_ROOT=/deno
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET:-localbucket}
+    volumes:
+      - ./deno.json:/app/deno.json
+      - ./deno.lock:/app/deno.lock:ro
+      - ./app/shared:/app/app/shared
+      - ./app/mcp:/app/app/mcp
+      - ./app/worker:/app/app/worker
+      - ./app/browser/dist:/app/app/browser/dist
+      - ./app/api:/app/app/api
+      - /tmp:/tmp
+      - /var/run/docker.sock:/var/run/docker.sock
+      - deno:/deno
+      - node_modules:/app/node_modules
+    extra_hosts:
+      - host.docker.internal:host-gateway
+      - minio.worker-metaframe.localhost:host-gateway
+      - worker-metaframe.localhost:host-gateway
+    networks:
+      - default
+    logging:
+      driver: ${LOGGING_WORKER:-json-file}
+
+  create-s3-bucket:
+    depends_on:
+      s3:
+        condition: service_healthy
+    image: denoland/deno:alpine-2.9.3
+    command: deno run --minimum-dependency-age=0 --allow-all ./src/s3/create-bucket-development.ts
+    working_dir: /app/app/api
+    environment:
+      - NPM_CONFIG_REGISTRY=${NPM_CONFIG_REGISTRY:-}
+      - AWS_ACCESS_KEY_ID=minioaccesskey123123
+      - AWS_SECRET_ACCESS_KEY=minioaccesskey123123
+      - AWS_ENDPOINT=http://s3:9000
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET:-localbucket}
+      - DENO_DIR=/deno
+      - DENO_INSTALL_ROOT=/deno
+      - AWS_REGION=${AWS_REGION:-us-west-2}
+    volumes:
+      - ./app/api/deno.json:/app/app/api/deno.json
+      - ./app/api/src:/app/app/api/src
+      - ./deno.json:/app/deno.json
+      - ./deno.lock:/app/deno.lock:ro
+      - ./app/shared:/app/app/shared
+      - ./app/mcp:/app/app/mcp
+      - deno:/deno
+    networks:
+      - default
+
+  # S3 for the local stacks. SeaweedFS rather than MinIO: MinIO's images stopped
+  # being publicly pullable (every tag, :latest included, answers "pull access
+  # denied"), which broke this stack on every machine and in CI at once.
+  # SeaweedFS is maintained, freely pullable, and verifies real SigV4 for both
+  # header-signed and presigned requests, which is what this stack exercises.
+  #
+  # Credentials are written into an identities file at start, so they stay
+  # environment-driven the way MINIO_ROOT_USER/PASSWORD were. Unlike MinIO it
+  # needs no server-URL setting: it signs against the Host header it receives,
+  # so presigned URLs minted for the traefik hostname verify as they arrive.
+  # The traefik hostname stays minio.worker-metaframe.localhost: it is in the
+  # mkcert SANs and in /etc/hosts on every dev machine and both CI runners, and
+  # only the service behind it changed. Internally it is reachable as s3:9000.
+  s3:
+    depends_on:
+      traefik:
+        condition: service_started
+    image: chrislusf/seaweedfs:3.69
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+          printf '{"identities":[{"name":"local","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List","Tagging"]}]}'
+          "$$AWS_ACCESS_KEY_ID" "$$AWS_SECRET_ACCESS_KEY" > /tmp/s3-identities.json &&
+          exec weed server -ip.bind=0.0.0.0 -dir=/data -s3 -s3.port=9000 -s3.config=/tmp/s3-identities.json
+    expose:
+      - "9000"
+    # /status on the S3 port answers unauthenticated; it takes ~20s to come up
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9000/status"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioaccesskey123123}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioaccesskey123123}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+      - minio.worker-metaframe.localhost:host-gateway
+    restart: always
+    volumes:
+      - ./app/.cache/s3:/data
+    networks:
+      - default
+    labels:
+      - "custom.label=worker-metaframe.localhost"
+      - "traefik.enable=true"
+      - "traefik.http.routers.s3.rule=Host(`minio.worker-metaframe.localhost`)"
+      - "traefik.http.routers.s3.entrypoints=websecure"
+      - "traefik.http.routers.s3.middlewares=cors-middleware@file"
+
+  traefik:
+    image: traefik:v3.6.14
+    command:
+      - --global.sendanonymoususage=false
+      - --api.insecure=true
+      - --api.dashboard=true
+      - --providers.docker=true
+      - --providers.docker.endpoint=unix:///var/run/docker.sock
+      - --providers.docker.watch=true
+      - --providers.docker.constraints=Label(`custom.label`,`worker-metaframe.localhost`)
+      - --providers.docker.exposedbydefault=false
+      - --providers.file.filename=/etc/traefik/config.yml
+      - --providers.file.watch=true
+      - --log.level=INFO
+      - --log.format=common
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:${APP_PORT:-443}
+      - --entrypoints.websecure.http.tls=true
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik=true"
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    ports:
+      - "${APP_PORT:-443}:${APP_PORT:-443}"
+    volumes:
+      - ./app/.cache/traefik/certs:/etc/certs:ro
+      - ./app/.traefik/config.yml:/etc/traefik/config.yml
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - default
+
+volumes:
+  npm_cache:
+    driver: local
+  wrangler_state:
+    driver: local

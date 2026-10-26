@@ -1,5 +1,5 @@
 import { ApiDockerJobQueue, userJobQueues } from "@/docker-jobs/ApiDockerJobQueue.ts";
-import { SERVER_INSTANCE_ID } from "@/util/id.ts";
+import { getServerInstanceId } from "@/util/id.ts";
 
 export interface WebsocketUrlParameters {
   token: string;
@@ -7,13 +7,17 @@ export interface WebsocketUrlParameters {
 
 export const getApiDockerJobQueue = async (
   queue: string,
+  // A Cloudflare Durable Object passes periodicWork: false and schedules
+  // maintenance itself, because a timer would keep it resident and billed.
+  opts?: { periodicWork?: boolean },
 ): Promise<ApiDockerJobQueue> => {
   if (!userJobQueues[queue]) {
     // TODO: hydrate queue from some kind of persistence
     // actually the queue should handle that itself
     const jobQueue = new ApiDockerJobQueue({
-      serverId: SERVER_INSTANCE_ID,
+      serverId: getServerInstanceId(),
       address: queue,
+      periodicWork: opts?.periodicWork,
     });
     await jobQueue.setup();
     userJobQueues[queue] = jobQueue;
@@ -60,7 +64,7 @@ export async function wsHandlerWorker(
     if (!userJobQueues[token]) {
       // TODO: hydrate queue from some kind of persistence
       userJobQueues[token] = new ApiDockerJobQueue({
-        serverId: SERVER_INSTANCE_ID,
+        serverId: getServerInstanceId(),
         address: token,
       });
       await userJobQueues[token].setup();

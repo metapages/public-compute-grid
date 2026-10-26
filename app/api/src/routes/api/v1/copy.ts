@@ -12,6 +12,10 @@ import {
 export const copyJobToQueueHandler = async (c: Context) => {
   try {
     const jobId: string | undefined = c.req.param("jobId");
+    if (!jobId) {
+      c.status(400);
+      return c.json({ error: "No job id provided" });
+    }
     const post = await c.req.json<DockerApiCopyJobToQueuePayload>();
     const { queue, control } = post;
 

@@ -1,6 +1,6 @@
 import { createHandler } from "metapages/worker/routing/handlerDeno";
 
-import { handlerHttp } from "@/handlerHono.ts";
+import { handlerHttp } from "@/handlerDeno.ts";
 import { handleWebsocketConnection } from "@/handlerWs.ts";
 
 const APP_FQDN = Deno.env.get("APP_FQDN") || "https://connect.superslides.io";

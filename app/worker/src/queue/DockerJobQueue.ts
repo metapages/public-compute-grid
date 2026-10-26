@@ -284,17 +284,35 @@ export class DockerJobQueue {
   }
 
   private startPeriodicRegistration() {
-    // Register every 30 seconds to ensure server always knows about this worker
-    // This is especially important after clean server restarts
+    // Re-register so the server always knows about this worker, which matters
+    // after a clean server restart.
+    //
+    // Cadence depends on whether this worker is doing anything. A Cloudflare
+    // Durable Object hibernates after roughly 10-15s of silence and anything it
+    // receives wakes it, so re-registering every 10s around the clock keeps an
+    // idle queue resident and billed (the comment here used to say 30s, but the
+    // interval was 10s). While jobs are running the server is busy anyway, so
+    // keep it frequent; while idle, back off — on Cloudflare a woken object
+    // restores its workers from their socket attachments, and on any runtime a
+    // dropped connection re-registers on reconnect.
+    const REGISTRATION_INTERVAL_BUSY = ms("10s") as number;
+    const REGISTRATION_INTERVAL_IDLE = ms("2m") as number;
+    let lastRegistration = Date.now();
     this.registrationInterval = setInterval(() => {
       try {
+        const busy = Object.keys(this.queue).length > 0;
+        const due = busy ? REGISTRATION_INTERVAL_BUSY : REGISTRATION_INTERVAL_IDLE;
+        if (Date.now() - lastRegistration < due) {
+          return;
+        }
+        lastRegistration = Date.now();
         this.register();
       } catch (err) {
         console.log(
           `${this.workerIdShort} 🚨 Periodic registration failed: ${err}`,
         );
       }
-    }, ms("10s") as number);
+    }, ms("5s") as number);
   }
 
   public stopPeriodicRegistration() {

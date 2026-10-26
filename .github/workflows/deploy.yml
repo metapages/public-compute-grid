@@ -1,16 +1,26 @@
 # https://docs.github.com/en/free-pro-team@latest/actions/reference/workflow-syntax-for-github-actions
-name: Deno deploy api+browser
+name: Cloudflare deploy api+browser
 
-# https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions
+# Push to main deploys production (issue #308). Staging is on demand.
 on:
   push:
     branches:
       - "main"
+  workflow_dispatch:
+    inputs:
+      env:
+        description: "Environment"
+        required: true
+        default: "staging"
+        type: choice
+        options:
+          - staging
+          - production
 
 jobs:
-  deno-deploy-api-browser:
+  cloudflare-deploy:
+    name: Cloudflare deploy (${{ inputs.env || 'production' }})
     # Can switch to ubuntu-latest but self-hosted is safer and faster
-    name: Deno deploy api+browser
     runs-on: [self-hosted]
     steps:
       - name: Check out the repo
@@ -18,7 +28,9 @@ jobs:
         with:
           fetch-depth: "0"
 
-      - name: deno deploy api+browser
+      # CLOUDFLARE_API_TOKEN is all wrangler needs while the token reaches exactly
+      # one account; add CLOUDFLARE_ACCOUNT_ID too if that stops being true.
+      - name: wrangler deploy
         env:
-          DENO_DEPLOY_TOKEN: ${{ secrets.DENO_DEPLOY_TOKEN }}
-        run: just app/api/deploy
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: just cloudflare deploy ${{ inputs.env || 'production' }}
