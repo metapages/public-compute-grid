@@ -45,8 +45,8 @@ with no `Deno.*` or Workers-only calls. Only the runtime adapters are runtime-sp
 - [x] An R2 API token (Object Read & Write) for the Worker's S3 presigning: `just cloudflare secrets staging`. It must
       be scoped to the bucket — a token scoped elsewhere fails every request with `403 AccessDenied`, which looks like a
       signing bug and is not one
-- [ ] Production bucket, at cutover (`just cloudflare setup production`)
-- [ ] Switch the Deno Deploy env to R2 (it works there too). No copy needed, since data expires after a month
+- [x] Production bucket: `just cloudflare setup production` created `compute-queues` with CORS and the 35-day expiry
+      rule. Deno Deploy was never switched to R2 and does not need to be — it is no longer the deployment
 
 ## 2. Runtime-neutral core
 
@@ -54,7 +54,8 @@ with no `Deno.*` or Workers-only calls. Only the runtime adapters are runtime-sp
 - [x] Store interface (`KvStore`, injected with `setKv`), with Deno KV satisfying it unchanged
 - [x] Bus interface (`setBroadcastChannelFactory`, `NoopBroadcastChannel`)
 - [x] `createApp()` is the API without static files; the Deno server (API + static files from disk) is `handlerDeno.ts`
-- [ ] `BaseDockerJobQueue.tick()` so the intervals can be driven from outside (needed for hibernation)
+- [x] The queue's periodic work is drivable from outside, for hibernation: `periodicWork: false` plus a public
+      `maintenance()` and `hasWorkInFlight()`, rather than the `tick()` this originally planned
 - [x] Switch hono to `npm:hono@4.13.13` (was a `deno.land/x` release candidate): one copy of hono for every runtime,
       shared with `@hono/mcp`, and no `deno.land/x` left in the Worker bundle
 - [x] Drop the Deno-only imports from the Worker graph (std/fs → node:fs, the Deno static handler moved out), and delete
@@ -228,9 +229,9 @@ So the eviction threshold is roughly 10-15s of total silence, _any_ pending time
       10s, switching back to the fast cadence the moment it has jobs. Its reconnect watchdogs follow the same cadence,
       and the JobStates watchdog only applies while it has work, since a sleeping server pushes nothing
 - [x] Backwards compatible: no protocol change, so older workers keep working exactly as before. They ping every 10s,
-      which keeps their queue resident — they lose the saving, not the function
-- [ ] Log buffers do **not** need incremental persistence after all: a running job keeps `hasWorkInFlight()` true, so
-      the object stays resident for the whole job and the buffers cannot be lost to an eviction
+      which keeps their queue resident — they lose the saving, not the function Log buffers turned out not to need
+      incremental persistence: a running job keeps `hasWorkInFlight()` true, so the object stays resident for the whole
+      job and the buffers cannot be lost to an eviction.
 
 `setWebSocketAutoResponse` looked like the answer and is not usable here: the worker reads its own id back out of
 `PONG <id>` and re-registers when it is missing, and auto-response can only reply with a fixed string. Making the reply
