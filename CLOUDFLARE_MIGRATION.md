@@ -24,6 +24,22 @@ code uses web-standard APIs behind small interfaces (`getEnv`, `KvStore`, `SqlDr
 with no `Deno.*` or Workers-only calls. Only the runtime adapters are runtime-specific. `SqlKvStore` already runs on
 `node:sqlite`.
 
+## Next steps
+
+The migration is merged and deployed; what is left lives in its own issues.
+
+| issue | what                                                    | when                         |
+| ----- | ------------------------------------------------------- | ---------------------------- |
+| #317  | CI deploy token expires 2026-11-01                      | **this week**                |
+| #316  | Point `container.mtfm.io` at the Worker (zone + domain) | next                         |
+| #318  | Publish a worker release so idle workers go quiet       | any time                     |
+| #321  | Stop redeploying production for docs-only pushes        | any time, small              |
+| #319  | Remove the Deno Deploy era env vars and secrets         | any time                     |
+| #320  | Delete the Deno Deploy app and the old S3 bucket        | after #316 has settled       |
+| #314  | `just test cloudflare` flakes; tests that hang          | before adding it to CI       |
+| #315  | Worker can go deaf (ping/pong weaknesses)               | when it next recurs          |
+| #322  | Stricter worker version gate                            | after #318, or when it costs |
+
 ## 0. Integration tests first
 
 - [x] HTTP contract tests: submit, result, job lookups, namespaces, `/f/` upload/exists/download
