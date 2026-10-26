@@ -142,3 +142,28 @@ export const queueJobs = async (
   }
   return data || {};
 };
+
+/**
+ * Fail a wait instead of hanging the suite.
+ *
+ * Tests that wait on websocket messages for a job to finish have no deadline of
+ * their own, so one lost message hangs until CI kills the job — 20 minutes
+ * later, with nothing in the log but the test name. Race the wait against a
+ * deadline and report what was still outstanding.
+ */
+export const withDeadline = <T>(
+  promise: Promise<T>,
+  describeOutstanding: () => string,
+  timeoutMs: number = 120_000,
+): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`timed out after ${timeoutMs}ms: ${describeOutstanding()}`)),
+        timeoutMs,
+      );
+    }),
+  ]);
+};

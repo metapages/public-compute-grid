@@ -13,7 +13,7 @@ import {
   WebsocketMessageTypeServerBroadcast,
 } from "@metapages/compute-queues-shared";
 
-import { cancelJobOnQueue } from "./util.ts";
+import { cancelJobOnQueue, withDeadline } from "./util.ts";
 import { closeKv } from "../../shared/src/shared/kv.ts";
 
 const fetch = fetchRobust;
@@ -21,6 +21,8 @@ const fetch = fetchRobust;
 const QUEUE_ID = Deno.env.get("QUEUE_ID") || "local1";
 const API_URL = Deno.env.get("API_URL") ||
   (QUEUE_ID === "local" ? "http://worker:8000" : "http://api1:8081");
+
+const TIMEOUT = 120_000;
 
 Deno.test("submit multiple jobs and get expected results", async () => {
   const socket = new WebSocket(
@@ -108,31 +110,55 @@ Deno.test("submit multiple jobs and get expected results", async () => {
     }
   };
 
-  await open(socket);
+  // Short ids: enough to match against the worker and server logs
+  const short = (jobId: string) => jobId.substring(0, 6);
+  const outstanding = () =>
+    JSON.stringify({
+      onQueue: [...jobsSuccessfullySubmitted].map(short),
+      finished: [...jobIdsFinished].map(short),
+      stillWaitingFor: [...jobIds].filter((id) => !jobIdsFinished.has(id)).map(short),
+    });
 
-  while (jobsSuccessfullySubmitted.size < count) {
-    for (const { message } of messages) {
-      socket.send(JSON.stringify(message));
+  try {
+    await open(socket);
+
+    // Resubmit until every job is visible on the queue, but not forever
+    const submitDeadline = Date.now() + TIMEOUT;
+    while (jobsSuccessfullySubmitted.size < count) {
+      if (Date.now() > submitDeadline) {
+        throw new Error(
+          `only ${jobsSuccessfullySubmitted.size}/${count} jobs ever appeared on queue ${QUEUE_ID}: ${outstanding()}`,
+        );
+      }
+      for (const { message } of messages) {
+        socket.send(JSON.stringify(message));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    const results = await withDeadline(
+      Promise.all(promises.map((p) => p.promise)),
+      () => `waiting for ${count} jobs to finish on queue ${QUEUE_ID}: ${outstanding()}`,
+      TIMEOUT,
+    );
+    results.forEach((result, i: number) => {
+      assertEquals(result, definitions[i].command.replace("echo ", ""));
+    });
+
+    await Promise.all(
+      Array.from(jobIds).map((jobId) =>
+        cancelJobOnQueue({
+          queue: QUEUE_ID,
+          jobId,
+          message: "from-submit-multiple-jobs",
+        })
+      ),
+    );
+  } finally {
+    socket.close();
+    if (socket.readyState !== WebSocket.CLOSED) {
+      await closed(socket);
+    }
+    closeKv();
   }
-
-  const results = await Promise.all(promises.map((p) => p.promise));
-  results.forEach((result, i: number) => {
-    assertEquals(result, definitions[i].command.replace("echo ", ""));
-  });
-
-  socket.close();
-  await closed(socket);
-  closeKv();
-
-  await Promise.all(
-    Array.from(jobIds).map((jobId) =>
-      cancelJobOnQueue({
-        queue: QUEUE_ID,
-        jobId,
-        message: "from-submit-multiple-jobs",
-      })
-    ),
-  );
 });
