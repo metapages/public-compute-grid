@@ -8,6 +8,7 @@ import { JobStatus } from "/@/components/footer/JobStatus";
 import { JobControlButton } from "/@/components/header/JobControlButton";
 import { MainFooter } from "/@/components/MainFooter";
 import { MainHeader } from "/@/components/MainHeader";
+import { ShortJobNotFound } from "/@/components/ShortJobNotFound";
 import { PanelDocs } from "/@/components/sections/PanelDocs";
 import { PanelEditor } from "/@/components/sections/PanelEditor";
 import { PanelInputs } from "/@/components/sections/PanelInputs";
@@ -76,6 +77,7 @@ export const Main: React.FC = () => {
       border="1px solid #E4E4E4"
       boxSizing="border-box">
       <MainHeader />
+      <ShortJobNotFound />
       <HStack gap={0} w={"100%"} minW="100%" minH={"contentHeight"}>
         <Box minW={leftWidth} minH={"contentHeight"}>
           <PanelLogs mode={stdErrShown ? "stdout" : "stdout+stderr"} />

@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from "react";
 
+import { useHashParamJsonObject } from "/@/hooks/useHashParamJsonObject";
 import { JobInputs } from "/@shared/client";
 
 import { useHashParamJson } from "@metapages/hash-query/react-hooks";
@@ -10,7 +11,7 @@ import { useHashParamJson } from "@metapages/hash-query/react-hooks";
  * the file came from.
  */
 export const useEditableJobFiles = (): [JobInputs, (name: string, content: string) => void] => {
-  const [jobFiles, setJobFiles] = useHashParamJson<JobInputs | undefined>("files");
+  const [jobFiles, setJobFiles] = useHashParamJsonObject<JobInputs>("files");
   const [jobInputs, setJobInputs] = useHashParamJson<JobInputs | undefined>("inputs");
 
   const files = useMemo(() => ({ ...jobInputs, ...jobFiles }), [jobInputs, jobFiles]);

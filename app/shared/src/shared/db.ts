@@ -29,6 +29,7 @@ import {
   getJobColorizedString,
   getQueueColorizedString,
   isJobOkForSending,
+  isSha256,
   mergeRunInputs,
   resolveMostCorrectJob,
   setJobStateFinished,
@@ -383,7 +384,11 @@ export class DB {
    * inputs. Undefined when that job has not been submitted with those inputs.
    */
   async resolveJobRunId(id: string, opts?: { v?: string; i?: string }): Promise<string | undefined> {
-    const jobHash = opts?.v || (await this.kv.get<string>(["job-alias", id])).value || id;
+    if (opts?.v && !isSha256(opts.v)) {
+      return undefined;
+    }
+    // a sha256 is that content: only names have versions
+    const jobHash = opts?.v || (isSha256(id) ? id : (await this.kv.get<string>(["job-alias", id])).value || id);
     if (!opts?.i) {
       return jobHash;
     }

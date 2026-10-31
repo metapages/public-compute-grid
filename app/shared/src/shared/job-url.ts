@@ -2,10 +2,9 @@ import type { Context, MiddlewareHandler, Next } from "hono";
 
 import type { DB } from "@shared/db.ts";
 import type { EnqueueJob } from "@shared/types.ts";
-import { formatJobUrlPath, prepareEnqueueJob } from "@shared/util.ts";
+import { formatJobUrlPath, isSha256, prepareEnqueueJob } from "@shared/util.ts";
 
 const JOB_PATH = /^(?:\/q\/([^/]+))?\/j\/([^/]+?)(\.json)?(\/.*)?$/;
-const SHA256 = /^[0-9a-f]{64}$/;
 
 /**
  * Queues, results and logs are all keyed by run id, so the job routes need only
@@ -34,7 +33,7 @@ export const makeJobUrlMiddleware = (opts: {
     const url = new URL(c.req.url);
     const v = url.searchParams.get("v") || undefined;
     const i = url.searchParams.get("i") || undefined;
-    if (!v && !i && SHA256.test(id)) {
+    if (!v && !i && isSha256(id)) {
       return next();
     }
 
@@ -59,7 +58,10 @@ export const makeJobUrlMiddleware = (opts: {
  */
 export type SubmittedJob = Omit<EnqueueJob, "id" | "definition"> & Partial<Pick<EnqueueJob, "id" | "definition">>;
 
-/** Undefined when there is no definition, given or stored. */
+/**
+ * Undefined when there is no definition, given or stored. Throws
+ * InvalidJobIdError when the `jobId` cannot be used with that definition.
+ */
 export const resolveSubmittedJob = async (db: DB, submitted: SubmittedJob): Promise<EnqueueJob | undefined> => {
   let definition = submitted?.definition;
   if (!definition && submitted?.jobId) {

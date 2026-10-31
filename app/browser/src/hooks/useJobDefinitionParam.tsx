@@ -26,6 +26,8 @@ interface ShortJobStore {
   // URL mode. Its presence is what flips reads/writes into short-URL behaviour.
   shortJobId: string | undefined;
   shortJobDefinition: DockerJobDefinitionParamsInUrlHash | undefined;
+  // The page was opened at a job URL that has nothing behind it
+  shortJobNotFound: boolean;
   setShortJob: (
     shortJobId: string | undefined,
     shortJobDefinition: DockerJobDefinitionParamsInUrlHash | undefined,
@@ -35,6 +37,7 @@ interface ShortJobStore {
 export const useShortJobStore = create<ShortJobStore>(set => ({
   shortJobId: undefined,
   shortJobDefinition: undefined,
+  shortJobNotFound: false,
   setShortJob: (shortJobId, shortJobDefinition) => set({ shortJobId, shortJobDefinition }),
 }));
 
@@ -61,12 +64,12 @@ export const hydrateShortJobFromPath = async (): Promise<boolean> => {
   try {
     // `v` and `i` go straight through: the server resolves them to the run
     const resp = await fetch(`${window.location.origin}/j/${jobId}/definition.json${window.location.search}`);
-    if (!resp.ok) {
-      return false;
-    }
-    const json = await resp.json();
+    const json = resp.ok ? await resp.json() : undefined;
     const definition = json?.data as DockerJobDefinitionParamsInUrlHash | undefined;
     if (!definition) {
+      if (resp.status === 404 || resp.ok) {
+        useShortJobStore.setState({ shortJobNotFound: true });
+      }
       return false;
     }
     useShortJobStore.getState().setShortJob(jobId, definition);

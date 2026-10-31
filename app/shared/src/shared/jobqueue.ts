@@ -1344,7 +1344,6 @@ export class BaseDockerJobQueue {
 
     enqueued = await prepareEnqueueJob(enqueued);
     const jobId = enqueued.id;
-    await this.db.queueJobRecordIdentity(enqueued);
 
     // A finished record whose results are gone (isFinishedJobMissingResults)
     // has to be let go of by every server before this job can be queued again.
@@ -1394,6 +1393,9 @@ export class BaseDockerJobQueue {
       );
       return undefined;
     }
+    // Only now: a refused submission must not move a name to its version, or
+    // record a run that does not exist.
+    await this.db.queueJobRecordIdentity(enqueued);
     this.state.jobs[jobId] = inMemoryJob;
     this.checkForSourceConflicts();
 

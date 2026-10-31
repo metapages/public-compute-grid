@@ -1,4 +1,4 @@
-import { type DataRef, DataRefType } from "@metapages/compute-queues-shared";
+import { type DataRef, DataRefType, formatContentDisposition } from "@metapages/compute-queues-shared";
 import { db } from "@/db/db.ts";
 import { getDownloadPresignedUrl } from "@/routes/api/v1/download.ts";
 import type { Context } from "hono";
@@ -57,7 +57,7 @@ export const getJobOutputsHandler = async (c: Context) => {
           return new Response(bytes, {
             headers: {
               "Content-Type": mime.getType(filename) || "application/octet-stream",
-              "Content-Disposition": `attachment; filename="${filename.split("/").pop()}"`,
+              "Content-Disposition": formatContentDisposition(filename),
               "Content-Length": bytes.length.toString(),
             },
           });

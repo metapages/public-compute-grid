@@ -14,9 +14,11 @@ import {
   DefaultNamespace,
   DockerJobFinishedReason,
   DockerJobState,
+  formatContentDisposition,
   formatSubmitResponse,
   getJobColorizedString,
   type InMemoryDockerJob,
+  InvalidJobIdError,
   makeJobUrlMiddleware,
   makeStreamHandler,
   resolveSubmittedJob,
@@ -61,7 +63,7 @@ const downloadHandler = async (c: Context) => {
     const file = await Deno.open(filePath, { read: true });
 
     // Set headers
-    c.header("Content-Disposition", `attachment; filename="${key}"`);
+    c.header("Content-Disposition", formatContentDisposition(key));
     c.header("Content-Type", key.endsWith(".json") ? "application/json" : "application/octet-stream");
     c.header("Content-Length", fileInfo.size.toString());
 
@@ -235,6 +237,10 @@ const submitJobToQueueHandler = async (c: Context) => {
     c.status(200);
     return c.json(formatSubmitResponse(jobToQueue));
   } catch (err) {
+    if (err instanceof InvalidJobIdError) {
+      c.status(400);
+      return c.json({ error: err.message });
+    }
     const queue = c.req.param("queue");
     console.error(`Error submitting job to queue ${queue}:`, err);
     c.status(500);
@@ -420,7 +426,7 @@ export const getJobInputsHandler = async (c: Context) => {
 
     // Small files are inline, only url refs are in local storage
     if (inputRef.type !== DataRefType.url) {
-      c.header("Content-Disposition", `attachment; filename="${filename.split("/").pop()}"`);
+      c.header("Content-Disposition", formatContentDisposition(filename));
       c.header("Content-Type", mime.getType(filename) || "application/octet-stream");
       return c.newResponse(await dataRefToBuffer(inputRef));
     }
@@ -449,7 +455,7 @@ export const getJobInputsHandler = async (c: Context) => {
       const file = await Deno.open(filePath, { read: true });
 
       // Set headers
-      c.header("Content-Disposition", `attachment; filename="${filename}"`);
+      c.header("Content-Disposition", formatContentDisposition(filename));
       c.header("Content-Type", mime.getType(filename) || "application/octet-stream");
       c.header("Content-Length", fileInfo.size.toString());
 
@@ -533,7 +539,7 @@ export const getJobOutputsHandler = async (c: Context) => {
       const file = await Deno.open(filePath, { read: true });
 
       // Set headers
-      c.header("Content-Disposition", `attachment; filename="${filename}"`);
+      c.header("Content-Disposition", formatContentDisposition(filename));
       c.header("Content-Type", mime.getType(filename) || "application/octet-stream");
       c.header("Content-Length", fileInfo.size.toString());
 

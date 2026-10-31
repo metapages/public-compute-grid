@@ -4,6 +4,7 @@ import { PanelContainer } from "/@/components/generic/PanelContainer";
 import { PanelHeader } from "/@/components/generic/PanelHeader";
 import { AddInputButtonAndModal } from "/@/components/sections/inputs/AddInputButtonAndModal";
 import { InputRow } from "/@/components/sections/inputs/InputRow";
+import { useHashParamJsonObject } from "/@/hooks/useHashParamJsonObject";
 import { downloadFile, getDynamicInputs } from "/@/helpers";
 import { InputsRefs, JobInputs } from "/@shared/client";
 import { useStore } from "/@/store";
@@ -14,7 +15,7 @@ import { ArrowDown } from "@phosphor-icons/react";
 
 export const PanelInputs: React.FC = () => {
   const clientJobDefinition = useStore(state => state.newJobDefinition);
-  const [jobFiles, setJobFiles] = useHashParamJson<JobInputs | undefined>("files");
+  const [jobFiles, setJobFiles] = useHashParamJsonObject<JobInputs>("files");
   // deprecated: existing URLs keep these, written to /inputs. New files are job files.
   const [jobInputs, setJobInputs] = useHashParamJson<JobInputs | undefined>("inputs");
   const [dynamicInputs, setDynamicInputs] = useState<InputsRefs>({});

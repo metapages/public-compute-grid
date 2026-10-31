@@ -14,9 +14,11 @@ import {
   DockerJobDefinitionMetadata,
   InputsRefs,
   isDataRef,
+  isJobName,
   isParentInjectedHashParamKey,
   JobInputs,
   prepareEnqueueJob,
+  shaDockerJob,
 } from "/@shared/client";
 
 import { getHashParamsFromWindow } from "@metapages/hash-query";
@@ -26,7 +28,8 @@ import { useMetaframeAndInput } from "@metapages/metapage-react";
 
 import { getIOBaseUrl } from "../config";
 import { useStore } from "../store";
-import { useJobDefinitionParam } from "./useJobDefinitionParam";
+import { decodeHashJsonObject, useHashParamJsonObject } from "./useHashParamJsonObject";
+import { useJobDefinitionParam, useShortJobStore } from "./useJobDefinitionParam";
 import { useOptionAllowSetJob } from "./useOptionAllowSetJob";
 import { useQueue } from "./useQueue";
 
@@ -39,8 +42,6 @@ const HashParamKeysSystem = new Set([
   "control",
   "debug",
   "definition",
-  "files",
-  "i",
   "ignoreQueueOverride",
   "inputs",
   "job",
@@ -56,6 +57,13 @@ const getNonSystemHashParams = (): Record<string, string> => {
   // never inject system params.
   HashParamKeysSystem.forEach(key => {
     delete hashParams[key];
+  });
+  // `files` and `i` only belong to the app when they hold a JSON object. Any other
+  // value is a param the job's URL has always been able to use, e.g. `#?i=3`.
+  ["files", "i"].forEach(key => {
+    if (decodeHashJsonObject(hashParams[key])) {
+      delete hashParams[key];
+    }
   });
   // never inject params an embedding parent page (metapage.io) added: they are
   // plumbing, not container config, and several vary per page load or per viewer.
@@ -83,13 +91,14 @@ export const useDockerJobDefinition = () => {
   // embedded hash (`#?job=`) or a short URL (`/j/<id>`); the setter reverts a
   // short URL to the embedded form on edit. See useJobDefinitionParam.
   const [definitionParamsInUrl, setDefinitionParamsInUrl] = useJobDefinitionParam();
+  const shortJobId = useShortJobStore(s => s.shortJobId);
 
   // job files are stored in the URL hash
-  const [jobFilesFromUrl] = useHashParamJson<JobInputs | undefined>("files");
+  const [jobFilesFromUrl] = useHashParamJsonObject<JobInputs>("files");
   // deprecated: the same, but written to /inputs
   const [jobInputsFromUrl] = useHashParamJson<JobInputs | undefined>("inputs");
   // the inputs for this run: `/j/<job>#?i=<json of name: text or DataRef>`
-  const [runInputsFromUrl] = useHashParamJson<Record<string, unknown> | undefined>("i");
+  const [runInputsFromUrl] = useHashParamJsonObject<Record<string, unknown>>("i");
 
   // Parent pages to this frame can inject a userspace config
   // to uniquely identify the user and limit the job to a single userspace
@@ -269,6 +278,17 @@ export const useDockerJobDefinition = () => {
       }
 
       // if uploading a large blob means new inputs have arrived and replaced this set, break out
+      // Opened by name: runs stay tied to the name. Only when this is the name's
+      // latest version unchanged, since submitting under a name publishes to it,
+      // and pinning an old version or editing params in the URL must not do that.
+      const searchParams = new URLSearchParams(window.location.search);
+      const isLatestOfName =
+        !!shortJobId &&
+        isJobName(shortJobId) &&
+        !searchParams.has("v") &&
+        !searchParams.has("i") &&
+        (await shaDockerJob(definitionParamsInUrl)) === (await shaDockerJob(definition));
+
       const {
         id,
         jobId,
@@ -278,6 +298,7 @@ export const useDockerJobDefinition = () => {
       } = await prepareEnqueueJob({
         definition,
         inputs: runInputs,
+        jobId: isLatestOfName ? shortJobId : undefined,
       });
       if (cancelled) {
         return;
@@ -308,6 +329,7 @@ export const useDockerJobDefinition = () => {
     resolvedQueue,
     metaframeBlob.inputs,
     definitionParamsInUrl,
+    shortJobId,
     jobFilesFromUrl,
     jobInputsFromUrl,
     runInputsFromUrl,

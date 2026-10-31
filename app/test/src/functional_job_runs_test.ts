@@ -164,3 +164,113 @@ Deno.test("A file name cannot escape the job's folder on the worker", async () =
   const result = await waitForResult(`${API_URL}/j/${jobId}/result.json`);
   assert(`${result.error}`.includes("Invalid file name"));
 });
+
+const submitRaw = (body: unknown) =>
+  fetch(`${API_URL}/q/${QUEUE_ID}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+const twoDefinitions = () => {
+  const nonce = crypto.randomUUID();
+  return {
+    a: { image: "alpine:3.18.5", command: `sh -c 'echo A ${nonce}; cat /inputs/data.txt 2>/dev/null; true'` },
+    b: { image: "alpine:3.18.5", command: `sh -c 'echo B ${nonce}; cat /inputs/data.txt 2>/dev/null; true'` },
+    nonce,
+  };
+};
+
+Deno.test("A sha256 jobId cannot be pointed at other content", async () => {
+  const { a, b, nonce } = twoDefinitions();
+  const jobA = await submit({ definition: a });
+  await waitForResult(`${API_URL}/j/${jobA.jobId}/result.json`);
+
+  const hijack = await submitRaw({ jobId: jobA.jobId, definition: b });
+  assertEquals(hijack.status, 400);
+  await hijack.body?.cancel();
+
+  // the hash still runs its own content
+  const run = await submit({ jobId: jobA.jobId, inputs: { "data.txt": utf8("x") } });
+  assertEquals(run.jobHash, jobA.jobId);
+  assertEquals(logsText(await waitForResult(`${API_URL}${run.path.replace("?", "/result.json?")}`)), `A ${nonce}\nx`);
+  const definition = await (await fetch(`${API_URL}/j/${jobA.jobId}/definition.json`)).json();
+  assertEquals(definition.data.command, a.command);
+});
+
+Deno.test("Hashes sent by a client are not believed", async () => {
+  const { a, b, nonce } = twoDefinitions();
+  const jobA = await submit({ definition: a });
+  await waitForResult(`${API_URL}/j/${jobA.jobId}/result.json`);
+  const forgedInputs = await sha256Buffer(crypto.getRandomValues(new Uint8Array(8)));
+
+  for (
+    const forged of [
+      // a client that predates inputs, with its own id
+      { id: crypto.randomUUID(), jobHash: jobA.jobId, inputsHash: forgedInputs, definition: b },
+      // the ids derived on the server
+      { jobHash: jobA.jobId, inputsHash: forgedInputs, definition: b },
+      { jobId: crypto.randomUUID(), jobHash: jobA.jobId, inputsHash: forgedInputs, definition: b },
+    ]
+  ) {
+    const response = await submitRaw(forged);
+    assertEquals(response.status, 200);
+    await response.body?.cancel();
+    assertEquals(
+      (await (await fetch(`${API_URL}/j/${jobA.jobId}/definition.json`)).json()).data.command,
+      a.command,
+    );
+    const run = await fetch(`${API_URL}/j/${jobA.jobId}/result.json?i=${forgedInputs}`);
+    await run.body?.cancel();
+    assertEquals(run.status, 404);
+  }
+  assertEquals(logsText(await waitForResult(`${API_URL}/j/${jobA.jobId}/result.json`)), `A ${nonce}`);
+});
+
+Deno.test("A jobId has to be a sha256 of the job or a usable name", async () => {
+  const { a } = twoDefinitions();
+  for (const jobId of ["has/slash", "has space", "a?b", "a#b", "foo.json", "x".repeat(129), "A".repeat(64)]) {
+    const response = await submitRaw({ jobId, definition: a });
+    assertEquals(response.status, 400, jobId);
+    assert((await response.json()).error.includes("Invalid jobId"));
+  }
+});
+
+Deno.test("POST routes work through a job's name", async () => {
+  const jobId = crypto.randomUUID();
+  const { runId } = await submit({
+    jobId,
+    definition: { image: "alpine:3.18.5", command: `sh -c 'sleep 60; echo ${jobId}'` },
+  });
+  const cancelled = await fetch(`${API_URL}/q/${QUEUE_ID}/j/${jobId}/cancel`, { method: "POST" });
+  assertEquals(cancelled.status, 200);
+  assertEquals((await cancelled.json()).success, true);
+
+  const deadline = Date.now() + 30_000;
+  while (true) {
+    const { data } = await (await fetch(`${API_URL}/q/${QUEUE_ID}/j`)).json();
+    if (!data?.[runId] || data[runId].state === "Finished") {
+      break;
+    }
+    assert(Date.now() < deadline, "the job was not cancelled");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
+  // There is one queue in local mode: the local handler refuses every copy
+  if (QUEUE_ID !== "local") {
+    const copyName = crypto.randomUUID();
+    const inputs = { "data.txt": utf8(copyName) };
+    const run = await submit({ jobId: copyName, definition: twoDefinitions().a, inputs });
+    await waitForResult(`${API_URL}/j/${run.runId}/result.json`);
+    const otherQueue = `copied-${copyName}`;
+    const copied = await fetch(`${API_URL}/j/${copyName}/copy?i=${run.inputsHash}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ queue: otherQueue }),
+    });
+    assertEquals(copied.status, 200);
+    await copied.body?.cancel();
+    const onOtherQueue = await (await fetch(`${API_URL}/q/${otherQueue}/j/${run.runId}`)).json();
+    assert(onOtherQueue.data);
+  }
+});

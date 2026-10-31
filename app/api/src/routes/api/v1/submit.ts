@@ -2,7 +2,12 @@ import type { Context } from "hono";
 import { getApiDockerJobQueue } from "@/routes/websocket.ts";
 
 import { db } from "@/db/db.ts";
-import { formatSubmitResponse, resolveSubmittedJob, type SubmittedJob } from "@metapages/compute-queues-shared";
+import {
+  formatSubmitResponse,
+  InvalidJobIdError,
+  resolveSubmittedJob,
+  type SubmittedJob,
+} from "@metapages/compute-queues-shared";
 
 export const submitJobToQueueHandler = async (c: Context) => {
   try {
@@ -40,6 +45,10 @@ export const submitJobToQueueHandler = async (c: Context) => {
     c.status(200);
     return c.json(formatSubmitResponse(jobToQueue));
   } catch (err) {
+    if (err instanceof InvalidJobIdError) {
+      c.status(400);
+      return c.json({ error: err.message });
+    }
     const jobId = (err as { jobId?: string })?.jobId;
     console.error(`Error submitting job${jobId ? ` ${jobId}` : ""} to queue ${c.req.param("queue")}:`, err);
     c.status(500);

@@ -1,8 +1,10 @@
-import { assertEquals, assertNotEquals } from "std/assert";
+import { assertEquals, assertNotEquals, assertRejects } from "std/assert";
 
 import { DataRefType, type DockerJobDefinitionInputRefs } from "@shared/types.ts";
 import {
+  formatContentDisposition,
   formatJobUrlPath,
+  InvalidJobIdError,
   isParentInjectedHashParamKey,
   mergeRunInputs,
   prepareEnqueueJob,
@@ -568,4 +570,33 @@ Deno.test("formatJobUrlPath: the URL forms", () => {
   assertEquals(formatJobUrlPath({ id: "r", jobId: "h", jobHash: "h", inputsHash: "i" }), "/j/h?i=i");
   assertEquals(formatJobUrlPath({ id: "r", jobId: "name", jobHash: "h", inputsHash: "i" }), "/j/name?v=h&i=i");
   assertEquals(formatJobUrlPath({ id: "legacy" }), "/j/legacy");
+});
+
+Deno.test("prepareEnqueueJob: hashes sent by a client are dropped or recomputed", async () => {
+  const forged = { jobHash: "victim", inputsHash: "anyinputs", definition: baseJob };
+  const legacy = await prepareEnqueueJob({ ...forged, id: "attacker" });
+  assertEquals([legacy.id, legacy.jobHash, legacy.inputsHash], ["attacker", undefined, undefined]);
+
+  const hash = await shaDockerJob(baseJob);
+  const derived = await prepareEnqueueJob(forged);
+  assertEquals([derived.id, derived.jobHash, derived.inputsHash], [hash, hash, undefined]);
+
+  const named = await prepareEnqueueJob({ ...forged, jobId: "name" });
+  assertEquals([named.jobHash, named.inputsHash], [hash, undefined]);
+});
+
+Deno.test("prepareEnqueueJob: a jobId is the job's own sha256, or a name", async () => {
+  const hash = await shaDockerJob(baseJob);
+  assertEquals((await prepareEnqueueJob({ definition: baseJob, jobId: hash })).jobId, hash);
+  assertEquals((await prepareEnqueueJob({ definition: baseJob, jobId: "a-Name_1" })).jobId, "a-Name_1");
+  for (const jobId of ["b".repeat(64), "B".repeat(64), "a/b", "a b", "a.json", "a?b", "a#b", "x".repeat(129)]) {
+    await assertRejects(() => prepareEnqueueJob({ definition: baseJob, jobId }), InvalidJobIdError);
+  }
+});
+
+Deno.test("formatContentDisposition: a file name cannot break the header", () => {
+  assertEquals(formatContentDisposition("dir/a.txt"), `attachment; filename="a.txt"; filename*=UTF-8''a.txt`);
+  const header = formatContentDisposition('a"b\r\nx: y é.txt');
+  assertEquals(header, `attachment; filename="a_b__x: y _.txt"; filename*=UTF-8''a%22b%0D%0Ax%3A%20y%20%C3%A9.txt`);
+  new Headers({ "Content-Disposition": header });
 });

@@ -110,12 +110,12 @@ Every job route takes any of these forms, as does the browser client:
 `?i=` and `?v=` work the same on the sub-paths, e.g. `/q/<queue>/j/<job>/result.json?i=<sha256 inputs>`. A combination
 that was never submitted answers `404`.
 
-`#?i=` is `base64(encodeURIComponent(json))`, the same as `#?job=`, of `{name: text or DataRef}`. Large values have to be
+`#?i=` is `base64(encodeURIComponent(json))`, the same as `#?job=`, of `{name: text or DataRef}`. If `#?i=` or `#?files=` does not hold such a JSON object, it stays an ordinary hash param that reaches the job as an env var, as in `#?i=3`. Large values have to be
 DataRefs to fit in a URL.
 
 ### Named jobs
 
-Submit with your own `jobId`, for example a uuid, to get a short id that stays the same as the job changes:
+Submit with your own `jobId`, for example a uuid, to get a short id that stays the same as the job changes. A name is 1-128 characters from `A-Z a-z 0-9 _ -`, and cannot be shaped like a sha256: a sha256 only ever means that content, so a `jobId` that is one has to be the hash of the definition. Anything else is a `400`.
 
 ```js
 await fetch(`${API}/q/${queue}`, {
