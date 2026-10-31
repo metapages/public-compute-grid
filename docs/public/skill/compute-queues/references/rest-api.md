@@ -87,24 +87,28 @@ map, surfaced in the container as `configFiles`), `control`, `maxJobDuration`, `
 }
 ```
 
-→ `{"success": true, "jobId": "…"}`
+→ `{"success": true, "jobId": "…", "runId": "…", "jobHash": "…", "inputsHash": "…", "path": "/j/…?i=…"}`
+
+`inputs` next to `definition` are what this run processes: poll `runId`, or use `?i=<inputsHash>` on any `/j/<jobId>`
+route. `definition` can be left out to run an existing `jobId` on new `inputs`.
 
 ### `definition`
 
-| Field          | Type     | Notes                                                            |
-| -------------- | -------- | ---------------------------------------------------------------- |
-| `image`        | string   | Docker image, or a git URL to build.                             |
-| `build`        | object   | `{ context, filename, dockerfile, buildArgs, target, platform }` |
-| `command`      | string   | Shell syntax needs explicit `sh -c "…"`.                         |
-| `entrypoint`   | string   | Overrides image entrypoint.                                      |
-| `env`          | object   | `{ KEY: "value" }`. Also the place to put a re-run nonce.        |
-| `workdir`      | string   | Working directory.                                               |
-| `inputs`       | object   | filename → DataRef. Materialised at `/inputs`.                   |
-| `configFiles`  | object   | Like `inputs`, but part of the job hash.                         |
-| `shmSize`      | string   | e.g. `"2g"` for PyTorch dataloaders.                             |
-| `maxDuration`  | string   | `"30s"`, `"20m"`, `"2h"`.                                        |
-| `requirements` | object   | `{ cpus, gpus, memory, maxDuration }`.                           |
-| `tags`         | string[] | Reserved — declared but not matched on today.                    |
+| Field          | Type     | Notes                                                                       |
+| -------------- | -------- | --------------------------------------------------------------------------- |
+| `image`        | string   | Docker image, or a git URL to build.                                        |
+| `build`        | object   | `{ context, filename, dockerfile, buildArgs, target, platform }`            |
+| `command`      | string   | Shell syntax needs explicit `sh -c "…"`.                                    |
+| `entrypoint`   | string   | Overrides image entrypoint.                                                 |
+| `env`          | object   | `{ KEY: "value" }`. Also the place to put a re-run nonce.                   |
+| `workdir`      | string   | Working directory.                                                          |
+| `inputs`       | object   | filename → DataRef. Materialised at `/inputs`.                              |
+| `files`        | object   | Path → DataRef: relative to the workdir, or absolute. Part of the job hash. |
+| `configFiles`  | object   | Deprecated, use `files`. Like `inputs`, part of the job hash.               |
+| `shmSize`      | string   | e.g. `"2g"` for PyTorch dataloaders.                                        |
+| `maxDuration`  | string   | `"30s"`, `"20m"`, `"2h"`.                                                   |
+| `requirements` | object   | `{ cpus, gpus, memory, maxDuration }`.                                      |
+| `tags`         | string[] | Reserved — declared but not matched on today.                               |
 
 ### `control`
 

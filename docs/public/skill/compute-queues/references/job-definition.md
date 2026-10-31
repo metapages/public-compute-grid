@@ -21,20 +21,21 @@ content-type: application/json
 
 ## definition
 
-| Field          | Type     | Notes                                                                            |
-| -------------- | -------- | -------------------------------------------------------------------------------- |
-| `image`        | string   | Existing image reference, e.g. `python:3.12-slim`. Mutually usable with `build`. |
-| `build`        | object   | Build the image on the worker. See below.                                        |
-| `command`      | string   | Overrides the image CMD. A single string, shell-quoted.                          |
-| `entrypoint`   | string   | Overrides the image ENTRYPOINT.                                                  |
-| `workdir`      | string   | Working directory inside the container.                                          |
-| `env`          | object   | `{NAME: value}`. Stored with the definition — **not** a secret store.            |
-| `inputs`       | object   | `{filename: DataRef}` → written to `/inputs`.                                    |
-| `configFiles`  | object   | `{filename: DataRef}` → also written to `/inputs`. See "hashing" below.          |
-| `maxDuration`  | string   | e.g. `"20m"`, `"1h"`, `"90s"`. The worker kills the job past this.               |
-| `shmSize`      | string   | `/dev/shm` size, e.g. `"2g"`. PyTorch dataloaders need this.                     |
-| `requirements` | object   | `{cpus, gpus, memory, maxDuration}` — what the job needs from a worker.          |
-| `tags`         | string[] | Reserved. Plumbed through the types but **nothing matches on it yet**.           |
+| Field          | Type     | Notes                                                                                   |
+| -------------- | -------- | --------------------------------------------------------------------------------------- |
+| `image`        | string   | Existing image reference, e.g. `python:3.12-slim`. Mutually usable with `build`.        |
+| `build`        | object   | Build the image on the worker. See below.                                               |
+| `command`      | string   | Overrides the image CMD. A single string, shell-quoted.                                 |
+| `entrypoint`   | string   | Overrides the image ENTRYPOINT.                                                         |
+| `workdir`      | string   | Working directory inside the container.                                                 |
+| `env`          | object   | `{NAME: value}`. Stored with the definition — **not** a secret store.                   |
+| `inputs`       | object   | `{filename: DataRef}` → written to `/inputs`.                                           |
+| `files`        | object   | `{path: DataRef}` → relative to the working directory, or absolute. Part of the job id. |
+| `configFiles`  | object   | Deprecated, use `files`. `{filename: DataRef}` → written to `/inputs`.                  |
+| `maxDuration`  | string   | e.g. `"20m"`, `"1h"`, `"90s"`. The worker kills the job past this.                      |
+| `shmSize`      | string   | `/dev/shm` size, e.g. `"2g"`. PyTorch dataloaders need this.                            |
+| `requirements` | object   | `{cpus, gpus, memory, maxDuration}` — what the job needs from a worker.                 |
+| `tags`         | string[] | Reserved. Plumbed through the types but **nothing matches on it yet**.                  |
 
 ### build
 
@@ -92,8 +93,10 @@ The practical consequence: **resubmitting an identical definition returns the ca
 force a real re-run of an otherwise identical job, change something — `cq --nonce` sets an `env.CQ_NONCE` for exactly
 this.
 
-The `inputs` / `configFiles` split is about intent, not mechanics — both are hashed, both land in `/inputs`. Use
-`configFiles` for what defines the job (a script, a config), `inputs` for the data it processes.
+Put what defines the job (a script, a config) in `definition.files`. Send the data it processes as `inputs` **next to**
+`definition`, not inside it: `POST /q/<queue> {definition, inputs}`. Then `jobId` stays the same for every run, and
+`runId` is what you poll. `/j/<jobId>?i=<inputsHash>` addresses a run. `definition.inputs` and `definition.configFiles`
+still work: both land in `/inputs` and are part of the job id.
 
 ## control
 
@@ -118,7 +121,7 @@ The `inputs` / `configFiles` split is about intent, not mechanics — both are h
 
 | Path / var                                                             | Meaning                              |
 | ---------------------------------------------------------------------- | ------------------------------------ |
-| `/inputs` (`$JOB_INPUTS`)                                              | `inputs` + `configFiles` land here   |
+| `/inputs` (`$JOB_INPUTS`)                                              | `inputs` land here                   |
 | `/outputs` (`$JOB_OUTPUTS`)                                            | everything written here is collected |
 | `/job-cache` (`$JOB_CACHE`)                                            | persists across jobs on that worker  |
 | `$JOB_ID`                                                              | the job's sha256 id                  |

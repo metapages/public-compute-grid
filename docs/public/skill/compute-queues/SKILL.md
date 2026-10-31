@@ -155,15 +155,15 @@ command: [references/build-and-iterate.md](references/build-and-iterate.md).
 ## Inputs and outputs
 
 ```bash
---input name=value          # literal, inlined into the definition
+--file path=@./path         # job file: relative to the workdir, or an absolute path. Part of what the job *is*
+--input name=value          # data for this run, literal
 --input name=@./path        # file; inlined under 200 bytes, uploaded above it
---config name=@./path       # same, but semantically part of what the job *is*
 --output-dir ./outputs      # download everything the container wrote to /outputs
 ```
 
 Inputs appear in `/inputs` under the name you gave. Uploads are content-addressed by sha256, so re-uploading the same
-file is free. Both `inputs` and `configFiles` are part of the job hash; use `--config` for the script or config that
-defines the job and `--input` for the data it runs on.
+file is free. `--file` is part of the job id, `--input` is not; use `--file` for the script or config that defines the
+job and `--input` for the data it runs on.
 
 ## Integrating into an app
 

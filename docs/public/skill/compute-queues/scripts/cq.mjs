@@ -158,7 +158,7 @@ const apiJson = async (url, init) => {
  * Flags are `--name value` or `--name=value`; `--flag` alone is boolean true.
  * Repeatable flags (env, input, config, build-arg) collect into arrays.
  */
-const REPEATABLE = new Set(["env", "input", "config", "build-arg"]);
+const REPEATABLE = new Set(["env", "file", "input", "config", "build-arg"]);
 
 const parseArgs = (argv) => {
   const flags = {};
@@ -342,6 +342,13 @@ const buildDefinition = async (apiUrl, flags) => {
   }
   if (Object.keys(env).length) definition.env = env;
 
+  const files = {};
+  for (const spec of flags.file || []) {
+    const [name, ref] = await resolveDataRef(apiUrl, spec, "file");
+    files[name] = ref;
+  }
+  if (Object.keys(files).length) definition.files = files;
+
   const inputs = {};
   for (const spec of flags.input || []) {
     const [name, ref] = await resolveDataRef(apiUrl, spec, "input");
@@ -367,7 +374,9 @@ const buildDefinition = async (apiUrl, flags) => {
 };
 
 const submitJob = async (apiUrl, queue, definition, flags) => {
-  const body = { definition };
+  // The job is the definition; inputs are what this run processes
+  const { inputs, ...job } = definition;
+  const body = { definition: job, inputs };
   if (flags.namespace) body.control = { namespace: flags.namespace };
   const res = await apiJson(`${apiUrl}/q/${encodeURIComponent(queue)}`, {
     method: "POST",
@@ -375,7 +384,7 @@ const submitJob = async (apiUrl, queue, definition, flags) => {
     body: JSON.stringify(body),
   });
   if (!res.jobId) die(`submit did not return a jobId: ${JSON.stringify(res)}`);
-  return res.jobId;
+  return res.runId || res.jobId;
 };
 
 /**
@@ -645,8 +654,10 @@ JOB (for run / submit / url)
   --entrypoint <cmd>           container entrypoint
   --workdir <dir>              working directory
   --env K=V                    repeatable
-  --input name=@path|value     file into /inputs        (repeatable)
-  --config name=@path|value    config file into /inputs (repeatable, part of the job hash)
+  --file path=@path|value      job file: relative to the working directory, or an absolute path
+                               (repeatable, part of the job id)
+  --input name=@path|value     data for this run, into /inputs (repeatable, not part of the job id)
+  --config name=@path|value    deprecated, use --file: into /inputs (repeatable, part of the job id)
   --max-duration <dur>         e.g. 20m
   --cpus / --gpus / --memory   resource requirements
   --shm-size <size>            /dev/shm size

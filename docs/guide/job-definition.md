@@ -4,8 +4,9 @@ The body you `POST /q/<queue>`:
 
 ```json
 {
-  "id": "optional — defaults to sha256(definition)",
+  "jobId": "optional — a name for the job, e.g. a uuid. Defaults to sha256(definition)",
   "definition": { "...": "the container spec" },
+  "inputs": { "...": "optional — what this run processes, written to /inputs" },
   "control": { "...": "optional queue behaviour" },
   "debug": false
 }
@@ -21,8 +22,9 @@ The body you `POST /q/<queue>`:
 | `entrypoint`   | string | Overrides the image entrypoint.                                        |
 | `env`          | object | `{ "KEY": "value" }` env vars.                                         |
 | `workdir`      | string | Working directory inside the container.                                |
-| `inputs`       | object | Filename → [DataRef](/guide/files). Mounted read-only at `/inputs`.    |
-| `configFiles`  | object | Same shape as `inputs`, but part of the job hash.                      |
+| `files`        | object | Path → [DataRef](/guide/files#job-files). Relative to the working directory, or absolute. |
+| `inputs`       | object | Deprecated, use `files`. Filename → DataRef, written to `/inputs`.     |
+| `configFiles`  | object | Deprecated, use `files`. Same shape as `inputs`.                       |
 | `shmSize`      | string | e.g. `"2g"` — needed by PyTorch dataloaders and friends.               |
 | `maxDuration`  | string | `"30s"`, `"20m"`, `"2h"`.                                              |
 | `requirements` | object | `{ cpus, gpus, memory, maxDuration }`.                                 |
@@ -30,10 +32,10 @@ The body you `POST /q/<queue>`:
 `definition.tags` also exists in the types, intended to pin a job to workers with matching tags. Nothing matches on it
 yet — treat it as reserved.
 
-::: tip inputs vs configFiles
-Both land in the container. `inputs` are the *data* you vary per run; `configFiles` are fixed and folded into the job
-hash, so changing one produces a different job id. If you want a change to force a re-run, put it in `configFiles` (or
-`env`).
+::: tip files vs inputs
+`definition.files` are part of the job, so changing one produces a different job id. The `inputs` next to `definition`
+are the *data* you vary per run: the job id stays the same, and each set of inputs is its own run. See
+[Jobs and runs](/guide/files#jobs-and-runs).
 :::
 
 ### Minimal

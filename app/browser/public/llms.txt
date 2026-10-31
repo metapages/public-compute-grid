@@ -108,6 +108,7 @@ Containers automatically receive environment variables:
 - `GET /j/:jobId/definition.json` - Job definition
 - `GET /j/:jobId/result.json` - Job results
 - `GET /j/:jobId/inputs/:file` - Job input file
+- `GET /j/:jobId/files/:path` - Job file
 - `GET /j/:jobId/outputs/:file` - Job output file
 - `POST /j/:jobId/copy` - Copy job to another queue
 - `POST /q/:queue/j/:jobId/cancel` - Cancel job
@@ -262,6 +263,7 @@ docker run --rm \
 
 Via browser client:
 https://container.mtfm.io/j/<jobId>#?queue=my-queue                          (short, after submitting)
+https://container.mtfm.io/j/<jobId>?i=<inputsHash>#?queue=my-queue           (the job on those inputs)
 https://container.mtfm.io/#?job=<base64-encoded-job-definition>&queue=my-queue  (self-contained)
 
 Via CLI:
