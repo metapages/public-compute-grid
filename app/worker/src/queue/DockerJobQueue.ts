@@ -27,6 +27,7 @@ import {
   type DockerJobQueueArgs,
   DockerRunPhase,
   type Volume,
+  type WorkdirFile,
   type WorkerJobQueueItem,
 } from "./types.ts";
 
@@ -811,6 +812,7 @@ export class DockerJobQueue {
       }
       let volumes: Volume[];
       let outputsDir: string;
+      let workdirFiles: WorkdirFile[];
       try {
         if (!this.queue[jobId]) {
           return;
@@ -826,6 +828,7 @@ export class DockerJobQueue {
         this.queue[jobId].phase = DockerRunPhase.Building;
         volumes = volumesResult.volumes;
         outputsDir = volumesResult.outputsDir;
+        workdirFiles = volumesResult.workdirFiles;
       } catch (err) {
         console.error(`${this.workerIdShort} 💥 `, err);
         // TODO too much code duplication here
@@ -888,6 +891,7 @@ export class DockerJobQueue {
         env: definition.env,
         shmSize: definition.shmSize,
         volumes,
+        workdirFiles,
         outputsDir,
         deviceRequests,
         maxJobDuration: definition?.maxDuration

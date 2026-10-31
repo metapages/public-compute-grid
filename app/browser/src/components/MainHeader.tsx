@@ -4,10 +4,10 @@ import { JobControlButton } from "/@/components/header/JobControlButton";
 import { getDynamicInputsCount, getOutputs } from "/@/helpers";
 import { useStore } from "/@/store";
 import { useJobDefinitionParam } from "/@/hooks/useJobDefinitionParam";
-import { InputsRefs, JobInputs } from "/@shared/client";
+import { useEditableJobFiles } from "/@/hooks/useEditableJobFiles";
+import { InputsRefs } from "/@shared/client";
 
 import { Badge, Box, Flex, HStack, Icon, Spacer, Text, Tooltip, useMediaQuery } from "@chakra-ui/react";
-import { useHashParamJson } from "@metapages/hash-query/react-hooks";
 import { DownloadSimple, Gear, UploadSimple } from "@phosphor-icons/react";
 
 import { JobStatus } from "./footer/JobStatus";
@@ -15,7 +15,7 @@ import { JobStatus } from "./footer/JobStatus";
 export const MainHeader: React.FC = () => {
   const [isLargerThan400] = useMediaQuery("(min-width: 400px)");
   const [jobDefinitionBlob] = useJobDefinitionParam();
-  const [jobInputs] = useHashParamJson<JobInputs | undefined>("inputs");
+  const [jobInputs] = useEditableJobFiles();
 
   // only show the edit button if the command points to a script in the inputs
   const setRightPanelContext = useStore(state => state.setRightPanelContext);

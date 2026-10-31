@@ -3,6 +3,7 @@ import {
   DockerJobFinishedReason,
   type DockerJobImageBuild,
   DockerJobState,
+  type EnqueueJob,
   type InMemoryDockerJob,
   type InputsRefs,
   type StateChangeValueFinished,
@@ -257,7 +258,7 @@ export const isParentInjectedHashParamKey = (key: string): boolean =>
  * Fields are grouped into:
  * 1. Scalar/array fields from DockerJobDefinitionInputsBase64V1 (fully known)
  * 2. Structured sub-objects with whitelisted sub-fields (build, requirements)
- * 3. Open-ended Record fields where all keys are included (env, inputs, configFiles)
+ * 3. Open-ended Record fields where all keys are included (env, files, inputs, configFiles)
  *    - these are marked with comments since we can't whitelist individual keys
  */
 const buildJobHashBlob = (job: DockerJobDefinitionInputRefs): Record<string, unknown> => {
@@ -317,6 +318,13 @@ const buildJobHashBlob = (job: DockerJobDefinitionInputRefs): Record<string, unk
     }
   }
 
+  // --- Open-ended Record: files (all keys included, DataRef cleaned) ---
+  // NOTE: file names are unbounded - determined by the user's job configuration.
+  const cleanedFiles = cleanInputsRefsForHash(job.files);
+  if (cleanedFiles && Object.keys(cleanedFiles).length > 0) {
+    blob.files = cleanedFiles;
+  }
+
   // --- Open-ended Record: inputs (all keys included, DataRef cleaned) ---
   // NOTE: input names are unbounded - determined by the user's metaframe inputs.
   const cleanedInputs = cleanInputsRefsForHash(job.inputs);
@@ -342,6 +350,80 @@ export const shaDockerJob = (
   }
   const blob = buildJobHashBlob(job);
   return shaObject(blob);
+};
+
+/** sha256 of a run's inputs: the `i` in `/j/<job>?i=<inputs>` */
+export const shaInputs = (inputs: InputsRefs): Promise<string> => {
+  return shaObject(cleanInputsRefsForHash(inputs));
+};
+
+/**
+ * The definition a run actually executes: its job's definition with the run's
+ * inputs folded in. This is what is stored under the run id and what workers
+ * receive, so a run looks like any other job to the queue and the workers.
+ */
+export const mergeRunInputs = (
+  job: Pick<EnqueueJob, "definition" | "inputs">,
+): DockerJobDefinitionInputRefs => {
+  if (!job.inputs || Object.keys(job.inputs).length === 0) {
+    return job.definition;
+  }
+  return { ...job.definition, inputs: { ...job.definition.inputs, ...job.inputs } };
+};
+
+/**
+ * Derives a submission's ids. Safe to call on an already prepared job.
+ *
+ *   jobHash    = sha256(definition)
+ *   jobId      = the client's name for the job, else jobHash
+ *   inputsHash = sha256(inputs)
+ *   id         = sha256(definition + inputs), the run
+ *
+ * Results are keyed by content, not by jobId, so publishing a new version under
+ * the same name runs it rather than answering with the old version's results.
+ *
+ * A job with an `id` and neither `jobId` nor `inputs` comes from a client that
+ * predates this split: its id is left alone, since that client is waiting on it.
+ */
+export const prepareEnqueueJob = async (
+  job: Omit<EnqueueJob, "id"> & { id?: string },
+): Promise<EnqueueJob> => {
+  const { inputs, ...rest } = job;
+  const hasInputs = !!inputs && Object.keys(inputs).length > 0;
+  if (job.id && !job.jobId && !hasInputs) {
+    return job as EnqueueJob;
+  }
+  const jobHash = await shaDockerJob(job.definition);
+  const prepared: EnqueueJob = {
+    ...rest,
+    id: await shaDockerJob(mergeRunInputs(job)),
+    jobId: job.jobId || jobHash,
+    jobHash,
+  };
+  if (hasInputs) {
+    prepared.inputs = inputs;
+    prepared.inputsHash = await shaInputs(inputs);
+  }
+  return prepared;
+};
+
+/**
+ * The canonical URL path of a job or a run:
+ *
+ *   /j/<sha256 job>
+ *   /j/<sha256 job>?i=<sha256 inputs>
+ *   /j/<named job>?v=<sha256 job>&i=<sha256 inputs>
+ */
+export const formatJobUrlPath = (
+  job: { id?: string; hash?: string; jobId?: string; jobHash?: string; inputsHash?: string },
+): string => {
+  if (!job.jobId) {
+    return `/j/${job.id ?? job.hash}`;
+  }
+  const params: string[] = [];
+  if (job.jobHash && job.jobHash !== job.jobId) params.push(`v=${job.jobHash}`);
+  if (job.inputsHash) params.push(`i=${job.inputsHash}`);
+  return `/j/${job.jobId}${params.length ? `?${params.join("&")}` : ""}`;
 };
 
 const reduceUrlToHashVersion = (url: string): string => {

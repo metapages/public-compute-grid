@@ -6,13 +6,14 @@ import {
   type DockerJobControlConfig,
   type DockerJobDefinitionInputRefs,
   DockerJobState,
+  type InputsRefs,
   type StateChange,
   type StateChangeValueFinished,
   type StateChangeValueQueued,
   type WebsocketMessageClientToServer,
   WebsocketMessageTypeClientToServer,
 } from "@shared/types.ts";
-import { sanitizeFilename, shaDockerJob } from "@shared/util.ts";
+import { prepareEnqueueJob, sanitizeFilename } from "@shared/util.ts";
 import { retryAsync } from "retry";
 import { ensureDir, ensureDirSync, exists, existsSync } from "./fs.ts";
 import { dirname, join } from "std/path";
@@ -45,26 +46,30 @@ export type JobMessagePayload = {
 
 export const createNewContainerJobMessage = async (opts: {
   definition: DockerJobDefinitionInputRefs;
+  // the run's inputs, kept out of the job's identity
+  inputs?: InputsRefs;
   debug?: boolean;
+  // Without inputs: the id to use. With inputs: the job's name, the run id is derived.
   jobId?: string;
   control?: DockerJobControlConfig;
 }): Promise<JobMessagePayload> => {
-  let { definition, debug, jobId, control } = opts;
+  const { definition, inputs, debug, control } = opts;
+  const hasInputs = !!inputs && Object.keys(inputs).length > 0;
+  const enqueued = await prepareEnqueueJob({
+    id: hasInputs ? undefined : opts.jobId,
+    jobId: hasInputs ? opts.jobId : undefined,
+    // queue : queue,
+    definition,
+    inputs,
+    debug,
+    control,
+  });
+  const jobId = enqueued.id;
   const value: StateChangeValueQueued = {
     type: DockerJobState.Queued,
     time: Date.now(),
-    enqueued: {
-      id: jobId || "",
-      // queue : queue,
-      definition,
-      debug,
-      control,
-    },
+    enqueued,
   };
-  if (!jobId) {
-    jobId = await shaDockerJob(definition);
-    value.enqueued.id = jobId;
-  }
   const payload: StateChange = {
     state: DockerJobState.Queued,
     value,

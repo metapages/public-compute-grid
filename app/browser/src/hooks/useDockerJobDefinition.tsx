@@ -12,10 +12,11 @@ import {
   DockerJobControlConfig,
   DockerJobDefinitionInputRefs,
   DockerJobDefinitionMetadata,
+  InputsRefs,
   isDataRef,
   isParentInjectedHashParamKey,
   JobInputs,
-  shaDockerJob,
+  prepareEnqueueJob,
 } from "/@shared/client";
 
 import { getHashParamsFromWindow } from "@metapages/hash-query";
@@ -38,6 +39,8 @@ const HashParamKeysSystem = new Set([
   "control",
   "debug",
   "definition",
+  "files",
+  "i",
   "ignoreQueueOverride",
   "inputs",
   "job",
@@ -81,8 +84,12 @@ export const useDockerJobDefinition = () => {
   // short URL to the embedded form on edit. See useJobDefinitionParam.
   const [definitionParamsInUrl, setDefinitionParamsInUrl] = useJobDefinitionParam();
 
-  // input text files are stored in the URL hash
+  // job files are stored in the URL hash
+  const [jobFilesFromUrl] = useHashParamJson<JobInputs | undefined>("files");
+  // deprecated: the same, but written to /inputs
   const [jobInputsFromUrl] = useHashParamJson<JobInputs | undefined>("inputs");
+  // the inputs for this run: `/j/<job>#?i=<json of name: text or DataRef>`
+  const [runInputsFromUrl] = useHashParamJson<Record<string, unknown> | undefined>("i");
 
   // Parent pages to this frame can inject a userspace config
   // to uniquely identify the user and limit the job to a single userspace
@@ -161,12 +168,21 @@ export const useDockerJobDefinition = () => {
           }),
         );
 
+    definition.files = !jobFilesFromUrl
+      ? (definition.files ?? {})
+      : Object.fromEntries(
+          Object.keys(jobFilesFromUrl).map(key => [
+            key,
+            { type: DataRefType.utf8, value: jobFilesFromUrl[key] as string },
+          ]),
+        );
+
     if (!definition.image && !definition.build) {
       return;
     }
 
-    // sanity check
-    definition.inputs = definition.inputs || {};
+    // These are not part of the job: they make this a run of the job on these inputs
+    let runInputs: InputsRefs = {};
 
     (async () => {
       if (cancelled) {
@@ -175,7 +191,7 @@ export const useDockerJobDefinition = () => {
       // convert inputs into internal data refs so workers can consume
       // Get ALL inputs, not just the most recent, since inputs come
       // in from different sources at different times, and we accumulate them
-      let inputs = { ...(metaframeBlob?.metaframe?.getInputs() || {}) };
+      let inputs = { ...runInputsFromUrl, ...(metaframeBlob?.metaframe?.getInputs() || {}) };
       // This is a special input, it's the job definition, not a file input
       delete inputs["job"];
 
@@ -196,7 +212,7 @@ export const useDockerJobDefinition = () => {
         if (typeof value === "object" && value?._s === true) {
           const blob = value as DataRefSerialized;
           // serialized blob/typedarray/arraybuffer
-          definition.inputs![fixedName] = {
+          runInputs[fixedName] = {
             value: blob.value,
             type: DataRefType.base64,
           };
@@ -209,22 +225,22 @@ export const useDockerJobDefinition = () => {
           // If it's a DataRef, just use it, then there's
           // no need to serialize it, or further process
           if (dataRefFromDataUrl) {
-            definition.inputs![fixedName] = dataRefFromDataUrl;
+            runInputs[fixedName] = dataRefFromDataUrl;
           } else if (isDataRef(value)) {
-            definition.inputs![fixedName] = value;
+            runInputs[fixedName] = value;
           } else if (typeof value === "object") {
             // assume object is a json object
-            definition.inputs![fixedName] = {
+            runInputs[fixedName] = {
               value,
               type: DataRefType.json,
             };
           } else if (typeof value === "string") {
-            definition.inputs![fixedName] = {
+            runInputs[fixedName] = {
               value,
               type: DataRefType.utf8,
             };
           } else if (typeof value === "number") {
-            definition.inputs![fixedName] = {
+            runInputs[fixedName] = {
               value: `${value}`,
               type: DataRefType.utf8,
             };
@@ -239,7 +255,11 @@ export const useDockerJobDefinition = () => {
       // any big things are uploaded to cloud storage, then the input is replaced with a reference to the cloud lump
       const ioBaseUrl = getIOBaseUrl(resolvedQueue);
 
-      definition.inputs = await copyLargeBlobsToCloud(definition.inputs, ioBaseUrl);
+      runInputs = await copyLargeBlobsToCloud(runInputs, ioBaseUrl);
+      if (cancelled) {
+        return;
+      }
+      definition.files = await copyLargeBlobsToCloud(definition.files, ioBaseUrl);
       if (cancelled) {
         return;
       }
@@ -249,13 +269,26 @@ export const useDockerJobDefinition = () => {
       }
 
       // if uploading a large blob means new inputs have arrived and replaced this set, break out
-      const jobHashCurrent = await shaDockerJob(definition);
+      const {
+        id,
+        jobId,
+        jobHash,
+        inputsHash,
+        inputs: inputsPrepared,
+      } = await prepareEnqueueJob({
+        definition,
+        inputs: runInputs,
+      });
       if (cancelled) {
         return;
       }
 
       const newJobDefinition: DockerJobDefinitionMetadata = {
-        hash: jobHashCurrent,
+        hash: id,
+        jobId,
+        jobHash,
+        inputsHash,
+        inputs: inputsPrepared,
         definition,
         debug,
         maxJobDuration,
@@ -275,7 +308,9 @@ export const useDockerJobDefinition = () => {
     resolvedQueue,
     metaframeBlob.inputs,
     definitionParamsInUrl,
+    jobFilesFromUrl,
     jobInputsFromUrl,
+    runInputsFromUrl,
     namespaceConfig,
     debug,
     maxJobDuration,

@@ -16,37 +16,52 @@ import {
   sanitizeFilename,
 } from "@metapages/compute-queues-shared";
 
-import type { Volume } from "./types.ts";
+import type { Volume, WorkdirFile } from "./types.ts";
 
 /**
- * @param job Returns input and output docker volumes to mount into the container
+ * File names come from the job definition, and are joined onto worker paths.
+ */
+const assertSafeFileName = (name: string) => {
+  if (name.split("/").includes("..")) {
+    throw new Error(`Invalid file name, ".." is not allowed: ${name}`);
+  }
+};
+
+/**
+ * @param job Returns input and output docker volumes to mount into the container,
+ * and the job files relative to the working directory, which is only known once
+ * the image is ready.
  */
 export const convertIOToVolumeMounts = async (
   job: { id: string; definition: DockerJobDefinitionInputRefs },
   address: string,
-): Promise<{ volumes: Volume[]; outputsDir: string }> => {
+): Promise<{ volumes: Volume[]; outputsDir: string; workdirFiles: WorkdirFile[] }> => {
   const config = getConfig();
   const { id, definition } = job;
   const baseDir = join(config.dataDirectory, "j", id);
   const cacheDir = join(config.dataDirectory, "f");
   const configFilesDir = join(baseDir, "configFiles");
+  const filesDir = join(baseDir, "files");
   const inputsDir = join(baseDir, "inputs");
   const outputsDir = join(baseDir, "outputs");
 
   // create the tmp directory for inputs+outputs
   await ensureDir(cacheDir);
   await ensureDir(configFilesDir);
+  await ensureDir(filesDir);
   await ensureDir(inputsDir);
   await ensureDir(outputsDir);
 
   // security/consistency: empty directories, in case restarting jobs
   await emptyDir(configFilesDir);
+  await emptyDir(filesDir);
   await emptyDir(inputsDir);
   // await emptyDir(outputsDir);
 
   // make sure directories are writable
   await Deno.chmod(baseDir, 0o777);
   await Deno.chmod(configFilesDir, 0o777);
+  await Deno.chmod(filesDir, 0o777);
   await Deno.chmod(inputsDir, 0o777);
   await Deno.chmod(outputsDir, 0o777);
 
@@ -61,6 +76,7 @@ export const convertIOToVolumeMounts = async (
 
   if (inputs) {
     for (const [name, ref] of Object.entries(inputs)) {
+      assertSafeFileName(name);
       await dataRefToFile(
         ref,
         join(inputsDir, name),
@@ -84,6 +100,7 @@ export const convertIOToVolumeMounts = async (
 
   if (definition?.configFiles) {
     for (const [name, ref] of Object.entries(definition.configFiles)) {
+      assertSafeFileName(name);
       const isAbsolutePath = name.startsWith("/");
       const hostFilePath = isAbsolutePath ? join(configFilesDir, name) : join(inputsDir, name);
       await dataRefToFile(ref, hostFilePath, address, config.dataDirectory);
@@ -97,7 +114,23 @@ export const convertIOToVolumeMounts = async (
     }
   }
 
-  return { volumes: result, outputsDir };
+  const workdirFiles: WorkdirFile[] = [];
+  if (definition?.files) {
+    for (const [name, ref] of Object.entries(definition.files)) {
+      assertSafeFileName(name);
+      const isAbsolutePath = name.startsWith("/");
+      // separate folders so "/app/a" and "app/a" are different files
+      const host = join(filesDir, isAbsolutePath ? "absolute" : "relative", name);
+      await dataRefToFile(ref, host, address, config.dataDirectory);
+      if (isAbsolutePath) {
+        result.push({ host, container: name });
+      } else {
+        workdirFiles.push({ host, name });
+      }
+    }
+  }
+
+  return { volumes: result, outputsDir, workdirFiles };
 };
 
 const getLocalDataRef = async (file: string, address: string) => {

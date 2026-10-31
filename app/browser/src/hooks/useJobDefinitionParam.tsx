@@ -3,9 +3,9 @@
  *
  *   1. Embedded (long): `/#?job=<base64-json>&queue=<q>` — the whole definition
  *      lives in the hash. This is the editable, self-contained form.
- *   2. Short:           `/j/<jobId>#?queue=<q>` — only the sha256 id is in the
- *      path; the definition is fetched from the server by id at boot (see
- *      hydrateShortJobFromPath, called from index.tsx) and stashed here.
+ *   2. Short:           `/j/<jobId>[?v=<version>&i=<inputs>]#?queue=<q>` — only
+ *      the ids are in the URL; the definition is fetched from the server at boot
+ *      (see hydrateShortJobFromPath, called from index.tsx) and stashed here.
  *
  * `useJobDefinitionParam()` is a drop-in for `useHashParamJson("job")` that
  * reads from whichever form is active. The MCP server's `submit_job` returns the
@@ -59,7 +59,8 @@ export const hydrateShortJobFromPath = async (): Promise<boolean> => {
     return false;
   }
   try {
-    const resp = await fetch(`${window.location.origin}/j/${jobId}/definition.json`);
+    // `v` and `i` go straight through: the server resolves them to the run
+    const resp = await fetch(`${window.location.origin}/j/${jobId}/definition.json${window.location.search}`);
     if (!resp.ok) {
       return false;
     }

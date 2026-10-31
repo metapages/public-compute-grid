@@ -14,6 +14,8 @@
     "control",
     "debug",
     "definition",
+    "files",
+    "i",
     "ignoreQueueOverride",
     "inputs",
     "job",

@@ -38,7 +38,7 @@ export const buildViewUrl = (
  * Short, paste-friendly view URL: the job's sha256 id in the path instead of the
  * whole definition in the hash. ~100 characters, so it survives a terminal.
  *
- *   <baseUrl>/j/<jobId>#?queue=<queue>
+ *   <baseUrl>/j/<jobId>[?i=<inputsHash>]#?queue=<queue>
  *
  * The SPA is served at that path and loads the definition by id from
  * `GET /j/<jobId>/definition.json`; the queue still rides in the hash because a
@@ -50,6 +50,6 @@ export const buildViewUrl = (
  */
 export const buildShortViewUrl = (
   baseUrl: string,
-  jobId: string,
+  jobPath: string,
   queue: string,
-): string => `${baseUrl.replace(/\/$/, "")}/j/${jobId}#?queue=${encodeURIComponent(queue)}`;
+): string => `${baseUrl.replace(/\/$/, "")}${jobPath}#?queue=${encodeURIComponent(queue)}`;

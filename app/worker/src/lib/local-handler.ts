@@ -9,15 +9,19 @@ import mime from "mime";
 
 import {
   BaseDockerJobQueue,
+  dataRefToBuffer,
+  DataRefType,
   DefaultNamespace,
   DockerJobFinishedReason,
   DockerJobState,
-  type EnqueueJob,
+  formatSubmitResponse,
   getJobColorizedString,
   type InMemoryDockerJob,
+  makeJobUrlMiddleware,
   makeStreamHandler,
-  shaDockerJob,
+  resolveSubmittedJob,
   type StateChange,
+  type SubmittedJob,
   userJobQueues,
 } from "@metapages/compute-queues-shared";
 
@@ -202,15 +206,17 @@ const submitJobToQueueHandler = async (c: Context) => {
       return c.json({ error: "No queue specified" });
     }
 
-    const jobToQueue = await c.req.json<EnqueueJob>();
-    if (!jobToQueue?.definition) {
-      c.status(400);
-      return c.json({ error: "No job definition provided" });
+    const jobQueue = await ensureQueue(queue);
+
+    const submitted = await c.req.json<SubmittedJob>();
+    const jobToQueue = await resolveSubmittedJob(jobQueue.db, submitted);
+    if (!jobToQueue) {
+      c.status(submitted?.jobId ? 404 : 400);
+      return c.json({
+        error: submitted?.jobId ? `Job not found: ${submitted.jobId}` : "No job definition provided",
+      });
     }
     jobToQueue.control = jobToQueue.control || {};
-    jobToQueue.id = jobToQueue.id || (await shaDockerJob(jobToQueue.definition));
-
-    const jobQueue = await ensureQueue(queue);
 
     // This needs to assume that a job submitted with a stateChange
     // like this will have an expectation of persistance
@@ -227,7 +233,7 @@ const submitJobToQueueHandler = async (c: Context) => {
     }
 
     c.status(200);
-    return c.json({ success: true, jobId: jobToQueue.id });
+    return c.json(formatSubmitResponse(jobToQueue));
   } catch (err) {
     const queue = c.req.param("queue");
     console.error(`Error submitting job to queue ${queue}:`, err);
@@ -384,7 +390,9 @@ export const getJobInputsHandler = async (c: Context) => {
       return c.text("Missing jobId");
     }
 
-    const filename = c.req.path.split("/inputs/").splice(1).join("/inputs/");
+    // This handler serves both /inputs/<name> and /files/<name>
+    const folder = /^(?:\/q\/[^/]+)?\/j\/[^/]+\/files\//.test(c.req.path) ? "files" : "inputs";
+    const filename = c.req.path.split(`/${folder}/`).splice(1).join(`/${folder}/`);
 
     if (!filename) {
       c.status(400);
@@ -402,14 +410,20 @@ export const getJobInputsHandler = async (c: Context) => {
     }
 
     // Look for the file in inputs
-    const inputs = jobDefinition.inputs;
-    console.log("getJobInputsHandler inputs", inputs);
+    const inputs = jobDefinition[folder];
     if (!inputs || !inputs[filename]) {
       c.status(404);
       return c.text(`Input file '${filename}' not found`);
     }
 
     const inputRef = inputs[filename];
+
+    // Small files are inline, only url refs are in local storage
+    if (inputRef.type !== DataRefType.url) {
+      c.header("Content-Disposition", `attachment; filename="${filename.split("/").pop()}"`);
+      c.header("Content-Type", mime.getType(filename) || "application/octet-stream");
+      return c.newResponse(await dataRefToBuffer(inputRef));
+    }
 
     // Get the file SHA (hash) which is the storage key
     // const fileSha = inputRef.hash || inputRef.value;
@@ -634,6 +648,15 @@ app.use("*", async (c, next) => {
   await next();
 });
 
+// /j/<job>?v=<version>&i=<inputs> becomes the run it refers to, for every job route
+app.use(
+  "*",
+  makeJobUrlMiddleware({
+    resolveDb: async (queue) => (await ensureQueue(queue || "local")).db,
+    fetch: (req) => app.fetch(req),
+  }),
+);
+
 app.get("/health", (c: Context) => c.text("OK"));
 app.get("/healthz", (c: Context) => c.text("OK"));
 
@@ -656,6 +679,7 @@ app.get("/j/:jobId/result.json", getJobResultsHandler);
 app.get("/j/:jobId/results.json", getJobResultsHandler);
 app.get("/j/:jobId/outputs/*", getJobOutputsHandler);
 app.get("/j/:jobId/inputs/*", getJobInputsHandler);
+app.get("/j/:jobId/files/*", getJobInputsHandler);
 app.post("/j/:jobId/copy", copyJobToQueueHandler);
 // JSON job-state lives at /j/<jobId>.json so the bare /j/<jobId> path can fall
 // through to the static SPA below, which loads the job by id from
@@ -667,6 +691,7 @@ app.get("/q/:queue/j", getJobsHandler);
 app.get("/q/:queue", getJobsHandler);
 app.get("/q/:queue/j/:jobId", getQueueJobHandler);
 app.get("/q/:queue/j/:jobId/inputs/*", getJobInputsHandler);
+app.get("/q/:queue/j/:jobId/files/*", getJobInputsHandler);
 app.get("/q/:queue/j/:jobId/outputs/*", getJobOutputsHandler);
 // app.get("/q/:queue/j/:jobId/namespaces.json", getJobNamespacesHandler);
 app.get("/q/:queue/j/:jobId/build-logs.json", getBuildLogsHandler);

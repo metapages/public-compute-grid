@@ -1,7 +1,8 @@
 import type { Context } from "hono";
 import { getApiDockerJobQueue } from "@/routes/websocket.ts";
 
-import { type EnqueueJob, shaDockerJob } from "@metapages/compute-queues-shared";
+import { db } from "@/db/db.ts";
+import { formatSubmitResponse, resolveSubmittedJob, type SubmittedJob } from "@metapages/compute-queues-shared";
 
 export const submitJobToQueueHandler = async (c: Context) => {
   try {
@@ -10,13 +11,15 @@ export const submitJobToQueueHandler = async (c: Context) => {
       c.status(404);
       return c.json({ error: "No queue specified" });
     }
-    const jobToQueue = await c.req.json<EnqueueJob>();
-    if (!jobToQueue?.definition) {
-      c.status(400);
-      return c.json({ error: "No job definition provided" });
+    const submitted = await c.req.json<SubmittedJob>();
+    const jobToQueue = await resolveSubmittedJob(db, submitted);
+    if (!jobToQueue) {
+      c.status(submitted?.jobId ? 404 : 400);
+      return c.json({
+        error: submitted?.jobId ? `Job not found: ${submitted.jobId}` : "No job definition provided",
+      });
     }
     jobToQueue.control = jobToQueue.control || {};
-    jobToQueue.id = jobToQueue.id || (await shaDockerJob(jobToQueue.definition));
 
     const jobQueue = await getApiDockerJobQueue(queue);
 
@@ -35,7 +38,7 @@ export const submitJobToQueueHandler = async (c: Context) => {
     }
 
     c.status(200);
-    return c.json({ success: true, jobId: jobToQueue.id });
+    return c.json(formatSubmitResponse(jobToQueue));
   } catch (err) {
     const jobId = (err as { jobId?: string })?.jobId;
     console.error(`Error submitting job${jobId ? ` ${jobId}` : ""} to queue ${c.req.param("queue")}:`, err);

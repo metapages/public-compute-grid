@@ -193,6 +193,10 @@ export const useStore = create<MainStore>((set, get) => ({
       time: Date.now(),
       enqueued: {
         id: definitionBlob.hash,
+        jobId: definitionBlob.jobId,
+        jobHash: definitionBlob.jobHash,
+        inputsHash: definitionBlob.inputsHash,
+        inputs: definitionBlob.inputs,
         definition: definitionBlob.definition,
         control: definitionBlob.control,
       },
@@ -561,9 +565,14 @@ export const useStore = create<MainStore>((set, get) => ({
         get().submitJob();
       }
     });
-    const inputs: Record<string, string> = getHashParamValueJsonFromWindow("inputs") || {};
-    inputs[get().mainInputFile] = get().mainInputFileContent;
-    setHashParamValueJsonInWindow("inputs", inputs);
+    // back to the param the file came from: `inputs` is deprecated, new files are in `files`
+    const legacyInputs: Record<string, string> = getHashParamValueJsonFromWindow("inputs") || {};
+    const files: Record<string, string> = getHashParamValueJsonFromWindow("files") || {};
+    const param =
+      legacyInputs[get().mainInputFile] !== undefined && files[get().mainInputFile] === undefined ? "inputs" : "files";
+    const values = param === "inputs" ? legacyInputs : files;
+    values[get().mainInputFile] = get().mainInputFileContent;
+    setHashParamValueJsonInWindow(param, values);
     get().setMainInputFileContent(null);
   },
 

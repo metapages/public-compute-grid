@@ -1,3 +1,4 @@
+import { db } from "@/db/db.ts";
 import { copyJobToQueueHandler } from "@/routes/api/v1/copy.ts";
 import { downloadHandler } from "@/routes/api/v1/download.ts";
 import { existsHandler } from "@/routes/api/v1/exists.ts";
@@ -9,7 +10,7 @@ import { uploadHandler as uploadHandlerDeprecated } from "@/routes/deprecated/up
 import { metricsHandler } from "@/routes/metrics.ts";
 import { cancelJobHandler } from "@/routes/queue/job/cancel.ts";
 import { statusHandler } from "@/routes/status.ts";
-import { makeStreamHandler } from "@metapages/compute-queues-shared";
+import { makeJobUrlMiddleware, makeStreamHandler } from "@metapages/compute-queues-shared";
 import { type Context, Hono } from "hono";
 import { cors } from "hono/cors";
 
@@ -54,6 +55,9 @@ export const createApp = (opts?: { serveStatic?: (app: Hono) => void }): Hono =>
     // })
   );
 
+  // /j/<job>?v=<version>&i=<inputs> becomes the run it refers to, for every job route
+  app.use("*", makeJobUrlMiddleware({ resolveDb: () => Promise.resolve(db), fetch: (req) => app.fetch(req) }));
+
   // Put your custom routes here
   app.get("/healthz", (c: Context) => c.text("OK"));
 
@@ -78,6 +82,7 @@ export const createApp = (opts?: { serveStatic?: (app: Hono) => void }): Hono =>
   app.get("/j/:jobId/results.json", getJobResultHandler);
   app.get("/j/:jobId/outputs/*", getJobOutputsHandler);
   app.get("/j/:jobId/inputs/*", getJobInputsHandler);
+  app.get("/j/:jobId/files/*", getJobInputsHandler);
   app.post("/j/:jobId/copy", copyJobToQueueHandler);
   // JSON job-state lives at /j/<jobId>.json so the bare /j/<jobId> path can fall
   // through to the static SPA below, which loads the job by id from
@@ -89,6 +94,7 @@ export const createApp = (opts?: { serveStatic?: (app: Hono) => void }): Hono =>
   app.get("/q/:queue", getJobsHandler);
   app.get("/q/:queue/j/:jobId", getQueueJobHandler);
   app.get("/q/:queue/j/:jobId/inputs/*", getJobInputsHandler);
+  app.get("/q/:queue/j/:jobId/files/*", getJobInputsHandler);
   app.get("/q/:queue/j/:jobId/outputs/*", getJobOutputsHandler);
   app.get("/q/:queue/j/:jobId/namespaces.json", getJobNamespacesHandler);
   app.get("/q/:queue/j/:jobId/definition.json", getDefinitionHandler);

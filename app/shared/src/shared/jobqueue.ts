@@ -53,6 +53,7 @@ import {
   getWorkerColorizedString,
   isJobDeletedOrRemoved,
   isJobOkForSending,
+  prepareEnqueueJob,
   resolveMostCorrectJob,
   setJobStateRemoved,
   setJobStateRunning,
@@ -1341,7 +1342,9 @@ export class BaseDockerJobQueue {
       );
     }
 
+    enqueued = await prepareEnqueueJob(enqueued);
     const jobId = enqueued.id;
+    await this.db.queueJobRecordIdentity(enqueued);
 
     // A finished record whose results are gone (isFinishedJobMissingResults)
     // has to be let go of by every server before this job can be queued again.

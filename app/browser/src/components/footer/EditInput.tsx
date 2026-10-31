@@ -1,17 +1,16 @@
 import React, { useEffect, useRef } from "react";
 
+import { useEditableJobFiles } from "/@/hooks/useEditableJobFiles";
 import { useJobDefinitionParam } from "/@/hooks/useJobDefinitionParam";
-import { JobInputs } from "/@shared/client";
 import { useStore } from "/@/store";
 
 import { Button, HStack, Icon, Text, Tooltip } from "@chakra-ui/react";
-import { useHashParamJson } from "@metapages/hash-query/react-hooks";
 import { PencilSimple, Terminal } from "@phosphor-icons/react";
 import { useOptionShowTerminalFirst } from "/@/hooks/useOptionShowTerminalFirst";
 
 export const EditInput: React.FC = () => {
   const [jobDefinitionBlob] = useJobDefinitionParam();
-  const [jobInputs] = useHashParamJson<JobInputs | undefined>("inputs");
+  const [jobInputs] = useEditableJobFiles();
 
   // only show the edit button if the command points to a script in the inputs
   const setRightPanelContext = useStore(state => state.setRightPanelContext);

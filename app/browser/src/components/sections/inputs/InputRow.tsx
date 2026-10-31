@@ -8,10 +8,12 @@ import { File } from "@phosphor-icons/react";
 
 export const InputRow: React.FC<{
   name: string;
+  // shown before a relative name: where in the container it ends up
+  prefix?: string;
   content: string;
   onDelete: (name: string) => void;
   onUpdate: (name: string, content: string) => void;
-}> = ({ name, content, onDelete, onUpdate }) => {
+}> = ({ name, prefix, content, onDelete, onUpdate }) => {
   const onUpdateMemoized = useCallback((contentUpdate: string) => onUpdate(name, contentUpdate), [name, onUpdate]);
 
   return (
@@ -19,7 +21,7 @@ export const InputRow: React.FC<{
       <Td>
         <HStack gap={0}>
           <Icon as={File} mr={3}></Icon>
-          {name.startsWith("/") ? null : <Text as="span">/inputs/</Text>}
+          {name.startsWith("/") || !prefix ? null : <Text as="span">{prefix}</Text>}
           <Text as="span">{name}</Text>
         </HStack>
       </Td>

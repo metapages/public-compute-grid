@@ -14,56 +14,83 @@ import { ArrowDown } from "@phosphor-icons/react";
 
 export const PanelInputs: React.FC = () => {
   const clientJobDefinition = useStore(state => state.newJobDefinition);
+  const [jobFiles, setJobFiles] = useHashParamJson<JobInputs | undefined>("files");
+  // deprecated: existing URLs keep these, written to /inputs. New files are job files.
   const [jobInputs, setJobInputs] = useHashParamJson<JobInputs | undefined>("inputs");
   const [dynamicInputs, setDynamicInputs] = useState<InputsRefs>({});
   useEffect(() => {
     setDynamicInputs(getDynamicInputs(clientJobDefinition));
-  }, [clientJobDefinition, jobInputs]);
+  }, [clientJobDefinition]);
 
-  const addNewInput = useCallback(
+  const addNewFile = useCallback(
     (name: string) => {
-      setJobInputs({ ...jobInputs, [name]: "" });
+      setJobFiles({ ...jobFiles, [name]: "" });
     },
-    [jobInputs, setJobInputs],
+    [jobFiles, setJobFiles],
   );
 
-  const deleteInput = useCallback(
+  const deleteFile = useCallback(
     (name: string) => {
-      const newJobDefinitionBlob = { ...jobInputs };
-      delete newJobDefinitionBlob[name];
-      setJobInputs(newJobDefinitionBlob);
+      const newFiles = { ...jobFiles };
+      delete newFiles[name];
+      setJobFiles(newFiles);
     },
-    [jobInputs, setJobInputs],
+    [jobFiles, setJobFiles],
   );
 
-  const updateInput = useCallback(
+  const updateFile = useCallback(
     (name: string, content: string) => {
-      const newJobDefinitionBlob = { ...jobInputs };
-      newJobDefinitionBlob[name] = content;
-      setJobInputs(newJobDefinitionBlob);
+      setJobFiles({ ...jobFiles, [name]: content });
+    },
+    [jobFiles, setJobFiles],
+  );
+
+  const deleteLegacyInput = useCallback(
+    (name: string) => {
+      const newInputs = { ...jobInputs };
+      delete newInputs[name];
+      setJobInputs(newInputs);
     },
     [jobInputs, setJobInputs],
   );
 
-  const names: string[] = jobInputs ? Object.keys(jobInputs).sort() : [];
+  const updateLegacyInput = useCallback(
+    (name: string, content: string) => {
+      setJobInputs({ ...jobInputs, [name]: content });
+    },
+    [jobInputs, setJobInputs],
+  );
+
+  const fileNames: string[] = jobFiles ? Object.keys(jobFiles).sort() : [];
+  const legacyInputNames: string[] = jobInputs ? Object.keys(jobInputs).sort() : [];
 
   return (
     <PanelContainer gap={4} boxSizing="border-box">
-      <PanelHeader title={`Inputs`} />
+      <PanelHeader title={`Files + Inputs`} />
       <HStack px={4} width="100%" justifyContent="space-between">
-        <Text>{`Container mounted scripts + config:`}</Text>
-        <AddInputButtonAndModal add={addNewInput} showText={false} />
+        <Text>{`Job files, relative to the working directory (or an absolute path):`}</Text>
+        <AddInputButtonAndModal add={addNewFile} showText={false} />
       </HStack>
       <Container>
         <Table px={5} variant="simple">
           <Tbody>
-            {names.map(name => (
+            {fileNames.map(name => (
               <InputRow
                 key={name}
                 name={name}
+                content={jobFiles?.[name] ?? ""}
+                onDelete={deleteFile}
+                onUpdate={updateFile}
+              />
+            ))}
+            {legacyInputNames.map(name => (
+              <InputRow
+                key={`inputs/${name}`}
+                name={name}
+                prefix="/inputs/"
                 content={jobInputs?.[name] ?? ""}
-                onDelete={deleteInput}
-                onUpdate={updateInput}
+                onDelete={deleteLegacyInput}
+                onUpdate={updateLegacyInput}
               />
             ))}
           </Tbody>
