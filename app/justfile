@@ -125,6 +125,12 @@ test mode="remote" +args="": _build_shared check (_validate_mode mode)
             docker ps -a --filter "label=com.docker.compose.project=${STACK}" \
                 --format '{{{{.Names}}}}\t{{{{.Status}}}}' >&2 || true
         fi
+        # The Workers stack keeps its queues and store in a named volume, which
+        # outlives `down`: an interrupted run's Queued jobs would be waiting for
+        # the next run's workers, ahead of its own.
+        if [ "{{ mode }}" = "cloudflare" ]; then
+            docker volume rm --force "${STACK}_wrangler_state" > /dev/null 2>&1 || true
+        fi
     }
 
     trap cleanup EXIT # cleanup when the script exits for any reason, including failure

@@ -266,7 +266,7 @@ Nothing here is required for the migration — this PR already removes the Deno 
       Redis bus, so there is nothing to configure in their place
 - [ ] Delete the Deno Deploy app and the old S3 bucket whenever convenient — jobs have a 30-day lifespan, so the
       bucket's contents are all disposable
-- [ ] Add `just test cloudflare` to CI, so the Worker path cannot rot — blocked on #314
+- [ ] Add `just test cloudflare` to CI, so the Worker path cannot rot
 - [ ] Consider a stricter worker version gate once workers have upgraded, so a stale worker cannot keep a queue awake
 
 Note: the Redis bus and the Deno api server stay in the tree. They are what the `local` and `remote` docker stacks and
@@ -287,12 +287,11 @@ the local-mode worker run, and those are development and test targets, not deplo
   read that as a dead worker and removed it. The object now discards whatever the map holds and builds its own queue,
   whose sockets come from `ctx.getWebSockets()`. It only reproduced on production because it needs the isolate to be
   reused after an eviction — staging never hit it, and neither did `wrangler dev`.
-- The local `just test cloudflare` stack fails exactly one test per run (64/65), a different one each time, always a
-  late job test: the websocket test, the MCP workflow, the MCP concurrency test. Cause is saturation, not the Workers
-  stack — the whole suite shares queue `local1` and two workers running two jobs each, and one failure's state dump
-  showed ~15 jobs still Queued when its 120s ran out. `wrangler dev` is slow enough to push the late tests over their
-  timeouts. `just test remote` is 65/65 on the same code. Give each test its own queue before making
-  `just test cloudflare` a CI gate.
+- The local `just test cloudflare` stack failed exactly one test per run (64/65), a different one each time, always a
+  job test. It looked like saturation (~15 jobs Queued when a test's 120s ran out), but the cause was two whole suites
+  running at once: `docker-compose-test-cloudflare.yml` never got the idle `TEST_SERVICE_COMMAND` that the local and
+  remote stacks have, so its `deno test --watch` raced the `exec`'d run. Their jobs superseded each other in shared
+  namespaces and queued behind each other. With one suite the queue peaks at 3 Queued, so tests still share one queue.
 - MinIO's Docker Hub images stopped being publicly pullable — every tag, `:latest` included, answers
   `pull access denied` — which broke the `remote mode` CI job on every branch, main included, and every dev machine on a
   cache miss. The stacks now run SeaweedFS, which is maintained, freely pullable, and verifies real SigV4 for both
