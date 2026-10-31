@@ -8,7 +8,7 @@ import { assert } from "std/assert";
 import { createNewContainerJobMessage, fetchRobust } from "../../shared/src/mod.ts";
 
 import { createWebhookServer } from "./webhooks_test.ts";
-import { API_URL, QUEUE_ID } from "./util.ts";
+import { API_URL, QUEUE_ID, withDeadline } from "./util.ts";
 
 // The scheduler fires once a minute; allow two runs plus slack
 const RETRY_TIMEOUT_MS = 150_000;
@@ -58,20 +58,7 @@ Deno.test(
       await response.text();
       assert(response.ok, `submit failed: ${response.status}`);
 
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([
-          retried,
-          new Promise((_, reject) => {
-            timer = setTimeout(
-              () => reject(new Error(`no retry within ${RETRY_TIMEOUT_MS}ms (calls: ${calls.length})`)),
-              RETRY_TIMEOUT_MS,
-            );
-          }),
-        ]);
-      } finally {
-        clearTimeout(timer);
-      }
+      await withDeadline(retried, () => `no retry (calls: ${calls.length})`, RETRY_TIMEOUT_MS);
       assert(calls.length >= 2, `expected a retry, got ${calls.length} call(s)`);
     } finally {
       await shutdown();

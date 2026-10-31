@@ -1,6 +1,6 @@
 import { assert, assertEquals } from "std/assert";
 
-import { closed, open } from "@korkje/wsi";
+import { open } from "@korkje/wsi";
 
 import {
   type BroadcastJobStates,
@@ -14,6 +14,7 @@ import {
 } from "../../shared/src/mod.ts";
 import { createNewContainerJobMessage, fileToDataref, hashFileOnDisk } from "../../shared/src/shared/jobtools.ts";
 import { closeKv } from "../../shared/src/shared/kv.ts";
+import { closeSocket, withDeadline } from "./util.ts";
 
 const QUEUE_ID = Deno.env.get("QUEUE_ID") || "local1";
 const API_URL = Deno.env.get("API_URL") ||
@@ -58,7 +59,7 @@ function waitForJobToFinish(
   referenceFileName: string,
   referenceContent: string,
   onComplete: () => void,
-) {
+): () => void {
   const intervalRequestJobStates = setInterval(() => {
     socket.send(
       JSON.stringify({
@@ -151,6 +152,7 @@ function waitForJobToFinish(
       throw err;
     }
   };
+  return () => clearInterval(intervalRequestJobStates);
 }
 
 Deno.test("Test upload and download", async () => {
@@ -248,17 +250,19 @@ Deno.test(
     await open(socket);
 
     // Wait for job to finish
-    waitForJobToFinish(socket, jobId, rootName, content, resolve);
+    const stopWaiting = waitForJobToFinish(socket, jobId, rootName, content, resolve);
 
-    // Send the job creation message
-    socket.send(JSON.stringify(message));
+    try {
+      // Send the job creation message
+      socket.send(JSON.stringify(message));
 
-    // Wait for the job
-    await jobCompleteDeferred;
-
-    socket.close();
-    await closed(socket);
-    closeKv();
+      // Wait for the job
+      await withDeadline(jobCompleteDeferred, () => `${jobId} did not finish on queue ${QUEUE_ID}`);
+    } finally {
+      stopWaiting();
+      await closeSocket(socket);
+      closeKv();
+    }
 
     try {
       Deno.removeSync(fileName);
@@ -300,15 +304,16 @@ Deno.test(
     socket.send(JSON.stringify(message));
 
     // Wait for job to finish
-    waitForJobToFinish(socket, jobId, "hello.txt", content, resolve);
+    const stopWaiting = waitForJobToFinish(socket, jobId, "hello.txt", content, resolve);
 
-    // Wait for the job
-    await jobCompleteDeferred;
-
-    // console.log("Job completed. Closing socket...");
-    socket.close();
-    await closed(socket);
-    closeKv();
+    try {
+      // Wait for the job
+      await withDeadline(jobCompleteDeferred, () => `${jobId} did not finish on queue ${QUEUE_ID}`);
+    } finally {
+      stopWaiting();
+      await closeSocket(socket);
+      closeKv();
+    }
   },
 );
 

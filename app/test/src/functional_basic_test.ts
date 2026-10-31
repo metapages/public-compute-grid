@@ -1,6 +1,6 @@
 import { assertEquals, assertExists } from "std/assert";
 
-import { closed, open } from "@korkje/wsi";
+import { open } from "@korkje/wsi";
 import {
   type BroadcastJobStates,
   createNewContainerJobMessage,
@@ -14,6 +14,7 @@ import {
   WebsocketMessageTypeServerBroadcast,
 } from "@metapages/compute-queues-shared";
 import { closeKv } from "../../shared/src/shared/kv.ts";
+import { closeSocket, resubmitUntilSeen, withDeadline } from "./util.ts";
 
 const fetch = fetchRobust;
 
@@ -94,36 +95,42 @@ Deno.test(
       }
     };
 
-    await open(socket);
+    try {
+      await open(socket);
 
-    // Job submisison should confirm the job is submitted.
-    // Browser clients kinda do this already by resubmitting if the job is
-    // not on the results.
-    while (!jobSuccessfullySubmitted) {
-      socket.send(JSON.stringify(message));
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-
-    const result = await jobCompleteDeferred;
-    const expectedResult =
-      ".\n..\n.dockerenv\nbin\ndev\netc\nhome\ninputs\njob-cache\nlib\nmedia\nmnt\nopt\noutputs\nproc\nroot\nrun\nsbin\nsrv\nsys\ntmp\nusr\nvar\n";
-    if (result !== expectedResult) {
-      console.log(
-        `${getJobColorizedString(jobId)} unexpected result 💥`,
-        finalJobState,
+      // Job submisison should confirm the job is submitted.
+      // Browser clients kinda do this already by resubmitting if the job is
+      // not on the results.
+      await resubmitUntilSeen(
+        socket,
+        message,
+        () => jobSuccessfullySubmitted,
+        () => `${jobId} never appeared on queue ${QUEUE_ID}`,
       );
-    }
-    assertEquals(
-      result,
-      expectedResult,
-    );
-    assertEquals(
-      finalJobState?.result?.StatusCode,
-      0,
-    );
 
-    socket.close();
-    await closed(socket);
-    closeKv();
+      const result = await withDeadline(
+        jobCompleteDeferred,
+        () => `${jobId} did not finish on queue ${QUEUE_ID} (reached the queue: ${jobSuccessfullySubmitted})`,
+      );
+      const expectedResult =
+        ".\n..\n.dockerenv\nbin\ndev\netc\nhome\ninputs\njob-cache\nlib\nmedia\nmnt\nopt\noutputs\nproc\nroot\nrun\nsbin\nsrv\nsys\ntmp\nusr\nvar\n";
+      if (result !== expectedResult) {
+        console.log(
+          `${getJobColorizedString(jobId)} unexpected result 💥`,
+          finalJobState,
+        );
+      }
+      assertEquals(
+        result,
+        expectedResult,
+      );
+      assertEquals(
+        finalJobState?.result?.StatusCode,
+        0,
+      );
+    } finally {
+      await closeSocket(socket);
+      closeKv();
+    }
   },
 );

@@ -1,4 +1,4 @@
-import { closed, open } from "@korkje/wsi";
+import { open } from "@korkje/wsi";
 import {
   type BroadcastJobStates,
   createNewContainerJobMessage,
@@ -11,6 +11,7 @@ import {
   WebsocketMessageTypeServerBroadcast,
 } from "@metapages/compute-queues-shared";
 import { closeKv } from "../../shared/src/shared/kv.ts";
+import { closeSocket, resubmitUntilSeen, withDeadline } from "./util.ts";
 
 const QUEUE_ID = Deno.env.get("QUEUE_ID") || "local1";
 const API_URL = Deno.env.get("API_URL") ||
@@ -75,41 +76,47 @@ Deno.test(
       }
     };
 
-    await open(socket);
+    try {
+      await open(socket);
 
-    // Job submisison should confirm the job is submitted.
-    // Browser clients kinda do this already by resubmitting if the job is
-    // not on the results.
-    while (!jobSuccessfullySubmitted) {
-      socket.send(JSON.stringify(message));
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      // Job submisison should confirm the job is submitted.
+      // Browser clients kinda do this already by resubmitting if the job is
+      // not on the results.
+      await resubmitUntilSeen(
+        socket,
+        message,
+        () => jobSuccessfullySubmitted,
+        () => `${jobId} never appeared on queue ${QUEUE_ID}`,
+      );
+
+      // finished after this
+      await withDeadline(
+        jobCompleteDeferred,
+        () => `${jobId} did not finish on queue ${QUEUE_ID} (reached the queue: ${jobSuccessfullySubmitted})`,
+      );
+
+      // now cancel
+      socket.send(JSON.stringify({
+        type: WebsocketMessageTypeClientToServer.StateChange,
+        payload: {
+          job: jobId,
+          tag: "api",
+          state: DockerJobState.Finished,
+          value: {
+            type: DockerJobState.Finished,
+            reason: DockerJobFinishedReason.Cancelled,
+            time: Date.now(),
+            message: "Job cancelled test operation",
+          },
+        } as StateChange,
+      } as WebsocketMessageClientToServer));
+
+      // allow some time to possibly get a cancellation
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      // we should NOT see a cancellation
+    } finally {
+      await closeSocket(socket);
+      closeKv();
     }
-
-    // finished after this
-    await jobCompleteDeferred;
-
-    // now cancel
-    socket.send(JSON.stringify({
-      type: WebsocketMessageTypeClientToServer.StateChange,
-      payload: {
-        job: jobId,
-        tag: "api",
-        state: DockerJobState.Finished,
-        value: {
-          type: DockerJobState.Finished,
-          reason: DockerJobFinishedReason.Cancelled,
-          time: Date.now(),
-          message: "Job cancelled test operation",
-        },
-      } as StateChange,
-    } as WebsocketMessageClientToServer));
-
-    // allow some time to possibly get a cancellation
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    // we should NOT see a cancellation
-
-    socket.close();
-    await closed(socket);
-    closeKv();
   },
 );

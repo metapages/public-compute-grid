@@ -1,6 +1,6 @@
 import { assertEquals, assertExists } from "std/assert";
 
-import { closed, open } from "@korkje/wsi";
+import { open } from "@korkje/wsi";
 import {
   type BroadcastJobStates,
   createNewContainerJobMessage,
@@ -16,6 +16,7 @@ import {
 } from "@metapages/compute-queues-shared";
 import { closeKv } from "../../shared/src/shared/kv.ts";
 import { assertDefined } from "retry/misc";
+import { closeSocket, resubmitUntilSeen, withDeadline } from "./util.ts";
 
 const fetch = fetchRobust;
 
@@ -96,52 +97,58 @@ Deno.test(
       }
     };
 
-    await open(socket);
+    try {
+      await open(socket);
 
-    // Job submisison should confirm the job is submitted.
-    // Browser clients kinda do this already by resubmitting if the job is
-    // not on the results.
-    while (!jobSuccessfullySubmitted) {
-      socket.send(JSON.stringify(message));
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-
-    const result = await jobCompleteDeferred;
-    const expectedResult =
-      ".\n..\n.dockerenv\nbin\ndev\netc\nhome\ninputs\njob-cache\nlib\nmedia\nmnt\nopt\noutputs\nproc\nroot\nrun\nsbin\nsrv\nsys\ntmp\nusr\nvar\n";
-    if (result !== expectedResult) {
-      console.log(
-        `${getJobColorizedString(jobId)} unexpected result 💥`,
-        finalJobState,
+      // Job submisison should confirm the job is submitted.
+      // Browser clients kinda do this already by resubmitting if the job is
+      // not on the results.
+      await resubmitUntilSeen(
+        socket,
+        message,
+        () => jobSuccessfullySubmitted,
+        () => `${jobId} never appeared on queue ${QUEUE_ID}`,
       );
-    }
-    assertEquals(
-      result,
-      expectedResult,
-    );
-    assertEquals(
-      finalJobState?.result?.StatusCode,
-      0,
-    );
 
-    // Check the local API endpoint
-    const localJob = await fetch(`${API_URL}/j/${jobId}.json`);
-    const localJobJson: { data: { results: unknown; definition: DockerJobDefinitionInputRefs } } = await localJob
-      .json();
+      const result = await withDeadline(
+        jobCompleteDeferred,
+        () => `${jobId} did not finish on queue ${QUEUE_ID} (reached the queue: ${jobSuccessfullySubmitted})`,
+      );
+      const expectedResult =
+        ".\n..\n.dockerenv\nbin\ndev\netc\nhome\ninputs\njob-cache\nlib\nmedia\nmnt\nopt\noutputs\nproc\nroot\nrun\nsbin\nsrv\nsys\ntmp\nusr\nvar\n";
+      if (result !== expectedResult) {
+        console.log(
+          `${getJobColorizedString(jobId)} unexpected result 💥`,
+          finalJobState,
+        );
+      }
+      assertEquals(
+        result,
+        expectedResult,
+      );
+      assertEquals(
+        finalJobState?.result?.StatusCode,
+        0,
+      );
 
-    assertEquals(localJobJson.data.definition, definition);
-    assertDefined(localJobJson.data.results, "results not defined");
-
-    const localQueueJob = await fetch(`${API_URL}/q/${QUEUE_ID}/j/${jobId}`);
-    const localQueueJobJson: { data: { results: unknown; definition: DockerJobDefinitionInputRefs } } =
-      await localQueueJob
+      // Check the local API endpoint
+      const localJob = await fetch(`${API_URL}/j/${jobId}.json`);
+      const localJobJson: { data: { results: unknown; definition: DockerJobDefinitionInputRefs } } = await localJob
         .json();
 
-    assertEquals(localQueueJobJson.data.definition, definition);
-    assertDefined(localQueueJobJson.data.results, "results not defined");
+      assertEquals(localJobJson.data.definition, definition);
+      assertDefined(localJobJson.data.results, "results not defined");
 
-    socket.close();
-    await closed(socket);
-    closeKv();
+      const localQueueJob = await fetch(`${API_URL}/q/${QUEUE_ID}/j/${jobId}`);
+      const localQueueJobJson: { data: { results: unknown; definition: DockerJobDefinitionInputRefs } } =
+        await localQueueJob
+          .json();
+
+      assertEquals(localQueueJobJson.data.definition, definition);
+      assertDefined(localQueueJobJson.data.results, "results not defined");
+    } finally {
+      await closeSocket(socket);
+      closeKv();
+    }
   },
 );
