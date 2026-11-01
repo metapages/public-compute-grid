@@ -13,7 +13,7 @@ import {
   WebsocketMessageTypeClientToServer,
 } from "@metapages/compute-queues-shared";
 
-import { API_URL, QUEUE_ID } from "./util.ts";
+import { API_URL, QUEUE_ID, withDeadline } from "./util.ts";
 import { closeKv } from "../../shared/src/shared/kv.ts";
 
 const fetch = fetchRobust;
@@ -60,7 +60,8 @@ const waitFor = async (
 ): Promise<void> => {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    if (await predicate()) {
+    // The loop only checks its clock between polls, and a poll can hang
+    if (await withDeadline(predicate(), () => `waiting for: ${what}`, timeoutMs)) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -96,14 +97,19 @@ Deno.test(
           await new Promise((resolve) => setTimeout(resolve, 1000));
         }
       })();
-      await waitFor(
-        `${getJobColorizedString(jobId)} to finish with a result`,
-        async () => {
-          seen = await hasRunResult(jobId);
-          return seen;
-        },
-        90000,
-      );
+      try {
+        await waitFor(
+          `${getJobColorizedString(jobId)} to finish with a result`,
+          async () => {
+            seen = await hasRunResult(jobId);
+            return seen;
+          },
+          90000,
+        );
+      } finally {
+        // A timeout must stop the resubmitting too, or it sends on a closed socket
+        seen = true;
+      }
       await submitting;
 
       const firstFinish = await jobResults(jobId);

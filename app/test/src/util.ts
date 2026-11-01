@@ -1,5 +1,6 @@
 import { delay } from "std/async/delay";
 
+import { closed } from "@korkje/wsi";
 import {
   DefaultNamespace,
   DockerJobState,
@@ -166,4 +167,34 @@ export const withDeadline = <T>(
       );
     }),
   ]);
+};
+
+/**
+ * Resend a job over the socket until the queue reports it, the way browser
+ * clients do, but not forever: a queue that never reports it fails the test.
+ */
+export const resubmitUntilSeen = async (
+  socket: WebSocket,
+  message: unknown,
+  isSeen: () => boolean,
+  describeOutstanding: () => string,
+  timeoutMs: number = 120_000,
+): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while (!isSeen()) {
+    if (Date.now() > deadline) {
+      throw new Error(`timed out after ${timeoutMs}ms: ${describeOutstanding()}`);
+    }
+    socket.send(JSON.stringify(message));
+    await delay(1000);
+  }
+};
+
+/** Close from a `finally`: the socket may never have opened, or already be closed */
+export const closeSocket = async (socket: WebSocket): Promise<void> => {
+  if (socket.readyState === WebSocket.CLOSED) {
+    return;
+  }
+  socket.close();
+  await closed(socket);
 };
