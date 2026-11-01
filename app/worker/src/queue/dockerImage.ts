@@ -752,7 +752,7 @@ export const detectArchiveFormat = async (
   }
 };
 
-const downloadContextIntoDirectory = async (args: {
+export const downloadContextIntoDirectory = async (args: {
   jobId: string;
   context: string;
   destination: string;
@@ -780,6 +780,9 @@ const downloadContextIntoDirectory = async (args: {
     `downloadContextIntoDirectory filePathForDownload=${filePathForDownload}`,
   );
   let file: Deno.FsFile | null = null;
+  // Any file at filePathForDownload counts as a finished download, and it can
+  // outlive this process, so only a complete archive may ever appear there.
+  const tmpFilePath = `${filePathForDownload}.${crypto.randomUUID()}.tmp`;
   try {
     const fileExists = await exists(filePathForDownload, {
       isFile: true,
@@ -828,7 +831,7 @@ const downloadContextIntoDirectory = async (args: {
       }
       const pathToFile = dirname(filePathForDownload);
       await ensureDir(pathToFile);
-      file = await Deno.open(filePathForDownload, {
+      file = await Deno.open(tmpFilePath, {
         create: true,
         write: true,
       });
@@ -844,6 +847,7 @@ const downloadContextIntoDirectory = async (args: {
 
       // console.log(`downloadContextIntoDirectory created file and piping...`);
       await res.body.pipeTo(file.writable);
+      await Deno.rename(tmpFilePath, filePathForDownload);
       // console.log(`downloadContextIntoDirectory finished piping...`);
       sender({
         type: WebsocketMessageTypeWorkerToServer.JobStatusLogs,
@@ -970,6 +974,7 @@ const downloadContextIntoDirectory = async (args: {
       } as JobStatusPayload,
     });
   } catch (err: unknown) {
+    await Deno.remove(tmpFilePath).catch(() => {});
     throw new DockerBuildError(
       `Failure to build the docker image context: ${
         err instanceof Error ? err.message : `Unknown error: ${String(err)}`
