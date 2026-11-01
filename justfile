@@ -299,6 +299,9 @@ run-local-workers: publish-versioned-artifacts
 # directory, the worker id (which labels its job containers). Two branches run
 # at once without touching each other. The machine-wide docker network and
 # image cache volume are deliberately left alone by `down`.
+#
+# A restart is `down` with PR_DAEMON_KEEP_DATA=1, then `up`: the data directory
+# survives it. Only a `down` without the variable deletes the data.
 ###############################################################
 
 PR_DAEMON_STATE_ROOT := "/tmp/pr-daemon-compute-grid"
@@ -362,7 +365,8 @@ pr-daemon-up:
     fi
 
     # Kill anything left from a previous run of this branch before rebinding.
-    just pr-daemon-down > /dev/null 2>&1 || true
+    # Only the processes: a stack that died still owns its data.
+    PR_DAEMON_KEEP_DATA=1 just pr-daemon-down > /dev/null 2>&1 || true
     mkdir -p "$state"
 
     port="$base_port"
@@ -442,7 +446,7 @@ pr-daemon-up:
     tail -60 "$log" >&2 || true
     exit 1
 
-# Stop this branch's preview stack and delete its data (used by pr-daemon)
+# Stop this branch's preview stack and delete its data, unless PR_DAEMON_KEEP_DATA is set (used by pr-daemon)
 pr-daemon-down:
     #!/usr/bin/env bash
     # No `set -e`: this has to finish, and succeed, when nothing is running.
@@ -477,11 +481,19 @@ pr-daemon-down:
     containers="$(docker ps -aq --filter "label=container.mtfm.io/worker=$worker_id" 2> /dev/null)"
     if [ -n "$containers" ]; then
         echo "removing this branch's job containers" >&2
-        docker rm -f $containers > /dev/null 2>&1 || true
+        # -v: an image's VOLUME lines leave anonymous volumes nothing can reuse
+        docker rm -fv $containers > /dev/null 2>&1 || true
     fi
 
-    rm -rf "$state"
-    echo "✅ preview for '$branch' is down and its data is deleted" >&2
+    # A restart keeps worker-data: the job database, job results and file cache.
+    # The rest of $state only describes the run that just stopped.
+    if [ -n "${PR_DAEMON_KEEP_DATA:-}" ]; then
+        rm -f "$pidfile" "$state/port" "$state/worker.log"
+        echo "✅ preview for '$branch' is down and its data is kept" >&2
+    else
+        rm -rf "$state"
+        echo "✅ preview for '$branch' is down and its data is deleted" >&2
+    fi
 
 # Everything that must be green before a PR opens (used by pr-daemon)
 pr-daemon-check:
