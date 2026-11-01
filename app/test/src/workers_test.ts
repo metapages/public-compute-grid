@@ -1,6 +1,6 @@
 import { assert, assertEquals } from "std/assert";
 
-import { closed, open } from "@korkje/wsi";
+import { open } from "@korkje/wsi";
 import {
   type BroadcastJobStates,
   createNewContainerJobMessage,
@@ -12,6 +12,7 @@ import {
   WebsocketMessageTypeServerBroadcast,
 } from "@metapages/compute-queues-shared";
 import { closeKv } from "../../shared/src/shared/kv.ts";
+import { closeSocket, resubmitUntilSeen, withDeadline } from "./util.ts";
 
 const fetch = fetchRobust;
 
@@ -119,67 +120,76 @@ Deno.test(
       }
     };
 
-    await open(socket);
+    try {
+      await open(socket);
 
-    // Submit the job. Job submissson should confirm the job is submitted.
-    // Browser clients kinda do this already by resubmitting if the job is
-    // not on the results.
-    while (!jobSuccessfullySubmitted) {
-      socket.send(JSON.stringify(message));
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      // Submit the job. Job submissson should confirm the job is submitted.
+      // Browser clients kinda do this already by resubmitting if the job is
+      // not on the results.
+      await resubmitUntilSeen(
+        socket,
+        message,
+        () => jobSuccessfullySubmitted,
+        () => `${jobId} never appeared on queue ${QUEUE_ID}`,
+      );
+
+      // Wait for job to complete
+      const result = await withDeadline(
+        jobCompleteDeferred,
+        () =>
+          `${jobId} did not finish on queue ${QUEUE_ID}; states seen: ${
+            stateTransitions.map((s) => s.state).join(" -> ") || "none"
+          }`,
+      );
+
+      // Verify the job completed successfully
+      assertEquals(
+        result.result.trim(),
+        outputText.trim(),
+      );
+
+      // Verify that the job went through the expected state transitions
+      assert(
+        stateTransitions.length === 3,
+        "Should have at Queued, Running, and Finished states",
+      );
+
+      // Should start with Queued state, go to Running, and then to Finished
+      assertEquals(stateTransitions[0].state, DockerJobState.Queued);
+      assertEquals(stateTransitions[1].state, DockerJobState.Running);
+      assertEquals(stateTransitions[2].state, DockerJobState.Finished);
+
+      // Should end with Finished state
+      assertEquals(
+        stateTransitions[stateTransitions.length - 1].state,
+        DockerJobState.Finished,
+      );
+
+      // ⚠️ These tests are not correct, and it's worth leaving them here
+      // to remind us: it IS possible for two workers to start Running a job,
+      // and for the queue to decide who gets it, but the "wrong" worker finishes
+      // it first. The queue prioritizes speed so let's take the finished work, even
+      // if the Running.worker is different from the Finished.worker.
+      // Verify that the job state shows the correct worker information
+      // The job should have been claimed by one worker and finished by that same worker
+      // const finishedState = stateTransitions.find((s) => s.state === DockerJobState.Finished);
+      // assert(finishedState?.worker, "Finished state should have a worker");
+      // assertEquals(
+      //   finishedState.worker,
+      //   result.finalWorker,
+      //   "Final worker should match the worker in finished state",
+      // );
+
+      // // Verify that the same worker that started the job also finished it
+      // // (in a single-worker environment, this should always be true)
+      // assertEquals(
+      //   runningState.worker,
+      //   result.finalWorker,
+      //   "The worker that started the job should be the same one that finished it",
+      // );
+    } finally {
+      await closeSocket(socket);
+      closeKv();
     }
-
-    // Wait for job to complete
-    const result = await jobCompleteDeferred;
-
-    // Verify the job completed successfully
-    assertEquals(
-      result.result.trim(),
-      outputText.trim(),
-    );
-
-    // Verify that the job went through the expected state transitions
-    assert(
-      stateTransitions.length === 3,
-      "Should have at Queued, Running, and Finished states",
-    );
-
-    // Should start with Queued state, go to Running, and then to Finished
-    assertEquals(stateTransitions[0].state, DockerJobState.Queued);
-    assertEquals(stateTransitions[1].state, DockerJobState.Running);
-    assertEquals(stateTransitions[2].state, DockerJobState.Finished);
-
-    // Should end with Finished state
-    assertEquals(
-      stateTransitions[stateTransitions.length - 1].state,
-      DockerJobState.Finished,
-    );
-
-    // ⚠️ These tests are not correct, and it's worth leaving them here
-    // to remind us: it IS possible for two workers to start Running a job,
-    // and for the queue to decide who gets it, but the "wrong" worker finishes
-    // it first. The queue prioritizes speed so let's take the finished work, even
-    // if the Running.worker is different from the Finished.worker.
-    // Verify that the job state shows the correct worker information
-    // The job should have been claimed by one worker and finished by that same worker
-    // const finishedState = stateTransitions.find((s) => s.state === DockerJobState.Finished);
-    // assert(finishedState?.worker, "Finished state should have a worker");
-    // assertEquals(
-    //   finishedState.worker,
-    //   result.finalWorker,
-    //   "Final worker should match the worker in finished state",
-    // );
-
-    // // Verify that the same worker that started the job also finished it
-    // // (in a single-worker environment, this should always be true)
-    // assertEquals(
-    //   runningState.worker,
-    //   result.finalWorker,
-    //   "The worker that started the job should be the same one that finished it",
-    // );
-
-    socket.close();
-    await closed(socket);
-    closeKv();
   },
 );

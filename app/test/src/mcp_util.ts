@@ -1,5 +1,6 @@
 import { type ConsoleLogLine, fetchRobust } from "@metapages/compute-queues-shared";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { queueJobs } from "./util.ts";
 
 const fetch = fetchRobust;
 
@@ -154,6 +155,9 @@ export async function listMCPTools(): Promise<Array<{ name: string; description?
   return result?.tools || [];
 }
 
+/** So a timeout can report what is in the job's namespace now */
+const submittedNamespaces = new Map<string, string>();
+
 /**
  * Submit a job using MCP submit_job tool
  */
@@ -205,6 +209,10 @@ export async function mcpSubmitJob(args: {
 
   if (!data.success) {
     throw new Error(data.error || "Job submission failed");
+  }
+
+  if (args.namespace) {
+    submittedNamespaces.set(data.jobId, args.namespace);
   }
 
   return data;
@@ -262,6 +270,76 @@ export async function mcpCancelJob(args: {
   return JSON.parse(content.text);
 }
 
+/** What a wait for a job saw, up to the moment it gave up */
+export interface JobWaitObservation {
+  queue: string;
+  polls: number;
+  unreachablePolls: number;
+  lastFailure?: string;
+  /** The final poll could not reach the API, so the job's final state is unknown */
+  lastPollUnreachable: boolean;
+  /** State on the final poll */
+  lastState?: string;
+  /** The API returned the job on the final poll */
+  lastFound?: boolean;
+  /** Polls that found the job, and the latest state any of them reported */
+  foundPolls: number;
+  lastSeenState?: string;
+  /** Consecutive polls at the end that reached the API and did not find the job */
+  absentPollsAtEnd: number;
+  namespace?: string;
+  /** The queue when the wait gave up, or why it could not be read */
+  queueAtTimeout: Record<string, { state: string; namespaces?: string[] }> | { unreadable: string };
+}
+
+const isUnreadable = (
+  queueAtTimeout: JobWaitObservation["queueAtTimeout"],
+): queueAtTimeout is { unreadable: string } => typeof queueAtTimeout.unreadable === "string";
+
+/**
+ * State what was observed and nothing else. This used to offer reasons a job
+ * might be gone ("a later job in the same namespace replaces the one before
+ * it..."), which read as a diagnosis whether or not any of it had happened. The
+ * queue's contents and who holds the namespace tell them apart: a queue full of
+ * Queued jobs is saturation, another job in the namespace is a replacement.
+ */
+export function describeUnfinishedJob(o: JobWaitObservation): string {
+  const { queue, polls } = o;
+  const job = o.lastState
+    ? `still ${o.lastState}`
+    : o.lastPollUnreachable
+    ? `state unknown: the job API was unreachable on ${o.unreachablePolls}/${polls} polls, including the last` +
+      (o.lastFailure ? ` (last failure: ${o.lastFailure})` : "")
+    : o.lastFound
+    ? "the API returned the job with no state"
+    : o.foundPolls > 0
+    ? `last seen ${o.lastSeenState ?? "with no state"}, then neither on queue ${queue} nor stored as a result for ` +
+      `the last ${o.absentPollsAtEnd}/${polls} polls`
+    : `neither on queue ${queue} nor stored as a result on any of ${polls} polls`;
+
+  if (isUnreadable(o.queueAtTimeout)) {
+    return `${job}; could not read queue ${queue}: ${o.queueAtTimeout.unreadable}`;
+  }
+
+  const jobs = Object.entries(o.queueAtTimeout);
+  const counts = new Map<string, number>();
+  for (const [, { state }] of jobs) {
+    counts.set(state, (counts.get(state) ?? 0) + 1);
+  }
+  const contents = [...counts].map(([state, count]) => `${count} ${state}`).join(", ") || "empty";
+
+  let namespace = "";
+  if (o.namespace) {
+    const holders = jobs
+      .filter(([, { namespaces }]) => namespaces?.includes(o.namespace!))
+      .map(([id, { state }]) => `${id.substring(0, 6)} (${state})`);
+    namespace = holders.length > 0
+      ? `; namespace ${o.namespace} is held by ${holders.join(", ")}`
+      : `; no job on the queue holds namespace ${o.namespace}`;
+  }
+  return `${job}; queue ${queue} at timeout: ${contents}${namespace}`;
+}
+
 /**
  * Poll job status until it reaches a terminal state (finished or cancelled)
  * Returns the final job state
@@ -275,23 +353,30 @@ export async function waitForJobCompletion(
   const startTime = Date.now();
 
   let lastState: string | undefined;
+  let lastSeenState: string | undefined;
   let polls = 0;
   let unreachablePolls = 0;
+  let lastPollUnreachable = false;
   let lastFailure: string | undefined;
-  let everFound = false;
+  let foundPolls = 0;
+  let absentPollsAtEnd = 0;
   let lastFound: boolean | undefined;
   while (Date.now() - startTime < timeoutMs) {
     const status = await mcpGetJobStatus({ queue, jobId });
     polls++;
     lastState = status.status?.state;
     lastFound = status.found;
-    if (status.found) {
-      everFound = true;
-    }
     // get_job_status reports an unreachable API separately from an absent job
-    if (status.success === false) {
+    lastPollUnreachable = status.success === false;
+    if (lastPollUnreachable) {
       unreachablePolls++;
       lastFailure = status.lookupFailures?.join("; ") ?? status.error;
+    } else if (status.found) {
+      foundPolls++;
+      absentPollsAtEnd = 0;
+      lastSeenState = lastState ?? lastSeenState;
+    } else {
+      absentPollsAtEnd++;
     }
 
     if (lastState === "Finished" || lastState === "Cancelled") {
@@ -301,22 +386,26 @@ export async function waitForJobCompletion(
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
 
-  // Say which of the three happened, because they have different fixes:
-  // "Queued" never got a worker slot, "Running" was a slow container, no state
-  // at all means the queue has no record of the job (never submitted, replaced
-  // by a later job in its namespace, or expired), and a failed lookup means the
-  // API was unreachable and the state is simply unknown.
-  const why = lastState
-    ? `last state: ${lastState}`
-    : unreachablePolls > 0
-    ? `the job API was unreachable on ${unreachablePolls}/${polls} polls, so the state is unknown` +
-      (lastFailure ? ` (last failure: ${lastFailure})` : "")
-    : lastFound
-    ? "the API returned the job with no state at all"
-    : everFound
-    ? `the job was on queue ${queue} and then disappeared from it: a later job in the same namespace replaces the ` +
-      `one before it, and a finished job is dropped from the queue about a minute later`
-    : `the API has no record of the job on queue ${queue}`;
+  let queueAtTimeout: JobWaitObservation["queueAtTimeout"];
+  try {
+    queueAtTimeout = await queueJobs(queue);
+  } catch (err) {
+    queueAtTimeout = { unreadable: (err as Error).message };
+  }
+  const why = describeUnfinishedJob({
+    queue,
+    polls,
+    unreachablePolls,
+    lastFailure,
+    lastPollUnreachable,
+    lastState,
+    lastFound,
+    foundPolls,
+    lastSeenState,
+    absentPollsAtEnd,
+    namespace: submittedNamespaces.get(jobId),
+    queueAtTimeout,
+  });
   throw new Error(`Job ${jobId} did not complete within ${timeoutMs}ms (${why})`);
 }
 

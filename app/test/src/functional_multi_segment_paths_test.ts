@@ -7,6 +7,7 @@ import {
   fileToDataref,
 } from "@metapages/compute-queues-shared";
 import { closeKv } from "../../shared/src/shared/kv.ts";
+import { withDeadline } from "./util.ts";
 
 const QUEUE_ID = Deno.env.get("QUEUE_ID") || "local1";
 const API_URL = Deno.env.get("API_URL")!;
@@ -62,19 +63,24 @@ Timestamp: ${Date.now()}`;
       let attempts = 0;
       const maxAttempts = 60; // 60 seconds timeout
 
-      while (!jobCompleted && attempts < maxAttempts) {
-        const jobResponse = await fetch(`${API_URL}/j/${jobId}.json`);
-        assertEquals(jobResponse.status, 200);
-        const jobData = await jobResponse.json();
-        const state = jobData.data?.results?.state;
-        if (state === "Finished") {
-          jobCompleted = true;
-          assertEquals(jobData.data.results.finishedReason, "Success");
-        } else {
-          await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait 1 second
-          attempts++;
-        }
-      }
+      await withDeadline(
+        (async () => {
+          while (!jobCompleted && attempts < maxAttempts) {
+            const jobResponse = await fetch(`${API_URL}/j/${jobId}.json`);
+            assertEquals(jobResponse.status, 200);
+            const jobData = await jobResponse.json();
+            const state = jobData.data?.results?.state;
+            if (state === "Finished") {
+              jobCompleted = true;
+              assertEquals(jobData.data.results.finishedReason, "Success");
+            } else {
+              await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait 1 second
+              attempts++;
+            }
+          }
+        })(),
+        () => `${jobId} not Finished on queue ${QUEUE_ID} after ${attempts} polls`,
+      );
 
       assertEquals(jobCompleted, true, "Job should have completed within timeout");
 
