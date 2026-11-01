@@ -20,10 +20,14 @@ import type { Volume } from "./types.ts";
 
 /**
  * @param job Returns input and output docker volumes to mount into the container
+ * @param options keepOutputs: this job's container is still running and is about
+ * to be reattached to, so what it has written so far is its result. Otherwise the
+ * job is starting over, and anything in its outputs is from an earlier attempt.
  */
 export const convertIOToVolumeMounts = async (
   job: { id: string; definition: DockerJobDefinitionInputRefs },
   address: string,
+  options: { keepOutputs: boolean },
 ): Promise<{ volumes: Volume[]; outputsDir: string }> => {
   const config = getConfig();
   const { id, definition } = job;
@@ -42,7 +46,10 @@ export const convertIOToVolumeMounts = async (
   // security/consistency: empty directories, in case restarting jobs
   await emptyDir(configFilesDir);
   await emptyDir(inputsDir);
-  // await emptyDir(outputsDir);
+  if (!options.keepOutputs) {
+    // Finished results are safe: these are only hard links to the files in cacheDir
+    await emptyDir(outputsDir);
+  }
 
   // make sure directories are writable
   await Deno.chmod(baseDir, 0o777);
