@@ -486,9 +486,15 @@ pr-daemon-down:
     fi
 
     # A restart keeps worker-data: the job database, job results and file cache.
-    # The rest of $state only describes the run that just stopped.
     if [ -n "${PR_DAEMON_KEEP_DATA:-}" ]; then
-        rm -f "$pidfile" "$state/port" "$state/worker.log"
+        rm -f "$pidfile" "$state/port"
+        # up starts a new log, and this one may say why the stack stopped answering
+        if [ -f "$state/worker.log" ]; then
+            mv -f "$state/worker.log" "$state/worker.log.1"
+        fi
+        # Downloads and uploads the worker was killed in the middle of
+        find "$state"/worker-data/*/docker-builds/downloads "$state"/worker-data/*/f \
+            -type f -name '*.tmp' -delete 2> /dev/null
         echo "✅ preview for '$branch' is down and its data is kept" >&2
     else
         rm -rf "$state"
