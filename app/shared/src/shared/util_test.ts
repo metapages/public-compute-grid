@@ -90,10 +90,10 @@ Deno.test("shaDockerJob: presigned URL params are stripped from inputs", async (
   assertEquals(hash1, hash2);
 });
 
-Deno.test("shaDockerJob: presigned URL params are stripped from configFiles", async () => {
+Deno.test("shaDockerJob: presigned URL params are stripped from files", async () => {
   const jobWithPresigned: DockerJobDefinitionInputRefs = {
     ...baseJob,
-    configFiles: {
+    files: {
       config: {
         value: "https://example.com/config/presignedurl/abc123?token=xyz",
         type: DataRefType.url,
@@ -102,7 +102,7 @@ Deno.test("shaDockerJob: presigned URL params are stripped from configFiles", as
   };
   const jobWithoutPresigned: DockerJobDefinitionInputRefs = {
     ...baseJob,
-    configFiles: {
+    files: {
       config: {
         value: "https://example.com/config",
         type: DataRefType.url,
@@ -253,7 +253,7 @@ Deno.test("shaDockerJob: full job with all fields produces stable hash", async (
     inputs: {
       data: { value: "aGVsbG8=", type: DataRefType.base64 },
     },
-    configFiles: {
+    files: {
       "config.yaml": { value: "key: value", type: DataRefType.utf8 },
     },
   };
@@ -553,9 +553,19 @@ Deno.test("prepareEnqueueJob: a named job's run id comes from its content, so ne
   assertNotEquals(v1.id, v2.id);
 });
 
-Deno.test("prepareEnqueueJob: leaves the id of a client that predates inputs alone", async () => {
-  const job = { id: "chosen", definition: { ...baseJob, inputs: { a: { value: "a" } } } };
-  assertEquals(await prepareEnqueueJob(job), job);
+Deno.test("prepareEnqueueJob: inputs in a definition are the run's, not part of the job", async () => {
+  const inputs = { "a.txt": { type: DataRefType.utf8, value: "a" } };
+  const inDefinition = await prepareEnqueueJob({ definition: { ...baseJob, inputs } });
+  assertEquals(inDefinition, await prepareEnqueueJob({ definition: baseJob, inputs }));
+  assertEquals(inDefinition.jobHash, await shaDockerJob(baseJob));
+  assertEquals(inDefinition.definition.inputs, undefined);
+  assertEquals(inDefinition.inputs, inputs);
+});
+
+Deno.test("prepareEnqueueJob: a stored run's definition gives the same run", async () => {
+  const inputs = { "a.txt": { type: DataRefType.utf8, value: "a" } };
+  const run = await prepareEnqueueJob({ definition: baseJob, inputs });
+  assertEquals((await prepareEnqueueJob({ definition: mergeRunInputs(run) })).id, run.id);
 });
 
 Deno.test("shaDockerJob: files are part of the job", async () => {
@@ -566,18 +576,17 @@ Deno.test("shaDockerJob: files are part of the job", async () => {
 });
 
 Deno.test("formatJobUrlPath: the URL forms", () => {
-  assertEquals(formatJobUrlPath({ id: "h", jobId: "h", jobHash: "h" }), "/j/h");
-  assertEquals(formatJobUrlPath({ id: "r", jobId: "h", jobHash: "h", inputsHash: "i" }), "/j/h?i=i");
-  assertEquals(formatJobUrlPath({ id: "r", jobId: "name", jobHash: "h", inputsHash: "i" }), "/j/name?v=h&i=i");
-  assertEquals(formatJobUrlPath({ id: "legacy" }), "/j/legacy");
+  assertEquals(formatJobUrlPath({ jobId: "h", jobHash: "h" }), "/j/h");
+  assertEquals(formatJobUrlPath({ jobId: "h", jobHash: "h", inputsHash: "i" }), "/j/h?i=i");
+  assertEquals(formatJobUrlPath({ jobId: "name", jobHash: "h", inputsHash: "i" }), "/j/name?v=h&i=i");
 });
 
-Deno.test("prepareEnqueueJob: hashes sent by a client are dropped or recomputed", async () => {
+Deno.test("prepareEnqueueJob: ids sent by a client are dropped or recomputed", async () => {
   const forged = { jobHash: "victim", inputsHash: "anyinputs", definition: baseJob };
-  const legacy = await prepareEnqueueJob({ ...forged, id: "attacker" });
-  assertEquals([legacy.id, legacy.jobHash, legacy.inputsHash], ["attacker", undefined, undefined]);
-
   const hash = await shaDockerJob(baseJob);
+  const chosen = await prepareEnqueueJob({ ...forged, id: "attacker" });
+  assertEquals([chosen.id, chosen.jobHash, chosen.inputsHash], [hash, hash, undefined]);
+
   const derived = await prepareEnqueueJob(forged);
   assertEquals([derived.id, derived.jobHash, derived.inputsHash], [hash, hash, undefined]);
 

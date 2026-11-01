@@ -17,7 +17,7 @@ const MAX_VIEW_URL_LENGTH = 32768;
  *   <baseUrl>/#?job=<base64(encodeURIComponent(json))>&queue=<queue>
  *
  * The id the client derives is the same one we submitted: the only fields it
- * adds on top of the hash param are an empty `env` and `configFiles`, and the
+ * adds on top of the hash param are an empty `env` and `files`, and the
  * job hash blob drops empty records. This is the shape `cq run` prints as
  * `view <url>`.
  *

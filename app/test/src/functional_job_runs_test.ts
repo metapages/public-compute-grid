@@ -138,19 +138,24 @@ Deno.test("Job files land in the image's WORKDIR when the job does not set one",
   assertEquals(logsText(result).split(/\s+/).join(" "), `/from-image ${nonce}`);
 });
 
-Deno.test("Definitions with `inputs` and `configFiles` still land in /inputs", async () => {
+Deno.test("Inputs inside a definition are the run's inputs, not part of the job", async () => {
   const nonce = crypto.randomUUID();
-  const { jobId, runId } = await submit({
-    definition: {
-      image: "alpine:3.18.5",
-      command: `sh -c 'cat /inputs/in.txt /inputs/config.txt'`,
-      inputs: { "in.txt": utf8(nonce) },
-      configFiles: { "config.txt": utf8("config") },
-    },
-  });
-  assertEquals(jobId, runId);
-  const result = await waitForResult(`${API_URL}/j/${jobId}/result.json`);
-  assertEquals(logsText(result), `${nonce}config`);
+  const definition = { image: "alpine:3.18.5", command: `sh -c 'echo ${nonce}; cat /inputs/in.txt'` };
+  const inputs = { "in.txt": utf8("from-input") };
+  const run = await submit({ definition: { ...definition, inputs } });
+  const separate = await submit({ definition, inputs });
+  assertEquals([run.jobId, run.runId], [separate.jobId, separate.runId]);
+  assert(run.jobId !== run.runId);
+  const result = await waitForResult(`${API_URL}/j/${run.jobId}/result.json?i=${run.inputsHash}`);
+  assertEquals(logsText(result), `${nonce}\nfrom-input`);
+});
+
+Deno.test("An id sent by a client is not used", async () => {
+  const nonce = crypto.randomUUID();
+  const definition = { image: "alpine:3.18.5", command: `echo ${nonce}` };
+  const { runId, jobId } = await submit({ id: crypto.randomUUID(), definition });
+  assertEquals(runId, jobId);
+  assertEquals(logsText(await waitForResult(`${API_URL}/j/${runId}/result.json`)), nonce);
 });
 
 Deno.test("A file name cannot escape the job's folder on the worker", async () => {
@@ -206,9 +211,7 @@ Deno.test("Hashes sent by a client are not believed", async () => {
 
   for (
     const forged of [
-      // a client that predates inputs, with its own id
       { id: crypto.randomUUID(), jobHash: jobA.jobId, inputsHash: forgedInputs, definition: b },
-      // the ids derived on the server
       { jobHash: jobA.jobId, inputsHash: forgedInputs, definition: b },
       { jobId: crypto.randomUUID(), jobHash: jobA.jobId, inputsHash: forgedInputs, definition: b },
     ]

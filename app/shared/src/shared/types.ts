@@ -74,11 +74,9 @@ export type DockerJobDefinitionInputsBase64V1 = {
   // Job files, part of the job sha. Keys are paths in the container: absolute
   // paths are used as they are, relative paths are under the working directory.
   files?: InputsBase64String;
-  // @deprecated use `files`. Written to /inputs, and part of the job sha.
-  // On a stored run these also hold the run's EnqueueJob.inputs (see mergeRunInputs).
+  // A run's EnqueueJob.inputs, written to /inputs. Only set on a stored run (see
+  // mergeRunInputs): submitted here they are moved to EnqueueJob.inputs.
   inputs?: InputsBase64String;
-  // @deprecated use `files`. Relative paths are written to /inputs, part of the job sha.
-  configFiles?: InputsBase64String;
   // eg "1h", "20m", "10s"
   maxDuration?: string;
   // gpu?: boolean;
@@ -102,12 +100,11 @@ export const DefaultNamespace = "_";
 export type DockerJobDefinitionInputRefs =
   & Omit<
     DockerJobDefinitionInputsBase64V1,
-    "files" | "inputs" | "configFiles"
+    "files" | "inputs"
   >
   & {
     files?: InputsRefs;
     inputs?: InputsRefs;
-    configFiles?: InputsRefs;
   };
 
 export interface DockerRunResult {
@@ -460,7 +457,7 @@ export type BroadcastStatusRequest = undefined;
 
 export type DockerJobDefinitionParamsInUrlHash = Omit<
   DockerJobDefinitionInputRefs,
-  "inputs" | "configInputs"
+  "inputs"
 >;
 
 // this is the actual job definition consumed by the workers

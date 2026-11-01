@@ -24,15 +24,13 @@ export const EditInput: React.FC = () => {
     // TODO: make the primary editable file something that can he
     // specified so we don't rely on lexicographical order
     const fileNames = jobInputs ? Object.keys(jobInputs).sort() : [];
-    const mainFile = null;
-    if (!mainFile && fileNames.length) {
-      setMainInputFile(fileNames[0]);
-      if (!loading && !startEditingCheckRef.current) {
-        if (!showTerminalFirst) {
-          setRightPanelContext("editScript");
-        }
-        startEditingCheckRef.current = true;
+    setMainInputFile(fileNames[0] ?? null);
+    // only when the page opens: a file added later is being edited somewhere already
+    if (!loading && !startEditingCheckRef.current) {
+      if (fileNames.length && !showTerminalFirst) {
+        setRightPanelContext("editScript");
       }
+      startEditingCheckRef.current = true;
     }
   }, [jobInputs, jobDefinitionBlob, showTerminalFirst, loading]);
 

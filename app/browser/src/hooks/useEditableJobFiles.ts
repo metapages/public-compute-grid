@@ -1,30 +1,29 @@
 import { useCallback, useMemo } from "react";
 
 import { useHashParamJsonObject } from "/@/hooks/useHashParamJsonObject";
-import { JobInputs } from "/@shared/client";
-
-import { useHashParamJson } from "@metapages/hash-query/react-hooks";
+import { useJobDefinitionParam } from "/@/hooks/useJobDefinitionParam";
+import { DataRefType, JobInputs } from "/@shared/client";
 
 /**
- * The text files editable in the page, kept in the URL hash: job files (`files`)
- * and, for existing URLs, the deprecated `inputs`. An edit goes back to the param
- * the file came from.
+ * The text files editable in the page: the definition's own text files, and those
+ * in the URL hash (`files`). An edit goes to the hash, and wins over the definition.
  */
 export const useEditableJobFiles = (): [JobInputs, (name: string, content: string) => void] => {
+  const [definition] = useJobDefinitionParam();
   const [jobFiles, setJobFiles] = useHashParamJsonObject<JobInputs>("files");
-  const [jobInputs, setJobInputs] = useHashParamJson<JobInputs | undefined>("inputs");
 
-  const files = useMemo(() => ({ ...jobInputs, ...jobFiles }), [jobInputs, jobFiles]);
+  const files = useMemo(() => {
+    const definitionFiles = Object.entries(definition?.files ?? {})
+      .filter(([_, ref]) => ref.type === DataRefType.utf8)
+      .map(([name, ref]) => [name, ref.value as string]);
+    return { ...Object.fromEntries(definitionFiles), ...jobFiles };
+  }, [definition, jobFiles]);
 
   const setFile = useCallback(
     (name: string, content: string) => {
-      if (jobInputs?.[name] !== undefined && jobFiles?.[name] === undefined) {
-        setJobInputs({ ...jobInputs, [name]: content });
-      } else {
-        setJobFiles({ ...jobFiles, [name]: content });
-      }
+      setJobFiles({ ...jobFiles, [name]: content });
     },
-    [jobFiles, jobInputs, setJobFiles, setJobInputs],
+    [jobFiles, setJobFiles],
   );
 
   return [files, setFile];

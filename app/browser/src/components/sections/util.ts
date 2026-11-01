@@ -16,7 +16,7 @@ export const getDynamicInputsCount = (currentJobDefinition: DockerJobDefinitionM
 };
 
 export const getConfigInputs = (currentJobDefinition: DockerJobDefinitionMetadata | undefined): InputsRefs => {
-  return { ...currentJobDefinition.definition?.configFiles, ...currentJobDefinition.definition?.files };
+  return currentJobDefinition.definition?.files || {};
 };
 
 export const getOutputs = (job?: DockerJobDefinitionRow) => {

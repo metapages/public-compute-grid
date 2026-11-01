@@ -5,7 +5,7 @@ import { useHashParam } from "@metapages/hash-query/react-hooks";
 
 /**
  * The JSON object in a hash param's value. Undefined for anything else: decoding
- * throws on a value that is not encoded JSON, such as a job's own `#?i=3`.
+ * throws on a value that is not encoded JSON, such as a hand-written `#?i=3`.
  */
 export const decodeHashJsonObject = <T extends object>(value?: string): T | undefined => {
   try {
@@ -16,7 +16,7 @@ export const decodeHashJsonObject = <T extends object>(value?: string): T | unde
   }
 };
 
-/** useHashParamJson, for a param whose value can also be something else. See decodeHashJsonObject. */
+/** useHashParamJson, for a param that must not break the page if its value is wrong. See decodeHashJsonObject. */
 export const useHashParamJsonObject = <T extends object>(key: string): [T | undefined, (blob?: T) => void] => {
   const [value, setValue] = useHashParam(key);
   const blob = useMemo(() => decodeHashJsonObject<T>(value), [value]);

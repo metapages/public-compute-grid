@@ -28,7 +28,7 @@ import { useMetaframeAndInput } from "@metapages/metapage-react";
 
 import { getIOBaseUrl } from "../config";
 import { useStore } from "../store";
-import { decodeHashJsonObject, useHashParamJsonObject } from "./useHashParamJsonObject";
+import { useHashParamJsonObject } from "./useHashParamJsonObject";
 import { useJobDefinitionParam, useShortJobStore } from "./useJobDefinitionParam";
 import { useOptionAllowSetJob } from "./useOptionAllowSetJob";
 import { useQueue } from "./useQueue";
@@ -42,8 +42,9 @@ const HashParamKeysSystem = new Set([
   "control",
   "debug",
   "definition",
+  "files",
+  "i",
   "ignoreQueueOverride",
-  "inputs",
   "job",
   "maxJobDuration",
   "queue",
@@ -57,13 +58,6 @@ const getNonSystemHashParams = (): Record<string, string> => {
   // never inject system params.
   HashParamKeysSystem.forEach(key => {
     delete hashParams[key];
-  });
-  // `files` and `i` only belong to the app when they hold a JSON object. Any other
-  // value is a param the job's URL has always been able to use, e.g. `#?i=3`.
-  ["files", "i"].forEach(key => {
-    if (decodeHashJsonObject(hashParams[key])) {
-      delete hashParams[key];
-    }
   });
   // never inject params an embedding parent page (metapage.io) added: they are
   // plumbing, not container config, and several vary per page load or per viewer.
@@ -93,10 +87,8 @@ export const useDockerJobDefinition = () => {
   const [definitionParamsInUrl, setDefinitionParamsInUrl] = useJobDefinitionParam();
   const shortJobId = useShortJobStore(s => s.shortJobId);
 
-  // job files are stored in the URL hash
+  // job files edited in the page are stored in the URL hash
   const [jobFilesFromUrl] = useHashParamJsonObject<JobInputs>("files");
-  // deprecated: the same, but written to /inputs
-  const [jobInputsFromUrl] = useHashParamJson<JobInputs | undefined>("inputs");
   // the inputs for this run: `/j/<job>#?i=<json of name: text or DataRef>`
   const [runInputsFromUrl] = useHashParamJsonObject<Record<string, unknown>>("i");
 
@@ -158,33 +150,17 @@ export const useDockerJobDefinition = () => {
       });
     }
 
-    // These are inputs set in the metaframe and stored in the url hash params. They
-    // are always type: DataRefType.utf8 because they come from the text editor.
-    // When there is no `inputs` hash param (e.g. a short URL, where the loaded
-    // definition already carries its own configFiles), keep the definition's
-    // existing configFiles rather than wiping them.
-    definition.configFiles = !jobInputsFromUrl
-      ? (definition.configFiles ?? {})
-      : Object.fromEntries(
-          Object.keys(jobInputsFromUrl).map(key => {
-            return [
-              key,
-              {
-                type: DataRefType.utf8,
-                value: jobInputsFromUrl[key] as string,
-              },
-            ];
-          }),
-        );
-
-    definition.files = !jobFilesFromUrl
-      ? (definition.files ?? {})
-      : Object.fromEntries(
-          Object.keys(jobFilesFromUrl).map(key => [
-            key,
-            { type: DataRefType.utf8, value: jobFilesFromUrl[key] as string },
-          ]),
-        );
+    // These are always type: DataRefType.utf8 because they come from the text editor.
+    // They add to, or replace, the files of a definition loaded from a short URL.
+    definition.files = {
+      ...definition.files,
+      ...Object.fromEntries(
+        Object.keys(jobFilesFromUrl ?? {}).map(key => [
+          key,
+          { type: DataRefType.utf8, value: jobFilesFromUrl[key] as string },
+        ]),
+      ),
+    };
 
     if (!definition.image && !definition.build) {
       return;
@@ -272,10 +248,6 @@ export const useDockerJobDefinition = () => {
       if (cancelled) {
         return;
       }
-      definition.configFiles = await copyLargeBlobsToCloud(definition.configFiles, ioBaseUrl);
-      if (cancelled) {
-        return;
-      }
 
       // if uploading a large blob means new inputs have arrived and replaced this set, break out
       // Opened by name: runs stay tied to the name. Only when this is the name's
@@ -291,6 +263,7 @@ export const useDockerJobDefinition = () => {
 
       const {
         id,
+        definition: definitionPrepared,
         jobId,
         jobHash,
         inputsHash,
@@ -310,7 +283,7 @@ export const useDockerJobDefinition = () => {
         jobHash,
         inputsHash,
         inputs: inputsPrepared,
-        definition,
+        definition: definitionPrepared,
         debug,
         maxJobDuration,
         control: { ...namespaceConfig, namespace: namespaceConfig?.namespace || DefaultNamespace },
@@ -331,7 +304,6 @@ export const useDockerJobDefinition = () => {
     definitionParamsInUrl,
     shortJobId,
     jobFilesFromUrl,
-    jobInputsFromUrl,
     runInputsFromUrl,
     namespaceConfig,
     debug,

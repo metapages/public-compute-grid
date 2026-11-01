@@ -156,9 +156,9 @@ const apiJson = async (url, init) => {
 
 /**
  * Flags are `--name value` or `--name=value`; `--flag` alone is boolean true.
- * Repeatable flags (env, input, config, build-arg) collect into arrays.
+ * Repeatable flags (env, file, input, build-arg) collect into arrays.
  */
-const REPEATABLE = new Set(["env", "file", "input", "config", "build-arg"]);
+const REPEATABLE = new Set(["env", "file", "input", "build-arg"]);
 
 const parseArgs = (argv) => {
   const flags = {};
@@ -355,13 +355,6 @@ const buildDefinition = async (apiUrl, flags) => {
     inputs[name] = ref;
   }
   if (Object.keys(inputs).length) definition.inputs = inputs;
-
-  const configFiles = {};
-  for (const spec of flags.config || []) {
-    const [name, ref] = await resolveDataRef(apiUrl, spec, "config");
-    configFiles[name] = ref;
-  }
-  if (Object.keys(configFiles).length) definition.configFiles = configFiles;
 
   const requirements = {};
   if (flags.cpus) requirements.cpus = Number(flags.cpus);
@@ -657,7 +650,6 @@ JOB (for run / submit / url)
   --file path=@path|value      job file: relative to the working directory, or an absolute path
                                (repeatable, part of the job id)
   --input name=@path|value     data for this run, into /inputs (repeatable, not part of the job id)
-  --config name=@path|value    deprecated, use --file: into /inputs (repeatable, part of the job id)
   --max-duration <dur>         e.g. 20m
   --cpus / --gpus / --memory   resource requirements
   --shm-size <size>            /dev/shm size

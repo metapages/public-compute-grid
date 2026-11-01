@@ -23,8 +23,6 @@ The body you `POST /q/<queue>`:
 | `env`          | object | `{ "KEY": "value" }` env vars.                                         |
 | `workdir`      | string | Working directory inside the container.                                |
 | `files`        | object | Path → [DataRef](/guide/files#job-files). Relative to the working directory, or absolute. |
-| `inputs`       | object | Deprecated, use `files`. Filename → DataRef, written to `/inputs`.     |
-| `configFiles`  | object | Deprecated, use `files`. Same shape as `inputs`.                       |
 | `shmSize`      | string | e.g. `"2g"` — needed by PyTorch dataloaders and friends.               |
 | `maxDuration`  | string | `"30s"`, `"20m"`, `"2h"`.                                              |
 | `requirements` | object | `{ cpus, gpus, memory, maxDuration }`.                                 |

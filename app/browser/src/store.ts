@@ -24,11 +24,7 @@ import {
   WebsocketMessageTypeClientToServer,
 } from "/@shared/client";
 
-import {
-  getHashParamsFromWindow,
-  getHashParamValueJsonFromWindow,
-  setHashParamValueJsonInWindow,
-} from "@metapages/hash-query";
+import { getHashParamsFromWindow, setHashParamValueJsonInWindow } from "@metapages/hash-query";
 
 import { cache } from "./cache";
 import { decodeHashJsonObject } from "./hooks/useHashParamJsonObject";
@@ -570,14 +566,9 @@ export const useStore = create<MainStore>((set, get) => ({
         get().submitJob();
       }
     });
-    // back to the param the file came from: `inputs` is deprecated, new files are in `files`
-    const legacyInputs: Record<string, string> = getHashParamValueJsonFromWindow("inputs") || {};
     const files = decodeHashJsonObject<Record<string, string>>(getHashParamsFromWindow()[1]["files"]) || {};
-    const param =
-      legacyInputs[get().mainInputFile] !== undefined && files[get().mainInputFile] === undefined ? "inputs" : "files";
-    const values = param === "inputs" ? legacyInputs : files;
-    values[get().mainInputFile] = get().mainInputFileContent;
-    setHashParamValueJsonInWindow(param, values);
+    files[get().mainInputFile] = get().mainInputFileContent;
+    setHashParamValueJsonInWindow("files", files);
     get().setMainInputFileContent(null);
   },
 

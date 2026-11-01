@@ -67,8 +67,7 @@ job.
 A relative path is under the working directory: `definition.workdir`, else the image's `WORKDIR`, else `/`. An absolute
 path is used as it is. `..` is not allowed in a path.
 
-`definition.inputs` and `definition.configFiles` are deprecated. They still work, still land in `/inputs` and are part of
-the job's id. Use `files` in a definition, and `inputs` next to it.
+In the browser, edit them in **Settings → Job Files**. They are kept in the URL as `#?files=`, and add to or replace the files of a job opened by its URL.
 
 ## Jobs and runs {#jobs-and-runs}
 
@@ -110,7 +109,7 @@ Every job route takes any of these forms, as does the browser client:
 `?i=` and `?v=` work the same on the sub-paths, e.g. `/q/<queue>/j/<job>/result.json?i=<sha256 inputs>`. A combination
 that was never submitted answers `404`.
 
-`#?i=` is `base64(encodeURIComponent(json))`, the same as `#?job=`, of `{name: text or DataRef}`. If `#?i=` or `#?files=` does not hold such a JSON object, it stays an ordinary hash param that reaches the job as an env var, as in `#?i=3`. Large values have to be
+`#?i=` is `base64(encodeURIComponent(json))`, the same as `#?job=`, of `{name: text or DataRef}`. `i` and `files` are reserved: they do not reach the job as env vars or `${...}` substitutions like other hash params. Large values have to be
 DataRefs to fit in a URL.
 
 ### Named jobs

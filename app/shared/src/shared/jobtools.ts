@@ -49,15 +49,13 @@ export const createNewContainerJobMessage = async (opts: {
   // the run's inputs, kept out of the job's identity
   inputs?: InputsRefs;
   debug?: boolean;
-  // Without inputs: the id to use. With inputs: the job's name, the run id is derived.
+  // the job's name. The run id is always derived.
   jobId?: string;
   control?: DockerJobControlConfig;
 }): Promise<JobMessagePayload> => {
-  const { definition, inputs, debug, control } = opts;
-  const hasInputs = !!inputs && Object.keys(inputs).length > 0;
+  const { definition, inputs, debug, control, jobId: name } = opts;
   const enqueued = await prepareEnqueueJob({
-    id: hasInputs ? undefined : opts.jobId,
-    jobId: hasInputs ? opts.jobId : undefined,
+    jobId: name,
     // queue : queue,
     definition,
     inputs,

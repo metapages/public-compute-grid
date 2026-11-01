@@ -40,27 +40,23 @@ export const convertIOToVolumeMounts = async (
   const { id, definition } = job;
   const baseDir = join(config.dataDirectory, "j", id);
   const cacheDir = join(config.dataDirectory, "f");
-  const configFilesDir = join(baseDir, "configFiles");
   const filesDir = join(baseDir, "files");
   const inputsDir = join(baseDir, "inputs");
   const outputsDir = join(baseDir, "outputs");
 
   // create the tmp directory for inputs+outputs
   await ensureDir(cacheDir);
-  await ensureDir(configFilesDir);
   await ensureDir(filesDir);
   await ensureDir(inputsDir);
   await ensureDir(outputsDir);
 
   // security/consistency: empty directories, in case restarting jobs
-  await emptyDir(configFilesDir);
   await emptyDir(filesDir);
   await emptyDir(inputsDir);
   // await emptyDir(outputsDir);
 
   // make sure directories are writable
   await Deno.chmod(baseDir, 0o777);
-  await Deno.chmod(configFilesDir, 0o777);
   await Deno.chmod(filesDir, 0o777);
   await Deno.chmod(inputsDir, 0o777);
   await Deno.chmod(outputsDir, 0o777);
@@ -68,7 +64,7 @@ export const convertIOToVolumeMounts = async (
   // console.log(
   //   `[${workerId.substring(0, 6)}] [${
   //     id.substring(0, 6)
-  //   }] creating\n\t ${inputsDir}\n\t ${outputsDir}\n\t ${configFilesDir}`,
+  //   }] creating\n\t ${inputsDir}\n\t ${outputsDir}`,
   // );
 
   // copy the inputs (if any)
@@ -97,22 +93,6 @@ export const convertIOToVolumeMounts = async (
       container: "/outputs",
     },
   ];
-
-  if (definition?.configFiles) {
-    for (const [name, ref] of Object.entries(definition.configFiles)) {
-      assertSafeFileName(name);
-      const isAbsolutePath = name.startsWith("/");
-      const hostFilePath = isAbsolutePath ? join(configFilesDir, name) : join(inputsDir, name);
-      await dataRefToFile(ref, hostFilePath, address, config.dataDirectory);
-      // /inputs are already mounted in
-      if (isAbsolutePath) {
-        result.push({
-          host: hostFilePath,
-          container: name?.startsWith("/") ? name : `/inputs/${name}`,
-        });
-      }
-    }
-  }
 
   const workdirFiles: WorkdirFile[] = [];
   if (definition?.files) {

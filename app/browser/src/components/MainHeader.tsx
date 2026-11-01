@@ -50,10 +50,7 @@ export const MainHeader: React.FC = () => {
     // TODO: make the primary editable file something that can he
     // specified so we don't rely on lexicographical order
     const fileNames = jobInputs ? Object.keys(jobInputs).sort() : [];
-    const mainFile = null;
-    if (!mainFile && fileNames.length) {
-      setMainInputFile(fileNames[0]);
-    }
+    setMainInputFile(fileNames[0] ?? null);
   }, [jobInputs, jobDefinitionBlob]);
 
   const icon = (svg: React.ElementType, context: string, badge?: string) => {

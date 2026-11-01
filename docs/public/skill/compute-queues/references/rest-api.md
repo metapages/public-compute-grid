@@ -49,14 +49,15 @@ const viewUrl = (base, definition, queue) =>
 stored data expires.
 
 **Self-contained** — the client re-derives `jobId = sha256(definition)` from the hash, so it opens the run that
-definition produced; the empty `env`/`configFiles` the client adds are dropped from the hash blob and do not change the
-id. Needs no server lookup, so it links to jobs that were never submitted and outlives data expiry. Large inline inputs
-make it unusable — upload those (`PUT /f/:key`) and reference them instead.
+definition produced; the empty `env`/`files` the client adds are dropped from the hash blob and do not change the id.
+Needs no server lookup, so it links to jobs that were never submitted and outlives data expiry. Large inline inputs make
+it unusable — upload those (`PUT /f/:key`) and reference them instead.
 
 Editing a short-URL page rewrites it to the self-contained form, so the edited job stays shareable.
 
-Omit `queue` and the client watches the default queue instead of yours. Other hash params: `inputs` (a `{name: string}`
-map, surfaced in the container as `configFiles`), `control`, `maxJobDuration`, `autostart`, `terminal`, `debug`.
+Omit `queue` and the client watches the default queue instead of yours. Other hash params: `files` (a `{path: string}`
+map of job files), `i` (a `{name: text or DataRef}` map of inputs), `control`, `maxJobDuration`, `autostart`,
+`terminal`, `debug`.
 
 ## Files
 
@@ -80,8 +81,9 @@ map, surfaced in the container as `configFiles`), `control`, `maxJobDuration`, `
 
 ```json
 {
-  "id": "optional; defaults to sha256(definition)",
+  "jobId": "optional name; defaults to sha256(definition)",
   "definition": {},
+  "inputs": {},
   "control": {},
   "debug": false
 }
@@ -102,9 +104,7 @@ route. `definition` can be left out to run an existing `jobId` on new `inputs`.
 | `entrypoint`   | string   | Overrides image entrypoint.                                                 |
 | `env`          | object   | `{ KEY: "value" }`. Also the place to put a re-run nonce.                   |
 | `workdir`      | string   | Working directory.                                                          |
-| `inputs`       | object   | filename → DataRef. Materialised at `/inputs`.                              |
 | `files`        | object   | Path → DataRef: relative to the workdir, or absolute. Part of the job hash. |
-| `configFiles`  | object   | Deprecated, use `files`. Like `inputs`, part of the job hash.               |
 | `shmSize`      | string   | e.g. `"2g"` for PyTorch dataloaders.                                        |
 | `maxDuration`  | string   | `"30s"`, `"20m"`, `"2h"`.                                                   |
 | `requirements` | object   | `{ cpus, gpus, memory, maxDuration }`.                                      |

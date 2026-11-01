@@ -53,10 +53,10 @@ export const makeJobUrlMiddleware = (opts: {
 };
 
 /**
- * The body of a job submission. The id is optional, and the definition can be
- * left out to run an existing job, named by `jobId`, on new inputs.
+ * The body of a job submission. The definition can be left out to run an existing
+ * job, named by `jobId`, on new inputs.
  */
-export type SubmittedJob = Omit<EnqueueJob, "id" | "definition"> & Partial<Pick<EnqueueJob, "id" | "definition">>;
+export type SubmittedJob = Omit<EnqueueJob, "id" | "definition"> & Partial<Pick<EnqueueJob, "definition">>;
 
 /**
  * Undefined when there is no definition, given or stored. Throws

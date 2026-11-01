@@ -258,7 +258,7 @@ export const isParentInjectedHashParamKey = (key: string): boolean =>
  * Fields are grouped into:
  * 1. Scalar/array fields from DockerJobDefinitionInputsBase64V1 (fully known)
  * 2. Structured sub-objects with whitelisted sub-fields (build, requirements)
- * 3. Open-ended Record fields where all keys are included (env, files, inputs, configFiles)
+ * 3. Open-ended Record fields where all keys are included (env, files, inputs)
  *    - these are marked with comments since we can't whitelist individual keys
  */
 const buildJobHashBlob = (job: DockerJobDefinitionInputRefs): Record<string, unknown> => {
@@ -332,13 +332,6 @@ const buildJobHashBlob = (job: DockerJobDefinitionInputRefs): Record<string, unk
     blob.inputs = cleanedInputs;
   }
 
-  // --- Open-ended Record: configFiles (all keys included, DataRef cleaned) ---
-  // NOTE: configFile names are unbounded - determined by the user's URL hash "inputs" param.
-  const cleanedConfigFiles = cleanInputsRefsForHash(job.configFiles);
-  if (cleanedConfigFiles && Object.keys(cleanedConfigFiles).length > 0) {
-    blob.configFiles = cleanedConfigFiles;
-  }
-
   return blob;
 };
 
@@ -396,23 +389,22 @@ export const mergeRunInputs = (
  * Results are keyed by content, not by jobId, so publishing a new version under
  * the same name runs it rather than answering with the old version's results.
  *
- * A job with an `id` and neither `jobId` nor `inputs` comes from a client that
- * predates this split: its id is left alone, since that client is waiting on it.
+ * Every id is derived here, never taken from the client: they decide what a
+ * content address points at (see DB.queueJobRecordIdentity). Likewise a `jobId` is
+ * either the hash of this definition or a name, otherwise anyone could publish
+ * other content at a job's hash.
  *
- * The hashes are always derived here, never taken from the client: they decide
- * what a content address points at (see DB.queueJobRecordIdentity). Likewise a
- * `jobId` is either the hash of this definition or a name, otherwise anyone could
- * publish other content at a job's hash.
+ * Inputs inside the definition are a run's inputs, not part of the job: that is
+ * how a stored run holds them (see mergeRunInputs).
  */
 export const prepareEnqueueJob = async (
   job: Omit<EnqueueJob, "id"> & { id?: string },
 ): Promise<EnqueueJob> => {
-  const { inputs, jobHash: _jobHash, inputsHash: _inputsHash, ...rest } = job;
-  const hasInputs = !!inputs && Object.keys(inputs).length > 0;
-  if (job.id && !job.jobId && !hasInputs) {
-    return { ...rest, id: job.id };
-  }
-  const jobHash = await shaDockerJob(job.definition);
+  const { inputs: runInputs, jobHash: _jobHash, inputsHash: _inputsHash, ...rest } = job;
+  const { inputs: definitionInputs, ...definition } = job.definition;
+  const inputs = { ...definitionInputs, ...runInputs };
+  const hasInputs = Object.keys(inputs).length > 0;
+  const jobHash = await shaDockerJob(definition);
   if (job.jobId && job.jobId !== jobHash && !isJobName(job.jobId)) {
     throw new InvalidJobIdError(
       `Invalid jobId "${job.jobId}": it must be the sha256 of this job's definition, ` +
@@ -421,7 +413,8 @@ export const prepareEnqueueJob = async (
   }
   const prepared: EnqueueJob = {
     ...rest,
-    id: await shaDockerJob(mergeRunInputs(job)),
+    definition,
+    id: await shaDockerJob(mergeRunInputs({ definition, inputs })),
     jobId: job.jobId || jobHash,
     jobHash,
   };
@@ -440,11 +433,8 @@ export const prepareEnqueueJob = async (
  *   /j/<named job>?v=<sha256 job>&i=<sha256 inputs>
  */
 export const formatJobUrlPath = (
-  job: { id?: string; hash?: string; jobId?: string; jobHash?: string; inputsHash?: string },
+  job: { jobId?: string; jobHash?: string; inputsHash?: string },
 ): string => {
-  if (!job.jobId) {
-    return `/j/${job.id ?? job.hash}`;
-  }
   const params: string[] = [];
   if (job.jobHash && job.jobHash !== job.jobId) params.push(`v=${job.jobHash}`);
   if (job.inputsHash) params.push(`i=${job.inputsHash}`);

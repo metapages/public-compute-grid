@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Tab, TabList, TabPanel, TabPanels, Tabs, Text, VStack } from "@chakra-ui/react";
 
+import { TabConfigureFiles } from "/@/components/sections/settings/TabConfigureFiles";
 import { TabConfigureImage } from "/@/components/sections/settings/TabConfigureImage";
 import { TabConfigureJob } from "/@/components/sections/settings/TabConfigureJob";
 import { TabConfigureDefinition } from "./TabConfigureDefinition";
@@ -25,6 +26,9 @@ export const PanelImageAndContainer: React.FC = () => {
             <Text>Docker Image</Text>
           </Tab>
           <Tab>
+            <Text>Job Files</Text>
+          </Tab>
+          <Tab>
             <Text>Definition</Text>
           </Tab>
         </TabList>
@@ -35,6 +39,9 @@ export const PanelImageAndContainer: React.FC = () => {
           </TabPanel>
           <TabPanel>
             <TabConfigureImage />
+          </TabPanel>
+          <TabPanel>
+            <TabConfigureFiles />
           </TabPanel>
           <TabPanel>
             <TabConfigureDefinition />

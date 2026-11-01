@@ -283,7 +283,7 @@ This application is a **metaframe** - an iframe-compatible module for the metapa
 - URL hash parameters configure behavior (see `metaframe.json`)
 - Can be composed with other metaframes in visual workflows
 
-Hash parameters: `allowsetjob`, `autostart`, `config`, `control`, `debug`, `definition`, `ignoreQueueOverride`, `inputs`, `job`, `maxJobDuration`, `queue`, `queueOverride`, `resolverefs`, `terminal`
+Hash parameters: `allowsetjob`, `autostart`, `config`, `control`, `debug`, `definition`, `files`, `i`, `ignoreQueueOverride`, `job`, `maxJobDuration`, `queue`, `queueOverride`, `resolverefs`, `terminal`
 
 ## Contributing & Development Philosophy
 

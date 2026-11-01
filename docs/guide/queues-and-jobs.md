@@ -32,7 +32,7 @@ Prometheus metrics: `GET /q/<queue>/metrics`.
 jobId = sha256(canonical(definition))
 ```
 
-Submit without an `id` and the server computes it and returns it. This gives you deduplication for free, and one sharp
+The server computes the id and returns it. This gives you deduplication for free, and one sharp
 edge:
 
 ::: warning Identical definitions are the same job
@@ -40,7 +40,7 @@ Two submissions of the same definition are **one** job. If it already ran, you i
 rather than a new execution.
 :::
 
-To force a distinct run, change the definition — an unused env var, a nonce in the command, a `configFiles` entry:
+To force a distinct run, change the definition — an unused env var, a nonce in the command, a `files` entry:
 
 ```json
 {

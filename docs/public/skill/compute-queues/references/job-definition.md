@@ -17,7 +17,7 @@ content-type: application/json
 → 200 {"success": true, "jobId": "<sha256>"}
 ```
 
-`id` is optional on submit — the server computes `sha256(definition)` if you omit it, and that is the `jobId`.
+The server computes the ids: `sha256(definition)` is the `jobId`, unless you name the job with your own `jobId`.
 
 ## definition
 
@@ -29,9 +29,7 @@ content-type: application/json
 | `entrypoint`   | string   | Overrides the image ENTRYPOINT.                                                         |
 | `workdir`      | string   | Working directory inside the container.                                                 |
 | `env`          | object   | `{NAME: value}`. Stored with the definition — **not** a secret store.                   |
-| `inputs`       | object   | `{filename: DataRef}` → written to `/inputs`.                                           |
 | `files`        | object   | `{path: DataRef}` → relative to the working directory, or absolute. Part of the job id. |
-| `configFiles`  | object   | Deprecated, use `files`. `{filename: DataRef}` → written to `/inputs`.                  |
 | `maxDuration`  | string   | e.g. `"20m"`, `"1h"`, `"90s"`. The worker kills the job past this.                      |
 | `shmSize`      | string   | `/dev/shm` size, e.g. `"2g"`. PyTorch dataloaders need this.                            |
 | `requirements` | object   | `{cpus, gpus, memory, maxDuration}` — what the job needs from a worker.                 |
@@ -86,8 +84,8 @@ The key is the sha256 of the content, so uploads are idempotent and identical fi
 
 ## Hashing: what changes the jobId
 
-`jobId = sha256(definition)`. Everything in `definition` is part of it — including `inputs`, `configFiles`, `env` and
-the whole `build` block.
+`jobId = sha256(definition)`. Everything in `definition` is part of it — including `files`, `env` and the whole `build`
+block.
 
 The practical consequence: **resubmitting an identical definition returns the cached result instead of running.** To
 force a real re-run of an otherwise identical job, change something — `cq --nonce` sets an `env.CQ_NONCE` for exactly
@@ -95,8 +93,7 @@ this.
 
 Put what defines the job (a script, a config) in `definition.files`. Send the data it processes as `inputs` **next to**
 `definition`, not inside it: `POST /q/<queue> {definition, inputs}`. Then `jobId` stays the same for every run, and
-`runId` is what you poll. `/j/<jobId>?i=<inputsHash>` addresses a run. `definition.inputs` and `definition.configFiles`
-still work: both land in `/inputs` and are part of the job id.
+`runId` is what you poll. `/j/<jobId>?i=<inputsHash>` addresses a run.
 
 ## control
 
