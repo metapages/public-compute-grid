@@ -1598,7 +1598,11 @@ export class BaseDockerJobQueue {
                   workerIdColorized || "unknown"
                 } ✨ 🔗 Worker RE-registering (so broadcasting) `,
               );
+              // This may be a reconnect: the worker now lives on this socket. The old
+              // socket's close can arrive after this, and must not remove the worker.
               this.workers.myWorkers[indexOfCurrent].registration = newWorkerRegistration;
+              this.workers.myWorkers[indexOfCurrent].connection = connection.socket;
+              this.workers.myWorkers[indexOfCurrent].emitter = emitter;
               if (this.debug) {
                 console.log(`🔍 [DEBUG] Server worker ${workerIdColorized} re-registered`);
               }

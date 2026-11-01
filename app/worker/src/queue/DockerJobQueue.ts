@@ -284,7 +284,9 @@ export class DockerJobQueue {
     }
   }
 
-  private startPeriodicRegistration() {
+  // Restarted on every new connection: losing one stops it (see stopPeriodicRegistration)
+  public startPeriodicRegistration() {
+    this.stopPeriodicRegistration();
     // Re-register so the server always knows about this worker, which matters
     // after a clean server restart.
     //

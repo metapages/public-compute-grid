@@ -276,7 +276,8 @@ export async function connectToServer(
     rws.send(JSON.stringify(message));
   };
 
-  let timeLastPong = Date.now();
+  // When the oldest PING still without a PONG was sent, if there is one
+  let timeOldestUnansweredPing: number | undefined;
   let _timeLastPing = Date.now();
   let consecutivePingFailures = 0;
   let lastMessageReceived = Date.now();
@@ -322,11 +323,12 @@ export async function connectToServer(
     console.log(`${getWorkerColorizedString(workerId)} 🚀 connected! ${url} `);
     // This isn't a PING, but it's when we start measuring
     _timeLastPing = Date.now();
-    timeLastPong = Date.now();
+    timeOldestUnansweredPing = undefined;
     lastMessageReceived = Date.now();
     connectionUptime = Date.now();
     consecutivePingFailures = 0;
     dockerJobQueue.register();
+    dockerJobQueue.startPeriodicRegistration();
   });
 
   // How chatty this worker is on an idle queue decides whether the server can
@@ -357,6 +359,7 @@ export async function connectToServer(
       try {
         rws.send("PING");
         _timeLastPing = Date.now();
+        timeOldestUnansweredPing ??= _timeLastPing;
         // Reset failure counter on successful ping
         consecutivePingFailures = 0;
       } catch (err) {
@@ -383,20 +386,20 @@ export async function connectToServer(
 
   const reconnectCheckInterval = ms("3s") as number;
   const reconnectCheck = () => {
-    const timeSinceLastPong = Date.now() - timeLastPong;
+    // Measured from an unanswered PING, not from the last PONG: going from idle to
+    // busy shrinks the tolerance below the time since the last idle PING.
+    const timeUnanswered = timeOldestUnansweredPing === undefined ? 0 : Date.now() - timeOldestUnansweredPing;
     const timeSinceLastMessage = Date.now() - lastMessageReceived;
     // Tolerate the quiet an idle queue is entitled to: these thresholds have to
     // sit above the ping cadence, or the worker reconnects on its own silence.
     const tolerance = silenceTolerance();
 
     if (
-      timeSinceLastPong >= tolerance &&
+      timeUnanswered >= tolerance &&
       rws.readyState === rws.OPEN
     ) {
       console.log(
-        `🚨 Reconnecting because no PONG since ${humanizeDuration(timeSinceLastPong)} >= ${
-          humanizeDuration(tolerance)
-        }`,
+        `🚨 Reconnecting because no PONG for ${humanizeDuration(timeUnanswered)} >= ${humanizeDuration(tolerance)}`,
       );
       rws.reconnect();
     } else if (
@@ -415,7 +418,7 @@ export async function connectToServer(
     //     `📊 Connection health: uptime=${
     //       humanizeDuration(Date.now() - connectionUptime)
     //     }, ` +
-    //       `lastPong=${humanizeDuration(timeSinceLastPong)}, ` +
+    //       `unansweredPing=${humanizeDuration(timeUnanswered)}, ` +
     //       `lastMessage=${humanizeDuration(timeSinceLastMessage)}, ` +
     //       `pingFailures=${consecutivePingFailures}`,
     //   );
@@ -456,7 +459,7 @@ export async function connectToServer(
       lastMessageReceived = Date.now(); // Update last message time
 
       if (messageString.startsWith("PONG")) {
-        timeLastPong = Date.now();
+        timeOldestUnansweredPing = undefined;
         const pongedWorkerId = messageString.split(" ")[1];
         if (pongedWorkerId !== workerId) {
           console.log(
