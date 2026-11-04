@@ -30,15 +30,16 @@ The migration is merged and deployed; what is left lives in its own issues.
 
 | issue | what                                                    | when                         |
 | ----- | ------------------------------------------------------- | ---------------------------- |
-| #317  | CI deploy token expires 2026-11-01                      | **this week**                |
 | #316  | Point `container.mtfm.io` at the Worker (zone + domain) | next                         |
+| #330  | A double-claimed job runs to completion twice           | any time                     |
 | #318  | Publish a worker release so idle workers go quiet       | any time                     |
-| #321  | Stop redeploying production for docs-only pushes        | any time, small              |
 | #319  | Remove the Deno Deploy era env vars and secrets         | any time                     |
 | #320  | Delete the Deno Deploy app and the old S3 bucket        | after #316 has settled       |
-| #314  | `just test cloudflare` flakes; tests that hang          | before adding it to CI       |
 | #315  | Worker can go deaf (ping/pong weaknesses)               | when it next recurs          |
 | #322  | Stricter worker version gate                            | after #318, or when it costs |
+
+Done since this table was written: #317 (deploy token rotated), #321 (docs-only pushes), #314 (two suites on one queue).
+`just test cloudflare` now passes 71/71.
 
 ## 0. Integration tests first
 
@@ -351,3 +352,20 @@ the local-mode worker run, and those are development and test targets, not deplo
 - Pre-existing flakes, reproduced on main on the same machine: MCP jobs reported "not on queue" or "unknown", and the
   local inputs/outputs and multi-segment path tests. Each stack passes in full on most runs (local 60/60, remote 64/64,
   cloudflare 63/64, the one failure an MCP flake).
+- Two workers claiming the same job is expected — the queue is fast and reliable, so claiming is optimistic — and the
+  losing worker does notice immediately. It then starts its container anyway and runs it to completion, because the kill
+  is deferred by a fixed `setTimeout(..., 6s)` that outlasts most jobs. One `just test cloudflare` run: 13 jobs claimed
+  by both workers, 10 where both actually started a container, 9 of those finishing before any kill. The conflict is
+  logged one line _before_ `container started`, so the information to avoid it entirely is already there. #330, which
+  also records a latent comparison bug in the same block: `isRunningElsewhereStill` compares a raw worker id against
+  `workerIdShort`, an ANSI-colorized display string, so that guard is always true.
+- Fixed: the api's cancel handler read `?namespace=` but not `?message=`, recording "Job cancelled by API" for every
+  cancel, so a stray cancel could not be attributed to anything. The local-mode worker had always honoured the caller's
+  message — one more place the two servers had drifted apart. Attribution is what ruled out a cross-test cancel as the
+  cause of #314.
+- Fixed: the test failure dump tailed only the worker service. On the cloudflare stack the queue lives in the api (one
+  Durable Object per queue), so worker logs alone cannot explain a job that vanished, and the evidence needed for #314
+  was never captured. It now dumps the api too, under its per-stack service name.
+- Removed: `CONTAINER_MTFM_IO_DISABLE_KILLING_UNKNOWN_JOBS`, set on every test worker in two compose files and read
+  nowhere in the codebase. It reads as a guarantee that test workers will not kill jobs they do not recognise; what
+  actually provides that is `killOrphanedJobs` skipping worker ids starting with `test-worker`.

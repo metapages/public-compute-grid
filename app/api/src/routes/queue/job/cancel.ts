@@ -4,6 +4,8 @@ import {
   DefaultNamespace,
   DockerJobFinishedReason,
   DockerJobState,
+  getJobColorizedString,
+  getQueueColorizedString,
   type StateChange,
 } from "@metapages/compute-queues-shared";
 
@@ -14,7 +16,7 @@ export const cancelJobHandler = async (c: Context) => {
   try {
     const jobId: string | undefined = c.req.param("jobId");
     const queue: string | undefined = c.req.param("queue");
-    let { namespace } = c.req.query();
+    let { namespace, message } = c.req.query();
     if (!namespace) {
       namespace = DefaultNamespace;
     } else {
@@ -59,12 +61,20 @@ export const cancelJobHandler = async (c: Context) => {
         value: {
           type: DockerJobState.Finished,
           reason: DockerJobFinishedReason.Cancelled,
-          message: "Job cancelled by API",
+          // Keep the caller's reason: it is the only record of who cancelled a
+          // job and why. The local-mode worker has always done this; dropping
+          // it here made every cancelled job read "Job cancelled by API",
+          // which is what made a stray cancel impossible to attribute.
+          message: message ? decodeURIComponent(message) : "Job cancelled by API",
           time: Date.now(),
           namespace: namespace,
         },
       };
 
+      console.log(
+        `${getQueueColorizedString(queue)} ${getJobColorizedString(jobId)} 🚫 cancel [namespace=${namespace}] ` +
+          `${message ? decodeURIComponent(message) : "(no message)"}`,
+      );
       await jobQueue.stateChange(stateChange);
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }

@@ -207,7 +207,6 @@ services:
     environment:
       # Workaround for correct URLs in the browser to avoid CORS issues
       - DEV_ONLY_EXTERNAL_SERVER_ADDRESS=https://worker-metaframe.localhost:${APP_PORT:-443}
-      - CONTAINER_MTFM_IO_DISABLE_KILLING_UNKNOWN_JOBS=true
       # APP_PORT is only needed for the upload/curl/dns/docker fiasco
       - APP_PORT=${APP_PORT:-443}
       - IGNORE_CERTIFICATE_ERRORS=true
@@ -265,7 +264,6 @@ services:
     environment:
       # Workaround for correct URLs in the browser to avoid CORS issues
       - DEV_ONLY_EXTERNAL_SERVER_ADDRESS=https://worker-metaframe.localhost:${APP_PORT:-443}
-      - CONTAINER_MTFM_IO_DISABLE_KILLING_UNKNOWN_JOBS=true
       # APP_PORT is only needed for the upload/curl/dns/docker fiasco
       - APP_PORT=${APP_PORT:-443}
       - IGNORE_CERTIFICATE_ERRORS=true
