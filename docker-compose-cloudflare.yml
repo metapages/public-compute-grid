@@ -102,7 +102,6 @@ services:
       target: worker
     environment:
       - DEV_ONLY_EXTERNAL_SERVER_ADDRESS=https://worker-metaframe.localhost:${APP_PORT:-443}
-      - CONTAINER_MTFM_IO_DISABLE_KILLING_UNKNOWN_JOBS=true
       - APP_PORT=${APP_PORT:-443}
       - IGNORE_CERTIFICATE_ERRORS=true
       - NPM_CONFIG_REGISTRY=${NPM_CONFIG_REGISTRY:-}
@@ -153,7 +152,6 @@ services:
       target: worker
     environment:
       - DEV_ONLY_EXTERNAL_SERVER_ADDRESS=https://worker-metaframe.localhost:${APP_PORT:-443}
-      - CONTAINER_MTFM_IO_DISABLE_KILLING_UNKNOWN_JOBS=true
       - APP_PORT=${APP_PORT:-443}
       - IGNORE_CERTIFICATE_ERRORS=true
       - NPM_CONFIG_REGISTRY=${NPM_CONFIG_REGISTRY:-}
