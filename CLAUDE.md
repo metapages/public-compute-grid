@@ -19,7 +19,8 @@ When running under pr-daemon, the branch's preview stack is a single local-mode 
 app on one port), not the docker compose stack:
 
 - just pr-daemon-up: build the browser bundle, start the worker, print `http://localhost:<port>` as the last stdout line
-- just pr-daemon-down: stop it and delete its data directory and job containers
+- just pr-daemon-down: stop it and delete its data directory and job containers. With `PR_DAEMON_KEEP_DATA` set (a
+  restart) it keeps the data directory
 - just pr-daemon-check: typecheck + fmt-check + lint + unit tests (what must be green before a PR opens)
 
 The port, data directory (`/tmp/pr-daemon-compute-grid/<branch>`) and worker id (`prd-<branch>`) are all derived from

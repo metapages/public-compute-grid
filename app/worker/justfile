@@ -81,11 +81,11 @@ local +args="":
 @ci: fmt-check lint
 
 @test +args="":
-    deno test --allow-net --allow-read --allow-env --allow-write --allow-run --unstable-cron {{ args }}
+    deno test --allow-net --allow-read --allow-env --allow-write --allow-run --allow-sys --unstable-cron {{ args }}
     echo "✅ worker unit tests"
 
 @watch +args="":
-    deno test --trace-leaks --watch --allow-net --allow-read --allow-write --allow-env --allow-run --unstable-cron {{ args }}
+    deno test --trace-leaks --watch --allow-net --allow-read --allow-write --allow-env --allow-run --allow-sys --unstable-cron {{ args }}
 
 # Build docker image
 publish-docker-images version="":

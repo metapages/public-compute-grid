@@ -36,7 +36,7 @@ export const removeAllDeadContainersFromQueue = async (args: { queue: string; wo
     try {
       const container = docker.getContainer(containerId);
 
-      await container.remove();
+      await container.remove({ v: true });
       console.log(
         `${getQueueColorizedString(queue)} ${getJobColorizedString(jobId)} :: Removed dead queue container ${
           containerId.substring(
@@ -81,7 +81,7 @@ export const removeAllJobsFromQueueNotInSet = async (args: { queue: string; work
           );
           continue;
         }
-        await container.remove();
+        await container.remove({ v: true });
       } catch (_err) {
         /* do nothing */
         console.log(
@@ -158,7 +158,7 @@ export const killAndRemove = async (
         );
         return;
       }
-      await container.remove();
+      await container.remove({ v: true });
       console.log(`${getJobColorizedString(jobId)} ✅ Successfully removed container ${container.id}`);
     } catch (err) {
       if (!(err as Error).message.includes("already in progress")) {
@@ -218,7 +218,7 @@ export const killAndRemoveContainerForJob = async (
         continue;
       }
 
-      await container.remove();
+      await container.remove({ v: true });
       console.log(
         `${getJobColorizedString(jobId)} :: Removed dead queue container ${containerId} `,
       );
@@ -275,7 +275,7 @@ export const killAnyStoppedContainersForJob = async (
         continue;
       }
 
-      await container.remove();
+      await container.remove({ v: true });
       console.log(
         `${getJobColorizedString(jobId)} :: Removed dead queue container ${containerId} `,
       );

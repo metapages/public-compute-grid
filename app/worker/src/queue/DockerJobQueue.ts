@@ -823,6 +823,7 @@ export class DockerJobQueue {
         const volumesResult = await convertIOToVolumeMounts(
           { id: jobId, definition },
           config.server,
+          { keepOutputs: !!(await getRunningContainerForJob({ jobId })) },
         );
         if (!this.queue[jobId]) {
           return;
