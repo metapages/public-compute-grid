@@ -250,7 +250,22 @@ Deno.test(
     let gotSnapshot = false;
     let targetJobId: string | undefined;
     const { promise: finished, resolve: resolveFinished, reject } = Promise.withResolvers<void>();
-    const timer = setTimeout(() => reject(new Error(`timed out, states=${JSON.stringify([...states])}`)), 120_000);
+    // Report the backlog, not 60 job ids: this test timing out behind other
+    // tests' jobs and this test losing its own job look identical otherwise.
+    const describe = (): string => {
+      const counts: Record<string, number> = {};
+      for (const state of states.values()) {
+        counts[state] = (counts[state] ?? 0) + 1;
+      }
+      const summary = Object.entries(counts).map(([state, count]) => `${count} ${state}`).join(", ");
+      return `job ${targetJobId?.substring(0, 8) ?? "(not submitted)"} is ` +
+        `${targetJobId ? states.get(targetJobId) ?? "not on the queue" : "n/a"}; ` +
+        `queue ${QUEUE_ID} holds ${states.size} jobs (${summary || "none"})`;
+    };
+    const timer = setTimeout(
+      () => reject(new Error(`timed out waiting for the job to finish: ${describe()}`)),
+      120_000,
+    );
 
     socket.onmessage = (event: MessageEvent) => {
       const message: WebsocketMessageServerBroadcast = JSON.parse(event.data.toString());
