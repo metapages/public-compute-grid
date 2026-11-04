@@ -3,15 +3,14 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { PanelContainer } from "/@/components/generic/PanelContainer";
 import { PanelHeader } from "/@/components/generic/PanelHeader";
 import { encodeOptions } from "/@/helpers";
-import { JobInputs } from "/@shared/client";
+import { useEditableJobFiles } from "/@/hooks/useEditableJobFiles";
 import { useStore } from "/@/store";
 
-import { useHashParamJson } from "@metapages/hash-query/react-hooks";
 import { MetaframeStandaloneComponent } from "@metapages/metapage-react";
 
 export const PanelEditor: React.FC = () => {
   const [value, setValue] = useState(null);
-  const [jobInputs, setJobInputs] = useHashParamJson<JobInputs | undefined>("inputs");
+  const [jobInputs, setJobFile] = useEditableJobFiles();
   const mainInputFile = useStore(state => state.mainInputFile);
   const setMainInputFileContent = useStore(state => state.setMainInputFileContent);
 
@@ -38,11 +37,9 @@ export const PanelEditor: React.FC = () => {
 
   const updateInput = useCallback(
     (content: string) => {
-      const newJobInputsBlob = { ...jobInputs };
-      newJobInputsBlob[mainInputFile] = content;
-      setJobInputs(newJobInputsBlob);
+      setJobFile(mainInputFile, content);
     },
-    [jobInputs, setJobInputs, mainInputFile],
+    [setJobFile, mainInputFile],
   );
 
   const onSave = useCallback(() => {

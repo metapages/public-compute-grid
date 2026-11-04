@@ -33,14 +33,19 @@ No authentication. CORS is open, so browsers can call it directly.
 
 ```json
 {
-  "id": "optional, defaults to sha256(definition)",
+  "jobId": "optional, a name for the job. Defaults to sha256(definition)",
   "definition": { "image": "alpine:3.19.1", "command": "echo hi" },
+  "inputs": { "data.csv": { "type": "utf8", "value": "a,b" } },
   "control": { "namespace": "user-42", "callbacks": { "queued": { "url": "…", "payload": {} } } },
   "debug": false
 }
 ```
 
-→ `200 {"success": true, "jobId": "c0320f…"}`
+→ `200 {"success": true, "jobId": "c0320f…", "runId": "9ab1d2…", "jobHash": "c0320f…", "inputsHash": "5c082f…", "path": "/j/c0320f…?i=5c082f…"}`
+
+`definition` can be left out to run an existing `jobId` on new `inputs`. With `inputs`, poll `runId`: `jobId` is the job
+without them. Every `/j/:jobId` route also takes `?i=<inputsHash>` and `?v=<jobHash>`, see
+[Jobs and runs](/guide/files#jobs-and-runs).
 
 ### `GET /q/:queue/j/:jobId/result.json`
 

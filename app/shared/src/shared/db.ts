@@ -29,6 +29,8 @@ import {
   getJobColorizedString,
   getQueueColorizedString,
   isJobOkForSending,
+  isSha256,
+  mergeRunInputs,
   resolveMostCorrectJob,
   setJobStateFinished,
   setJobStateQueued,
@@ -153,6 +155,8 @@ export class DB {
   /**
    * Key spaces:
    *  - ["job", jobId]: s3 key to definition.json
+   *  - ["job-alias", name]: the latest jobHash of a job with a client chosen name
+   *  - ["job-run", jobHash, inputsHash]: the run of that job on those inputs
    *  - ["job-results", jobId]: s3 key to results.json
    *  - ["job-queue-namespace", jobId, queue, namespace]: true if job is in queue+namespace
    *  - ["queue", queue, jobId]: in-memory job
@@ -275,11 +279,12 @@ export class DB {
         !existingFinishedJob &&
         (droppedDeadFinishedRecord || !definitionCache.has(definitionS3Key))
       ) {
+        const runDefinition = mergeRunInputs(job);
         await putJsonToS3(
           definitionS3Key,
-          job.definition,
+          runDefinition,
         );
-        definitionCache.set(definitionS3Key, job.definition);
+        definitionCache.set(definitionS3Key, runDefinition);
       }
 
       // The definition pointer is (re)set every time a job is queued, not only
@@ -341,6 +346,53 @@ export class DB {
       );
       throw err;
     }
+  }
+
+  /**
+   * Records how a run relates to its job: the job's own definition, without any
+   * inputs, so `/j/<job>` exists even if it has only ever run with inputs, and
+   * how to get from `/j/<job>?v=<version>&i=<inputs>` to the run.
+   */
+  async queueJobRecordIdentity(job: EnqueueJob): Promise<void> {
+    const { id, jobId, jobHash, inputsHash, definition } = job;
+    // the common case: a job with no inputs and no name is already fully recorded
+    if (!jobHash || (id === jobHash && (!jobId || jobId === jobHash))) {
+      return;
+    }
+    const expireIn = JobDataCacheDurationMilliseconds;
+    let atomic = this.kv.atomic();
+    if (id !== jobHash) {
+      const definitionS3Key = formatDefinitionS3Key(jobHash);
+      if (!definitionCache.has(definitionS3Key)) {
+        await putJsonToS3(definitionS3Key, definition);
+        definitionCache.set(definitionS3Key, definition);
+      }
+      atomic = atomic.set(["job", jobHash], definitionS3Key, { expireIn });
+    }
+    if (jobId && jobId !== jobHash) {
+      atomic = atomic.set(["job-alias", jobId], jobHash, { expireIn });
+    }
+    if (inputsHash) {
+      atomic = atomic.set(["job-run", jobHash, inputsHash], id, { expireIn });
+    }
+    await atomic.commit();
+  }
+
+  /**
+   * The run id a job URL refers to. `id` is a run id, a jobHash or a job's name.
+   * `v` picks a version of the job, otherwise it is the latest. `i` picks the
+   * inputs. Undefined when that job has not been submitted with those inputs.
+   */
+  async resolveJobRunId(id: string, opts?: { v?: string; i?: string }): Promise<string | undefined> {
+    if (opts?.v && !isSha256(opts.v)) {
+      return undefined;
+    }
+    // a sha256 is that content: only names have versions
+    const jobHash = opts?.v || (isSha256(id) ? id : (await this.kv.get<string>(["job-alias", id])).value || id);
+    if (!opts?.i) {
+      return jobHash;
+    }
+    return (await this.kv.get<string>(["job-run", jobHash, opts.i])).value ?? undefined;
   }
 
   async getJobDefinition(jobId: string): Promise<DockerJobDefinitionInputRefs | undefined> {

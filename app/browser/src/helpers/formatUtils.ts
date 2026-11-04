@@ -16,11 +16,11 @@ export const capitalize = (str: string): string => {
 };
 
 export const getDynamicInputsCount = (currentJobDefinition: DockerJobDefinitionMetadata | undefined) => {
-  return currentJobDefinition?.definition?.inputs ? Object.keys(currentJobDefinition.definition.inputs).length : 0;
+  return Object.keys({ ...currentJobDefinition?.definition?.inputs, ...currentJobDefinition?.inputs }).length;
 };
 
 export const getDynamicInputs = (currentJobDefinition: DockerJobDefinitionMetadata | undefined): InputsRefs => {
-  return currentJobDefinition?.definition?.inputs || {};
+  return { ...currentJobDefinition?.definition?.inputs, ...currentJobDefinition?.inputs };
 };
 
 export const getOutputs = async (jobId: string, job: InMemoryDockerJob): Promise<InputsRefs> => {

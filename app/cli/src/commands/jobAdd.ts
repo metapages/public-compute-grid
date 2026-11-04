@@ -12,6 +12,7 @@ import {
   fileToDataref,
   finishedJobOutputsToFiles,
   type InMemoryDockerJob,
+  type InputsRefs,
   type StateChangeValueFinished,
   type WebsocketMessageServerBroadcast,
   WebsocketMessageTypeServerBroadcast,
@@ -87,6 +88,7 @@ export const jobAdd = new Command()
         }
 
         // handle input files
+        const inputs: InputsRefs = {};
         if (files) {
           for (const file of files) {
             if (typeof file !== "string") {
@@ -98,16 +100,13 @@ export const jobAdd = new Command()
             }
             // TODO: handle BIG blobs
             const ref = await fileToDataref(file, address);
-            const fileName = basename(file);
-            if (!definition.inputs) {
-              definition.inputs = {};
-            }
-            definition.inputs[fileName] = ref;
+            inputs[basename(file)] = ref;
           }
         }
 
         const { message, jobId /*, stageChange */ } = await createNewContainerJobMessage({
           definition,
+          inputs,
           debug: !!debug,
         });
 

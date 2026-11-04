@@ -242,6 +242,14 @@ export const dockerJobExecute = (args: DockerJobArgs): DockerJobExecution => {
         build: args.build,
         sender,
       });
+      if (args.workdirFiles?.length) {
+        // Without an explicit workdir, the container runs in the image's WORKDIR
+        const workingDir = workdir ||
+          (await docker.getImage(createOptions.Image).inspect()).Config?.WorkingDir || "/";
+        for (const { host, name } of args.workdirFiles) {
+          createOptions.HostConfig!.Binds!.push(`${host}:${workingDir.replace(/\/$/, "")}/${name}:Z`);
+        }
+      }
     } catch (err: unknown) {
       console.error(
         `${getWorkerColorizedString(workerId)} ${getJobColorizedString(id)} 💥 ensureDockerImage error`,

@@ -60,8 +60,8 @@ const submit = async (definition: Definition): Promise<string> => {
   });
   assertEquals(res.status, 200, `submit failed: ${res.status}`);
   const body = await res.json();
-  assert(body.jobId, `submit returned no jobId: ${JSON.stringify(body)}`);
-  return body.jobId as string;
+  assert(body.runId, `submit returned no runId: ${JSON.stringify(body)}`);
+  return body.runId as string;
 };
 
 const getJson = async (path: string) => {

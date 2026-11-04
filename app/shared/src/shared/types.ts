@@ -71,10 +71,12 @@ export type DockerJobDefinitionInputsBase64V1 = {
   // https://docs.docker.com/engine/containers/run/#user-memory-constraints
   shmSize?: string;
 
-  // these are dynamic
+  // Job files, part of the job sha. Keys are paths in the container: absolute
+  // paths are used as they are, relative paths are under the working directory.
+  files?: InputsBase64String;
+  // A run's EnqueueJob.inputs, written to /inputs. Only set on a stored run (see
+  // mergeRunInputs): submitted here they are moved to EnqueueJob.inputs.
   inputs?: InputsBase64String;
-  // these are fixed and part of the job sha
-  configFiles?: InputsBase64String;
   // eg "1h", "20m", "10s"
   maxDuration?: string;
   // gpu?: boolean;
@@ -98,11 +100,11 @@ export const DefaultNamespace = "_";
 export type DockerJobDefinitionInputRefs =
   & Omit<
     DockerJobDefinitionInputsBase64V1,
-    "inputs" | "configFiles"
+    "files" | "inputs"
   >
   & {
+    files?: InputsRefs;
     inputs?: InputsRefs;
-    configFiles?: InputsRefs;
   };
 
 export interface DockerRunResult {
@@ -240,8 +242,22 @@ export interface InMemoryDockerJob {
   };
 }
 
+/**
+ * A job is its definition. A run is a job plus the inputs it processes, so one
+ * job can process many inputs. See prepareEnqueueJob for how the ids are derived.
+ */
 export interface EnqueueJob {
+  // The run id: what the queue, results and logs are keyed by. With no inputs
+  // it is the same as jobHash.
   id: string;
+  // The job's public id: jobHash, or a name the client chose (e.g. a uuid)
+  jobId?: string;
+  // sha256 of the definition: a version of the job
+  jobHash?: string;
+  // sha256 of the inputs
+  inputsHash?: string;
+  // Written to /inputs. Not part of the job's identity, only of the run's.
+  inputs?: InputsRefs;
   definition: DockerJobDefinitionInputRefs;
   debug?: boolean;
   control?: DockerJobControlConfig;
@@ -441,12 +457,17 @@ export type BroadcastStatusRequest = undefined;
 
 export type DockerJobDefinitionParamsInUrlHash = Omit<
   DockerJobDefinitionInputRefs,
-  "inputs" | "configInputs"
+  "inputs"
 >;
 
 // this is the actual job definition consumed by the workers
 export interface DockerJobDefinitionMetadata {
+  // the run id, see EnqueueJob.id
   hash: string;
+  jobId?: string;
+  jobHash?: string;
+  inputsHash?: string;
+  inputs?: InputsRefs;
   definition: DockerJobDefinitionInputRefs;
   debug?: boolean;
   maxJobDuration?: string;

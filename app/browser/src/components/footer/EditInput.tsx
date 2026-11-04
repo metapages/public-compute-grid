@@ -1,17 +1,16 @@
 import React, { useEffect, useRef } from "react";
 
+import { useEditableJobFiles } from "/@/hooks/useEditableJobFiles";
 import { useJobDefinitionParam } from "/@/hooks/useJobDefinitionParam";
-import { JobInputs } from "/@shared/client";
 import { useStore } from "/@/store";
 
 import { Button, HStack, Icon, Text, Tooltip } from "@chakra-ui/react";
-import { useHashParamJson } from "@metapages/hash-query/react-hooks";
 import { PencilSimple, Terminal } from "@phosphor-icons/react";
 import { useOptionShowTerminalFirst } from "/@/hooks/useOptionShowTerminalFirst";
 
 export const EditInput: React.FC = () => {
   const [jobDefinitionBlob] = useJobDefinitionParam();
-  const [jobInputs] = useHashParamJson<JobInputs | undefined>("inputs");
+  const [jobInputs] = useEditableJobFiles();
 
   // only show the edit button if the command points to a script in the inputs
   const setRightPanelContext = useStore(state => state.setRightPanelContext);
@@ -25,15 +24,13 @@ export const EditInput: React.FC = () => {
     // TODO: make the primary editable file something that can he
     // specified so we don't rely on lexicographical order
     const fileNames = jobInputs ? Object.keys(jobInputs).sort() : [];
-    const mainFile = null;
-    if (!mainFile && fileNames.length) {
-      setMainInputFile(fileNames[0]);
-      if (!loading && !startEditingCheckRef.current) {
-        if (!showTerminalFirst) {
-          setRightPanelContext("editScript");
-        }
-        startEditingCheckRef.current = true;
+    setMainInputFile(fileNames[0] ?? null);
+    // only when the page opens: a file added later is being edited somewhere already
+    if (!loading && !startEditingCheckRef.current) {
+      if (fileNames.length && !showTerminalFirst) {
+        setRightPanelContext("editScript");
       }
+      startEditingCheckRef.current = true;
     }
   }, [jobInputs, jobDefinitionBlob, showTerminalFirst, loading]);
 
