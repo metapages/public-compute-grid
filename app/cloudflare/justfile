@@ -148,6 +148,18 @@ deploy env="staging": build
         {{ WRANGLER }} deploy --env {{ env }}
     fi
 
+# Print the deployed workers.dev URL for an env [staging|production]
+url env="staging":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    name=$([ "{{ env }}" = "production" ] && echo "compute-queues" || echo "compute-queues-{{ env }}")
+    account="${CLOUDFLARE_ACCOUNT_ID:-$({{ WRANGLER }} whoami --json | deno eval --quiet "const w = JSON.parse(await new Response(Deno.stdin.readable).text()); console.log(w.accounts?.[0]?.id ?? '')")}"
+    sub=$(curl -sf -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+        "https://api.cloudflare.com/client/v4/accounts/${account}/workers/subdomain" \
+        | deno eval --quiet "const r = JSON.parse(await new Response(Deno.stdin.readable).text()); console.log(r.result?.subdomain ?? '')")
+    if [ -z "$sub" ]; then echo "Could not read the account's workers.dev subdomain" >&2; exit 1; fi
+    echo "https://${name}.${sub}.workers.dev"
+
 # Run any wrangler command with the repo's credentials (CLOUDFLARE_API_TOKEN from .env)
 wrangler +args="":
     {{ WRANGLER }} {{ args }}

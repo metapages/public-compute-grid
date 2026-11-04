@@ -126,8 +126,7 @@ export const createApp = (opts?: { serveStatic?: (app: Hono) => void }): Hono =>
   // MCP over Streamable HTTP. One route serves POST (messages), GET (the
   // notification stream that carries live logs) and DELETE (end session).
   app.all("/mcp", handleMCPStreamableHttp);
-  // /mcp/ws is a websocket upgrade, dispatched in handlerWs.ts — Hono never
-  // sees websocket upgrades on this server, so it cannot be routed here.
+  // There is no websocket transport; /mcp/ws was retired (see handlerWs.ts).
   app.get("/mcp/health", handleMCPHealth);
   app.get("/mcp/info", handleMCPInfo);
 
