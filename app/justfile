@@ -227,13 +227,16 @@ test mode="remote" +args="": _build_shared check (_validate_mode mode)
             remote) services="worker api1" ;;
             *) services="worker" ;;
         esac
+        # The whole log, not a tail: a failure early in the suite (the first
+        # test file) is thousands of lines back by the time the suite ends,
+        # and the group is collapsed in the CI log anyway.
         for service in ${services}; do
             echo "::group::${service} logs (${STACK})"
             docker compose --project-name="${STACK}" \
                 -f ../docker-compose.yml \
                 -f ../docker-compose-{{ mode }}.yml \
                 -f ../docker-compose-test-{{ mode }}.yml \
-                logs --tail=800 --no-color "${service}" 2>&1 | tail -800 || true
+                logs --no-color "${service}" 2>&1 || true
             echo "::endgroup::"
         done
         exit 1
