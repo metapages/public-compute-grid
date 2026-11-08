@@ -205,27 +205,49 @@ Deno.test(
   },
 );
 
+/**
+ * Fail with what went wrong: lines lost and lines stored twice are different
+ * bugs (#332 reported a surplus as "incomplete" and sent us looking for loss).
+ */
+const assertExactLines = (lines: string[], expected: number, what: string) => {
+  const repeated = lines.length - new Set(lines).size;
+  if (lines.length < expected) {
+    throw new Error(`${what}: fewer lines than expected, ${lines.length} of ${expected} (lines were lost)`);
+  }
+  if (lines.length > expected || repeated > 0) {
+    throw new Error(
+      `${what}: more lines than expected, ${lines.length} for ${expected}, ${repeated} of them repeats ` +
+        `(lines were stored twice)`,
+    );
+  }
+};
+
 Deno.test("contract: logs bigger than a store value are kept after the job finishes", async () => {
   // ~200 KB of output: over Deno KV's 64 KiB value limit, which used to drop them
-  const marker = nonce();
   const lineCount = 3000;
-  const { jobId } = await submitJob(
-    // The sleep lets the output drain before the job finishes: a job that exits
-    // the instant it prints can lose its tail in flight (a separate worker race)
-    `sh -c 'for i in $(seq 1 ${lineCount}); do echo "${marker}-$i-padding-padding-padding-padding-padding"; done; sleep 3'`,
-    `contract-biglogs-${marker}`,
-  );
-  const events = await readSse(`${API_URL}/q/${QUEUE_ID}/j/${jobId}/stream`);
-  assertEquals((events.find((e) => e.event === "final")?.data as { reason: string })?.reason, "Success");
+  // A surplus of lines showed up once in a passing suite (#332): run a few jobs
+  // at once so an intermittent loss or duplication has more chances to show.
+  const runs = 3;
+  await Promise.all(Array.from({ length: runs }, async () => {
+    const marker = nonce();
+    const { jobId } = await submitJob(
+      // The sleep lets the output drain before the job finishes: a job that exits
+      // the instant it prints can lose its tail in flight (a separate worker race)
+      `sh -c 'for i in $(seq 1 ${lineCount}); do echo "${marker}-$i-padding-padding-padding-padding-padding"; done; sleep 3'`,
+      `contract-biglogs-${marker}`,
+    );
+    const events = await readSse(`${API_URL}/q/${QUEUE_ID}/j/${jobId}/stream`);
+    assertEquals((events.find((e) => e.event === "final")?.data as { reason: string })?.reason, "Success");
 
-  for (const path of [`/q/${QUEUE_ID}/j/${jobId}/run-logs.json`, `/j/${jobId}/run-logs.json`]) {
-    const { status, body } = await getJson<LogsResponse>(path);
-    assertEquals(status, 200, path);
-    assertEquals(body.isFinal, true, path);
-    // Entries are raw output chunks: they don't align with lines, so concatenate
-    const lines = body.data.map((l) => l[0]).join("").split("\n").filter((l) => l.startsWith(marker));
-    assertEquals(lines.length, lineCount, `${path}: persisted run log is incomplete`);
-  }
+    for (const path of [`/q/${QUEUE_ID}/j/${jobId}/run-logs.json`, `/j/${jobId}/run-logs.json`]) {
+      const { status, body } = await getJson<LogsResponse>(path);
+      assertEquals(status, 200, path);
+      assertEquals(body.isFinal, true, path);
+      // Entries are raw output chunks: they don't align with lines, so concatenate
+      const lines = body.data.map((l) => l[0]).join("").split("\n").filter((l) => l.startsWith(marker));
+      assertExactLines(lines, lineCount, `${path}: persisted run log`);
+    }
+  }));
 });
 
 Deno.test("contract: namespaces.json", { ignore: remoteOnly }, async () => {
