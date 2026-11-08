@@ -142,8 +142,12 @@ secrets env="staging":
 deploy env="staging": build
     #!/usr/bin/env bash
     set -euo pipefail
+    # Production is the top-level environment, named explicitly as --env="":
+    # with several environments defined, a bare `deploy` picks the top level by
+    # implication, which wrangler warns about precisely because it is how you
+    # deploy to the wrong place by accident.
     if [ "{{ env }}" = "production" ]; then
-        {{ WRANGLER }} deploy
+        {{ WRANGLER }} deploy --env ""
     else
         {{ WRANGLER }} deploy --env {{ env }}
     fi
