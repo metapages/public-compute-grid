@@ -3,11 +3,17 @@
 {
   "$schema": "https://unpkg.com/wrangler@4.151.3/config-schema.json",
   "name": "compute-queues",
-  // Reachable at compute-queues.<account subdomain>.workers.dev. Production is
-  // validated there first, with its own D1 and R2, while container.mtfm.io
-  // still points at Deno Deploy — so DNS is not on the critical path. The
-  // custom domain for container.mtfm.io is added here at cutover.
+  // Kept on after the cutover, not optional: uploaded job inputs are stored as
+  // absolute `url` DataRefs (`${address}/f/<hash>`, shared/jobtools.ts), so
+  // jobs submitted against the workers.dev origin carry input URLs on that
+  // hostname and resolve only while it answers.
   "workers_dev": true,
+  // The real hostname (#316). A custom domain owns its DNS record, so the old
+  // A/AAAA records pointing at Deno Deploy had to be deleted before this could
+  // be attached — `override_existing_dns_record` is refused for externally
+  // managed records. Rollback is deleting the custom domain and restoring
+  // `A 69.67.170.170` / `AAAA 2602:f70f::1`, unproxied.
+  "routes": [{ "pattern": "container.mtfm.io", "custom_domain": true }],
   "main": "dist/worker.js",
   "no_bundle": true,
   "compatibility_date": "2026-10-01",
