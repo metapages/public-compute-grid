@@ -396,7 +396,13 @@ export const takeOverFromPredecessor = async (
   const predecessor = docker.getContainer(predecessorId);
   log(`standby: waiting for ${predecessorId.slice(0, 12)} to stop claiming jobs`);
   while (true) {
-    const info = await predecessor.inspect().catch(() => null);
+    // Gone means docker says so (404): a hiccup talking to docker must not
+    // read as "the predecessor is gone" and start a second claimer.
+    const info = await predecessor.inspect().catch((err) => (err?.statusCode === 404 ? null : undefined));
+    if (info === undefined) {
+      await sleep(POLL_INTERVAL);
+      continue;
+    }
     let ready = !info?.State?.Running;
     if (!ready) {
       try {
