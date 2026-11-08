@@ -355,13 +355,21 @@ export class BaseDockerJobQueue {
   private buildLogsBuffer: Map<string, ConsoleLogLine[]> = new Map();
   private runLogsBuffer: Map<string, ConsoleLogLine[]> = new Map();
   /**
-   * Jobs whose logs were already flushed, with the pending append for lines
-   * that arrived after that (a worker can still be pushing the built image).
-   * Such lines are appended to the persisted log: buffering them would start a
-   * fresh buffer holding only the tail, which readers prefer over the full
-   * persisted log.
+   * Per job, every write to its persisted logs, chained so that they happen
+   * one at a time and in order: the flush when the job finishes, then an
+   * append for each batch of lines that arrived after that (a worker can still
+   * be pushing the built image). Such lines are appended to the persisted log:
+   * buffering them would start a fresh buffer holding only the tail, which
+   * readers prefer over the full persisted log.
+   *
+   * `flushed` is set synchronously when the job finishes, so a batch arriving
+   * while the flush is still being written is appended after it rather than
+   * dropped with the buffer. And because the flush and the appends share one
+   * chain, an append never reads the stored log before the flush has written
+   * it or while another write is in flight, where one write would silently
+   * overwrite the other's lines (#332).
    */
-  private flushedLogs = new LRUMapWithDelete<string, Promise<void>>(1000);
+  private persistedLogs = new LRUMapWithDelete<string, { flushed: boolean; writes: Promise<void> }>(1000);
 
   // intervals
   protected _intervalWorkerBroadcast: ReturnType<typeof setInterval> | undefined;
@@ -810,9 +818,8 @@ export class BaseDockerJobQueue {
     if (!logs.logs?.length) {
       return;
     }
-    const flushed = this.flushedLogs.get(logs.jobId);
-    if (flushed) {
-      this.flushedLogs.set(logs.jobId, flushed.then(() => this.appendPersistedLogs(logs)));
+    if (this.persistedLogs.get(logs.jobId)?.flushed) {
+      this.queueLogWrite(logs.jobId, () => this.appendPersistedLogs(logs));
       return;
     }
     const buffer = BUILD_LOG_STEPS.has(logs.step) ? this.buildLogsBuffer : this.runLogsBuffer;
@@ -871,26 +878,64 @@ export class BaseDockerJobQueue {
     return this.clients.length;
   }
 
-  private async flushLogBuffer(
+  /** Chain a write onto the job's persisted log writes; see persistedLogs. */
+  private queueLogWrite(jobId: string, write: () => Promise<void>): Promise<void> {
+    const entry = this.persistedLogs.get(jobId) ?? { flushed: false, writes: Promise.resolve() };
+    // Writes report their own errors, but one that throws anyway must not
+    // wedge every later write for the job.
+    entry.writes = entry.writes.then(write).catch((err) => {
+      console.error(`Failed to write logs for job ${jobId}:`, err);
+    });
+    this.persistedLogs.set(jobId, entry);
+    return entry.writes;
+  }
+
+  /**
+   * Persist the job's buffered logs, once. The buffers are taken now, before
+   * any await, and from here on new lines are appended to the persisted log
+   * instead; the returned promise settles when every write so far is stored.
+   * Finishing a job that is already flushed (a repeated Finished) only waits:
+   * flushing again would replace the stored log, appended lines and all, with
+   * whatever the buffers still hold.
+   */
+  private flushLogBuffers(jobId: string): Promise<void> {
+    const entry = this.persistedLogs.get(jobId);
+    if (entry?.flushed) {
+      return entry.writes;
+    }
+    const buildLines = this.buildLogsBuffer.get(jobId);
+    const runLines = this.runLogsBuffer.get(jobId);
+    const writes = this.queueLogWrite(jobId, async () => {
+      await this.storeLogBuffer(jobId, this.buildLogsBuffer, buildLines, "build");
+      await this.storeLogBuffer(jobId, this.runLogsBuffer, runLines, "run");
+    });
+    this.persistedLogs.get(jobId)!.flushed = true;
+    return writes;
+  }
+
+  private async storeLogBuffer(
     jobId: string,
     buffer: Map<string, ConsoleLogLine[]>,
+    lines: ConsoleLogLine[] | undefined,
     kind: "build" | "run",
   ): Promise<void> {
-    const lines = buffer.get(jobId);
-    if (!lines?.length) {
-      buffer.delete(jobId);
-      return;
-    }
-    try {
-      if (kind === "build") {
-        await this.db.storeBuildLogs(jobId, lines);
-      } else {
-        await this.db.storeRunLogs(jobId, lines);
+    if (lines?.length) {
+      try {
+        if (kind === "build") {
+          await this.db.storeBuildLogs(jobId, lines);
+        } else {
+          await this.db.storeRunLogs(jobId, lines);
+        }
+      } catch (err) {
+        console.error(`Failed to persist ${kind} logs for job ${jobId}:`, err);
       }
-    } catch (err) {
-      console.error(`Failed to persist ${kind} logs for job ${jobId}:`, err);
     }
-    buffer.delete(jobId);
+    // Readers prefer the buffer, so it stays until the db has the lines. Only
+    // drop the one that was stored: a job that started running again since
+    // has a fresh buffer of its own.
+    if (buffer.get(jobId) === lines) {
+      buffer.delete(jobId);
+    }
   }
 
   sendLogsToLocalClients(logs: JobStatusPayload) {
@@ -1229,11 +1274,7 @@ export class BaseDockerJobQueue {
     // buffers are flushed independently: a job that failed while building
     // produced build logs and no run logs, and that build output is exactly
     // what the caller needs to see.
-    await this.flushLogBuffer(jobId, this.buildLogsBuffer, "build");
-    await this.flushLogBuffer(jobId, this.runLogsBuffer, "run");
-    if (!this.flushedLogs.has(jobId)) {
-      this.flushedLogs.set(jobId, Promise.resolve());
-    }
+    await this.flushLogBuffers(jobId);
 
     const { updatedInMemoryJob, subsequentStateChange } = await this.db.setJobFinished({
       queue: this.address,
@@ -1287,8 +1328,6 @@ export class BaseDockerJobQueue {
     jobId: string,
     change: StateChangeValueRunning,
   ): Promise<void> {
-    // Running again (e.g. requeued after a lost worker): buffer a fresh log
-    this.flushedLogs.delete(jobId);
     if (!this.state.jobs[jobId]) {
       // be robust, assume very little.
       const possibleMissedJob = await this.db.queueJobGet({
@@ -1315,6 +1354,19 @@ export class BaseDockerJobQueue {
     }
 
     console.log(`${this.addressShortString} ${getJobColorizedString(jobId)} 🤡 stateChangeJobRunning`, change);
+
+    // Running again (e.g. requeued after a lost worker): buffer a fresh log.
+    // Only for a Running that was accepted: a stale one (a re-broadcast, a
+    // worker re-registering a job that already finished) used to reset this
+    // too, so the lines after it went to a fresh buffer and the next Finished
+    // replaced the whole stored log with them (#332). Writes still pending for
+    // the previous run stay ahead of the next flush.
+    const persisted = this.persistedLogs.get(jobId);
+    if (persisted?.flushed) {
+      persisted.flushed = false;
+      this.buildLogsBuffer.delete(jobId);
+      this.runLogsBuffer.delete(jobId);
+    }
 
     this.state.jobs[jobId] = possiblelyNewJob;
     await this.db.setJobRunning({
