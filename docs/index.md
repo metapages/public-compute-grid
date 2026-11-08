@@ -47,7 +47,7 @@ QUEUE=my-$(uuidgen | tr 'A-Z' 'a-z')
 
 # 2. add compute: this machine now works that queue
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v /tmp:/tmp \
-  metapage/metaframe-docker-worker:0.54.80 run --cpus=2 $QUEUE
+  metapage/metaframe-docker-worker:0.54.87 run --cpus=2 $QUEUE
 
 # 3. push a job from anywhere
 curl -s -X POST https://container.mtfm.io/q/$QUEUE \

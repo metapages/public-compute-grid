@@ -1,7 +1,7 @@
 # worker.metapage.io - Public Compute Queues
 
 > Open-source, browser-first compute queues for running Docker containers on distributed workers
-> Version: 0.54.80
+> Version: 0.54.87
 > Production: https://container.mtfm.io
 > Documentation: https://docs.metapage.io/docs/containers
 > Repository: https://github.com/metapages/worker.metapage.io
@@ -222,7 +222,7 @@ just deploy [version]   # Bump version, commit, trigger CI/CD
 ### Worker Distribution
 - **Image**: Docker Hub `metapage/metaframe-docker-worker`
 - **Trigger**: Git semver tags
-- **Version**: Current 0.54.80
+- **Version**: Current 0.54.87
 
 ## Important Constraints & Limitations
 
@@ -239,7 +239,7 @@ just deploy [version]   # Bump version, commit, trigger CI/CD
 docker run -p 8000:8000 --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /tmp:/tmp \
-  metapage/metaframe-docker-worker:0.54.80 run \
+  metapage/metaframe-docker-worker:0.54.87 run \
   --mode=local \
   --cpus=2 \
   --max-job-duration=20m \
@@ -251,7 +251,7 @@ docker run -p 8000:8000 --rm \
 docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /tmp:/tmp \
-  metapage/metaframe-docker-worker:0.54.80 run \
+  metapage/metaframe-docker-worker:0.54.87 run \
   --cpus=2 \
   --max-job-duration=20m \
   --data-directory=/tmp/worker-metapage-io-remote \

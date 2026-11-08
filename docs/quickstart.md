@@ -42,7 +42,7 @@ Nothing runs until a worker is attached to that queue. Any machine with Docker w
 docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /tmp:/tmp \
-  metapage/metaframe-docker-worker:0.54.83 run \
+  metapage/metaframe-docker-worker:0.54.87 run \
     --cpus=2 \
     --max-job-duration=20m \
     --data-directory=/tmp/worker-metapage-io \
