@@ -222,6 +222,14 @@ test-mcp:
 @deploy version="":
     just app/deploy {{ version }}
 
+# Rewrite every worker image pin (docs, llms.txt, deploy configs) to app/worker/mod.json's version
+@sync-worker-version:
+    cd app/worker && deno run --allow-read --allow-write --allow-run src/version-pins.ts sync
+
+# Fail, listing file:line, if any worker image pin differs from app/worker/mod.json
+@check-worker-version:
+    cd app/worker && deno run --allow-read --allow-run src/version-pins.ts check
+
 # Shut Down Development Environment
 @down mode="remote" +args="": (_validate_mode mode)
     just app/down {{ mode }} {{ args }}
@@ -508,6 +516,7 @@ pr-daemon-check:
     just check
     just fmt-check
     just lint
+    just check-worker-version
     just app/worker/test
     just app/shared/test
     just app/cli/test
@@ -530,7 +539,7 @@ pr-daemon-check:
     just docs/fmt-check {{ args }}
 
 # Run CI
-@ci: fmt-check lint
+@ci: fmt-check lint check-worker-version
 
 # app subdirectory commands
 

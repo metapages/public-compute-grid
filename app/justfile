@@ -51,9 +51,17 @@ deploy version="":
     TMP=$(mktemp)
     jq ".version = \"$VERSION\"" worker/mod.json > "$TMP" && mv "$TMP" worker/mod.json
 
+    # The same commit that triggers publish-worker.yml updates every doc and
+    # config that pins the worker image, so they can't drift (#336)
+    # It prints "path:line: old -> new" per pin; stage those files and no others
+    SYNCED=$(just ../sync-worker-version | tee /dev/stderr | { grep -oE '^[^ :]+:[0-9]+:' || true; } | cut -d: -f1 | sort -u)
+
     echo "chore: bump version to $VERSION"
     # Commit changes
     git add worker/mod.json
+    if [ -n "$SYNCED" ]; then
+        (cd "$(git rev-parse --show-toplevel)" && git add $SYNCED)
+    fi
     git commit -m "chore: bump version to $VERSION"
     git push
 
