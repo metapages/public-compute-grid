@@ -411,7 +411,12 @@ services:
       - --providers.docker=true
       - --providers.docker.endpoint=unix:///var/run/docker.sock
       - --providers.docker.watch=true
-      - --providers.docker.constraints=Label(`custom.label`,`worker-metaframe.localhost`)
+      # The docker provider sees every container on the host, not just this
+      # project's. Without the project label, two stacks up at once (CI on a
+      # shared runner, or two branches) share routers: a duplicate `s3` router
+      # disables minio for both, and Host(`worker-metaframe.localhost`) can reach
+      # the other stack's api, so a job lands on a queue its test never polls.
+      - --providers.docker.constraints=Label(`custom.label`,`worker-metaframe.localhost`) && Label(`com.docker.compose.project`,`${COMPOSE_PROJECT_NAME}`)
       - --providers.docker.exposedbydefault=false
       - --providers.file.filename=/etc/traefik/config.yml
       - --providers.file.watch=true
