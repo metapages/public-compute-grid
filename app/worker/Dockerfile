@@ -62,6 +62,11 @@ COPY ./app/shared/deno.json ./app/shared/deno.json
 COPY ./app/mcp/src ./app/mcp/src
 COPY ./app/mcp/deno.json ./app/mcp/deno.json
 
+# The root deno.json lists app/cloudflare as a workspace member. Its source is
+# not needed here — the worker never imports it — but without the manifest deno
+# prints "Workspace member not found ... Skipping" on every single start.
+COPY ./app/cloudflare/deno.json ./app/cloudflare/deno.json
+
 # Copy assets
 # COPY ./app/browser/dist ./app/browser/dist
 
