@@ -9,7 +9,7 @@ listens for inbound connections — the worker dials out — so laptops behind N
 docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /tmp:/tmp \
-  metapage/metaframe-docker-worker:0.54.83 run \
+  metapage/metaframe-docker-worker:0.54.87 run \
     --cpus=4 \
     --max-job-duration=20m \
     --data-directory=/tmp/worker-metapage-io \
@@ -53,7 +53,7 @@ Kill a worker mid-job and the job goes back to `Queued` for someone else (`Worke
 ```yaml
 services:
   worker:
-    image: metapage/metaframe-docker-worker:0.54.83
+    image: metapage/metaframe-docker-worker:0.54.87
     restart: unless-stopped
     command: run --cpus=4 --max-job-duration=1h --data-directory=/data ${QUEUE}
     volumes:
@@ -69,7 +69,7 @@ volumes:
 docker run --rm --gpus all \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /tmp:/tmp \
-  metapage/metaframe-docker-worker:0.54.83 run --cpus=8 --gpus=2 my-queue
+  metapage/metaframe-docker-worker:0.54.87 run --cpus=8 --gpus=2 my-queue
 ```
 
 Requires the NVIDIA container toolkit on the host. Jobs asking for `requirements.gpus` only go to workers with free
@@ -86,7 +86,7 @@ drive the replica count from `GET /q/<queue>/status`. Examples live in `app/depl
 docker run -p 8000:8000 --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /tmp:/tmp \
-  metapage/metaframe-docker-worker:0.54.83 run --mode=local --cpus=2
+  metapage/metaframe-docker-worker:0.54.87 run --mode=local --cpus=2
 ```
 
 The worker serves its own API on `http://localhost:8000` and runs everything locally — no cloud API, no blob uploads,

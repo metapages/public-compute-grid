@@ -28,7 +28,7 @@ Limit to 2 cpus and max job time of 20 minutes
 **Local mode: jobs will always run directly on this computer**
 
 ```sh
-docker run -p 8000:8000 --rm -v /var/run/docker.sock:/var/run/docker.sock -v /tmp:/tmp metapage/metaframe-docker-worker:0.54.31 run --max-job-duration=20m --data-directory=/tmp/worker-metapage-io-local --cpus=2 --mode=local
+docker run -p 8000:8000 --rm -v /var/run/docker.sock:/var/run/docker.sock -v /tmp:/tmp metapage/metaframe-docker-worker:0.54.87 run --max-job-duration=20m --data-directory=/tmp/worker-metapage-io-local --cpus=2 --mode=local
 ```
 
 **Remote mode: this worker will pick up jobs on your own queue **
@@ -36,7 +36,7 @@ docker run -p 8000:8000 --rm -v /var/run/docker.sock:/var/run/docker.sock -v /tm
 Replace `my-random-queue` with your unique queue name (can be anything)
 
 ```sh
-docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v /tmp:/tmp metapage/metaframe-docker-worker:0.54.31 run --max-job-duration=20m --data-directory=/tmp/worker-metapage-io-remote --cpus=2 my-random-queue
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v /tmp:/tmp metapage/metaframe-docker-worker:0.54.87 run --max-job-duration=20m --data-directory=/tmp/worker-metapage-io-remote --cpus=2 my-random-queue
 ```
 
 - client: https://container.mtfm.io/
@@ -196,7 +196,7 @@ Online docs: [Online docs notion source](https://docs.metapage.io/docs/container
 ❗ Replace `my-unique-queue-name` with a unique id or uuid or queue name, it can be anything
 
 ```sh
-docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v /tmp:/tmp metapage/metaframe-docker-worker:0.54.30 run --max-job-duration=20m --data-directory=/tmp/worker-metapage-io-remote --cpus=2 my-unique-queue-name
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v /tmp:/tmp metapage/metaframe-docker-worker:0.54.87 run --max-job-duration=20m --data-directory=/tmp/worker-metapage-io-remote --cpus=2 my-unique-queue-name
 ```
 
 ### 2) Run a compute job
