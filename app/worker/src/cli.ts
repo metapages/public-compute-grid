@@ -7,6 +7,8 @@ import { runCommand } from "/@/commands/run.ts";
 import { testCommand } from "/@/commands/test.ts";
 import { processes } from "/@/processes.ts";
 
+import mod from "../mod.json" with { type: "json" };
+
 import { Command } from "@cliffy/command";
 
 // Global reference to the DockerJobQueue for cleanup
@@ -46,7 +48,7 @@ Deno.addSignalListener("SIGTERM", () => {
 await new Command()
   .description("Commands for running a metapage worker")
   .name("worker")
-  .version("v1.0.0")
+  .version(mod.version)
   .help({
     types: false,
     hints: false,
