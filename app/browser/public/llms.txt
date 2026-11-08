@@ -31,7 +31,7 @@ This project provides a web-based system for executing Docker containers on dist
 
 2. **API Server** (`app/api/`)
    - Deno-based HTTP server using Hono framework
-   - Deployed to Deno Deploy (Cloudflare Workers-like)
+   - Deployed to Cloudflare Workers (D1 + one Durable Object per queue)
    - REST API for job submission, queue management, file storage
    - WebSocket support for real-time job status updates
    - S3-compatible blob storage with signed URLs
@@ -214,7 +214,7 @@ just deploy [version]   # Bump version, commit, trigger CI/CD
 ## Deployment
 
 ### Production API
-- **Platform**: Deno Deploy
+- **Platform**: Cloudflare Workers
 - **Trigger**: Push to `main` branch
 - **URL**: https://container.mtfm.io
 - **Includes**: Browser client (built as part of API deployment)

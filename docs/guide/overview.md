@@ -95,7 +95,7 @@ On the public instance blobs and job records expire after about a month. This is
 
 | Component | What it is                                                      |
 | --------- | --------------------------------------------------------------- |
-| `api`     | Deno + Hono. REST + websockets. Deployed to Deno Deploy.        |
+| `api`     | Deno + Hono. REST + websockets. Deployed to Cloudflare Workers. |
 | `browser` | React client, also embeddable as an iframe (a _metaframe_).     |
 | `worker`  | Deno + Docker. Published as `metapage/metaframe-docker-worker`. |
 | `cli`     | `job add`, `job await`.                                         |
