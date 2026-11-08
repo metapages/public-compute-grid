@@ -1,6 +1,7 @@
 # This stack mirrors production: several api instances, workers connected to a
 # different instance than the browser, and redis as the cross-instance message
-# bus under the same REDIS_URL name production uses. Keep it that way — the
+# bus under REDIS_URL (production is now one Durable Object per queue and sets
+# no redis or Deno KV variables, see #319). Keep it that way — the
 # native BroadcastChannel only reaches within one isolate, so any instance that
 # is not the one holding a worker's websocket goes blind.
 services:

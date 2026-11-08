@@ -70,13 +70,16 @@ import { setJobStateFinished } from "../client.ts";
  * deployment; the new Deno Deploy does not, so on the native implementation an
  * api instance holding a worker's websocket never hears about a job enqueued
  * over HTTP on another instance, and the job sits Queued forever. Redis pubsub
- * is the bus instead, in production and in the local multi-instance stack
- * alike. Native is only correct where a single process is the whole server —
- * the worker's `--mode=local`.
+ * is the bus instead wherever there are several api instances: today only the
+ * `remote` docker stack, which mirrors a multi-instance server. Native is only
+ * correct where a single process is the whole server — the worker's
+ * `--mode=local`.
  *
  * On Cloudflare each queue lives in exactly one Durable Object, so there are no
  * other instances to tell: the runtime installs a no-op channel with
- * setBroadcastChannelFactory before any queue is created.
+ * setBroadcastChannelFactory before any queue is created. Production runs
+ * there, so it sets neither REDIS_URL nor DENO_BROADCAST_REDIS_URL, and none
+ * should be added (#319).
  */
 const redisUrl: string | undefined = getEnv("DENO_BROADCAST_REDIS_URL") ||
   getEnv("REDIS_URL");
@@ -109,7 +112,8 @@ export const setBroadcastChannelFactory = (factory: BroadcastChannelFactory): vo
 
 if (redisUrl) {
   // The library reads DENO_BROADCAST_REDIS_URL at import time and throws
-  // without it, so bridge production's REDIS_URL onto the name it wants.
+  // without it, so bridge REDIS_URL (what the remote stack sets) onto the
+  // name it wants.
   Deno.env.set("DENO_BROADCAST_REDIS_URL", redisUrl);
   try {
     const { BroadcastChannelRedis } = await import(

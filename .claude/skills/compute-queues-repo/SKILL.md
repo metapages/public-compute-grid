@@ -32,8 +32,8 @@ Consequences that surprise people, and that you should preserve when editing:
 - **Job id = hash of the definition** (`shaDockerJob` in `app/shared/src/shared/jobtools.ts`). Submitting the same
   definition twice is deduplicated to one job, and its cached result comes straight back. Anything that must produce a
   distinct job has to change the definition.
-- **The API stores no compute.** It is a coordination layer (Deno KV) plus S3 blobs. All execution happens on workers
-  that other people own.
+- **The API stores no compute.** It is a coordination layer (D1 in production, Deno KV in the docker stacks) plus S3
+  blobs. All execution happens on workers that other people own.
 - **Data expires** (~1 month in production). Nothing here is durable storage.
 - **The browser is a first-class client**, not an afterthought. The client is a metaframe (iframe) so arbitrary compute
   can be embedded in a web page safely.
@@ -42,7 +42,8 @@ Consequences that surprise people, and that you should preserve when editing:
 
 ```
 app/
-  api/      Deno + Hono. REST + WebSocket coordination. Deployed to Deno Deploy.
+  api/      Deno + Hono. REST + WebSocket coordination. Deployed to Cloudflare
+            Workers via app/cloudflare (D1 + one Durable Object per queue).
   browser/  React + Vite + Chakra + Zustand. The metaframe client (also the /
             web UI). Built into app/browser/dist and served by the api.
   worker/   Deno + dockerode. Runs the containers. Shipped as the docker image
@@ -145,6 +146,11 @@ Local stack is HTTPS via mkcert at `https://worker-metaframe.localhost`; run `mk
   and runs `wrangler deploy`. **If you add a new served directory, add it to the `assets` recipe in
   `app/cloudflare/justfile` or it will 404 in production.** The api also still runs on Deno for the local and remote
   docker stacks and for the local-mode worker — that is not a deployment target.
+- The production Worker's only config is `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT` (secrets) and
+  `AWS_REGION`, `AWS_S3_BUCKET` (vars). The Deno Deploy era `DENO_DEPLOY_TOKEN`, `DENO_KV_URL`, `DENO_KV_ACCESS_TOKEN`,
+  `REDIS_URL` / `DENO_BROADCAST_REDIS_URL` are gone and must not be added back: D1 replaces Deno KV, the Durable Object
+  replaces the Redis bus. The docker compose stacks still set their own `DENO_KV_*` / `REDIS_URL` for their local
+  services.
 - Bumping `app/worker/mod.json` version → worker binary + docker images published, git tag pushed.
 
 ## Editing rules of thumb

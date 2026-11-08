@@ -266,7 +266,10 @@ Nothing here is required for the migration — this PR already removes the Deno 
       / `DENO_BROADCAST_REDIS_URL`. **None of these exist on Cloudflare and none should be added**: the Worker has
       exactly `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT` as secrets and `AWS_REGION`, `AWS_S3_BUCKET`
       as vars (verified with `wrangler secret list`). D1 replaces Deno KV and one Durable Object per queue replaces the
-      Redis bus, so there is nothing to configure in their place
+      Redis bus, so there is nothing to configure in their place. #319 removed the remaining references from the code
+      comments and docs; the compose stacks keep their own `DENO_KV_*` / `REDIS_URL` values for their `denokv` and
+      `redis` services. What is left is outside the repo: delete the `DENO_DEPLOY_TOKEN` Actions secret (repo and org),
+      remove these variables from local `.env` files, and delete the Deno Deploy project (next item)
 - [ ] Delete the Deno Deploy app and the old S3 bucket whenever convenient — jobs have a 30-day lifespan, so the
       bucket's contents are all disposable
 - [ ] Add `just test cloudflare` to CI, so the Worker path cannot rot
