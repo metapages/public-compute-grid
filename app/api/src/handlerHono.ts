@@ -9,7 +9,7 @@ import { uploadHandler as uploadHandlerDeprecated } from "@/routes/deprecated/up
 import { metricsHandler } from "@/routes/metrics.ts";
 import { cancelJobHandler } from "@/routes/queue/job/cancel.ts";
 import { statusHandler } from "@/routes/status.ts";
-import { makeStreamHandler } from "@metapages/compute-queues-shared";
+import { makeStreamHandler, WORKER_VERSIONS_PATH } from "@metapages/compute-queues-shared";
 import { type Context, Hono } from "hono";
 import { cors } from "hono/cors";
 
@@ -20,6 +20,7 @@ import { getJobsHandler } from "./routes/api/v1/jobs.ts";
 import { getBuildLogsHandler, getRunLogsHandler } from "./routes/api/v1/logs.ts";
 import { getJobNamespacesHandler } from "./routes/api/v1/namespaces.ts";
 import { getJobResultHandler } from "./routes/api/v1/result.ts";
+import { workerVersionsHandler } from "./routes/api/v1/workerVersions.ts";
 import { getApiDockerJobQueue } from "./routes/websocket.ts";
 // MCP (Model Context Protocol) handlers
 import { handleMCPHealth, handleMCPInfo } from "./routes/mcp/http.ts";
@@ -56,6 +57,7 @@ export const createApp = (opts?: { serveStatic?: (app: Hono) => void }): Hono =>
 
   // Put your custom routes here
   app.get("/healthz", (c: Context) => c.text("OK"));
+  app.get(WORKER_VERSIONS_PATH, workerVersionsHandler);
 
   const toImplementPlaceholder = (c: Context) => c.text("Not implemented");
 
