@@ -7,6 +7,7 @@ import type {
   DockerRunResult,
   WebsocketMessageSenderWorker,
   WebsocketMessageWorkerToServer,
+  WorkerHandoverState,
   WorkerRegistration,
 } from "@metapages/compute-queues-shared";
 
@@ -16,6 +17,8 @@ export interface DockerJobQueueArgs extends WorkerRegistration {
   sender: WebsocketMessageSenderWorker;
   queue: string;
   jobDefinitions: JobDefinitionCache;
+  /** Start in this handover state (a successor starts in "standby"). */
+  handover?: WorkerHandoverState;
 }
 
 export enum DockerRunPhase {
