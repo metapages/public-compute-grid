@@ -342,6 +342,8 @@ export class BaseDockerJobQueue {
   protected readonly address: string;
   protected readonly addressShortString: string;
   protected readonly serverId: string;
+  /** When this queue instance was built (ms): a rebuilt queue, e.g. after a Durable Object eviction, gets a new one. */
+  protected readonly instanceStartedAt: number = Date.now();
   protected readonly dataDirectory: string;
   protected readonly channel: BroadcastChannel;
   protected readonly channelEmitter: Emitter<BroadcastMessageEvents>;
@@ -742,7 +744,14 @@ export class BaseDockerJobQueue {
       clientCount: this.clients.length,
       queueInfo: {
         address: this.address,
+        // The id this queue instance broadcasts as. On Deno it is the
+        // process's id, shared by every queue the process serves. On
+        // Cloudflare it is generated each time the queue's Durable Object
+        // builds the queue, so together with instanceStartedAt it shows
+        // whether the object was evicted and rebuilt since the last look.
         serverId: this.serverId,
+        // When this queue instance was built (ms since epoch).
+        instanceStartedAt: this.instanceStartedAt,
         // Which cross-instance bus this server is on. "in-isolate" means this
         // server cannot hear any other, which looks exactly like a healthy
         // single-instance deployment until a worker lands somewhere else.

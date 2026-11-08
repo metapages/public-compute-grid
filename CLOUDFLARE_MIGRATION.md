@@ -224,6 +224,11 @@ submitted after the domain change hashes differently and simply runs again — w
 **Done.** An idle queue now sleeps: verified on staging by watching the queue's `serverId` (regenerated per isolate)
 change across an idle window, with a job run before and after to prove the rebuilt queue works.
 
+> That check was weaker than it looked (#338): `serverId` was then per _isolate_, and an isolate hosts many objects and
+> outlives any one of them, so an evicted object rebuilt in a warm isolate kept its id, and a resident one changed id
+> when it moved isolate. `ensureQueue` now gives each queue instance its own `serverId`, and `/q/<queue>/status` reports
+> `queueInfo.instanceStartedAt`: a new value there means the object was rebuilt, and nothing else does.
+
 Measured first, because the docs are ambiguous and the design depends on it:
 
 | probe on real Cloudflare                   | result                                                  |
