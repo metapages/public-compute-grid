@@ -3,7 +3,7 @@ import parseDuration from "parse-duration";
 import { config } from "/@/config.ts";
 import { ensureIsolateNetwork } from "/@/docker/network.ts";
 import { convertIOToVolumeMounts, getOutputs } from "/@/queue/IO.ts";
-import { convertStringToDockerCommand, getDockerFiltersForJob } from "/@/queue/utils.ts";
+import { convertStringToDockerCommand, getDockerFiltersForJob, gpuIndicesFromDeviceRequests } from "/@/queue/utils.ts";
 
 import * as computeQueuesShared from "@metapages/compute-queues-shared";
 import {
@@ -71,9 +71,17 @@ export class DockerJobQueue {
    * resubmission of the same id can be claimed again.
    */
   finishedAndReported = new Map<string, computeQueuesShared.WebsocketMessageWorkerToServer>();
+  /**
+   * Set while this worker is in an --auto-update handover. In every handover
+   * state the worker claims nothing: a successor ("standby") waits for its
+   * predecessor, which shares its worker id, to stop claiming; a predecessor
+   * ("draining", "retiring") is on its way out. Running jobs are untouched.
+   */
+  handover: computeQueuesShared.WorkerHandoverState | undefined;
 
   constructor(args: DockerJobQueueArgs) {
-    const { sender, cpus, gpus, id, maxJobDuration, queue, jobDefinitions } = args;
+    const { sender, cpus, gpus, id, maxJobDuration, queue, jobDefinitions, handover } = args;
+    this.handover = handover;
     this.cpus = cpus;
     this.gpus = gpus;
     this.sender = sender;
@@ -229,6 +237,8 @@ export class DockerJobQueue {
       id: this.workerId,
       cpus: this.cpus,
       gpus: this.gpus,
+      version: Version,
+      handover: this.reportedHandover(),
       queue: Object.fromEntries(
         Object.entries(this.queue).map(([key, item]) => {
           return [
@@ -361,10 +371,86 @@ export class DockerJobQueue {
       this.gotFirstCompleteJobState = true;
     }
 
-    if (this.gotFirstCompleteJobState && !this.performedInitialContainerCheckAfterJobState) {
-      this.performedInitialContainerCheckAfterJobState = true;
-      await this.killOrphanedJobs();
-      await this.checkForLocallyRunningJobs();
+    await this.initialContainerCheck();
+  }
+
+  /**
+   * Once, after the first full job state: kill containers nobody owns. Not
+   * while in a handover: a successor in standby shares its predecessor's
+   * worker id, so the predecessor's job containers look like ours-but-unknown
+   * and would be killed.
+   */
+  private async initialContainerCheck() {
+    if (this.handover || !this.gotFirstCompleteJobState || this.performedInitialContainerCheckAfterJobState) {
+      return;
+    }
+    this.performedInitialContainerCheckAfterJobState = true;
+    await this.killOrphanedJobs();
+    await this.checkForLocallyRunningJobs();
+  }
+
+  /** Stop claiming jobs, for an --auto-update handover. Running jobs carry on. */
+  enterHandover(state: computeQueuesShared.WorkerHandoverState) {
+    if (this.handover !== state) {
+      console.log(`${this.workerIdShort} 🔁 handover: ${state} (not claiming jobs)`);
+    }
+    this.handover = state;
+  }
+
+  /**
+   * Leave the handover and claim jobs again: a successor taking over, or a
+   * predecessor whose upgrade was abandoned. A clean handover leaves no jobs
+   * behind; if the predecessor died with jobs, the server still lists them as
+   * running on this worker id and they are picked up like after any restart
+   * (a still-running container is reattached, see dockerJobExecute).
+   */
+  async exitHandover() {
+    if (!this.handover) {
+      return;
+    }
+    console.log(`${this.workerIdShort} 🔁 handover over (was ${this.handover}), claiming jobs`);
+    this.handover = undefined;
+    this.register();
+    this._checkRunningJobs();
+    await this._claimJobs();
+    await this.initialContainerCheck();
+  }
+
+  runningJobCount(): number {
+    return Object.keys(this.queue).length;
+  }
+
+  /**
+   * The handover state as the queue should see it. "retiring" tells the
+   * successor to stop this worker, which is only safe with no jobs: a job
+   * still running or uploading its outputs would be cut off. So while any job
+   * is here, a retiring worker still reports "draining".
+   */
+  reportedHandover(): computeQueuesShared.WorkerHandoverState | undefined {
+    if (this.handover === "retiring" && this.runningJobCount() > 0) {
+      return "draining";
+    }
+    return this.handover;
+  }
+
+  /**
+   * The GPU devices an already running container for this job was created
+   * with, so a job picked up again after a restart keeps its device in the
+   * allocation table instead of being given (and double-booking) another.
+   */
+  async findRunningJobGpuIndices(jobId: string): Promise<number[] | undefined> {
+    try {
+      const container = await getRunningContainerForJob({ jobId, workerId: this.workerId });
+      if (!container) {
+        return undefined;
+      }
+      const info = await container.inspect();
+      return gpuIndicesFromDeviceRequests(info.HostConfig?.DeviceRequests);
+    } catch (err) {
+      console.log(
+        `${this.workerIdShort} ${getJobColorizedString(jobId)} could not read the running container's GPUs: ${err}`,
+      );
+      return undefined;
     }
   }
 
@@ -613,6 +699,10 @@ export class DockerJobQueue {
       return;
     }
 
+    if (this.handover) {
+      return;
+    }
+
     // Set running flag
     this._isClaimingJobs = true;
     try {
@@ -658,7 +748,15 @@ export class DockerJobQueue {
             try {
               const definition = await this.jobDefinitions.get(runningJobId);
               if (definition) {
-                this._startJob(runningJobId, definition);
+                // Picked up again (a restart with the same worker id): its
+                // container may already hold a GPU, so record that one.
+                const gpuIndices = definition.requirements?.gpus
+                  ? await this.findRunningJobGpuIndices(runningJobId)
+                  : undefined;
+                if (this.queue[runningJobId]) {
+                  continue;
+                }
+                this._startJob(runningJobId, definition, { gpuIndices });
               } else {
                 console.log(
                   `${this.workerIdShort} ${getJobColorizedString(runningJobId)} 🎳 _claimJobs failed to get definition`,
@@ -769,7 +867,11 @@ export class DockerJobQueue {
     }
   }
 
-  _startJob(jobId: string, definition: DockerJobDefinitionInputRefs): void {
+  _startJob(
+    jobId: string,
+    definition: DockerJobDefinitionInputRefs,
+    opts?: { gpuIndices?: number[] },
+  ): void {
     console.log(
       `${this.workerIdShort} ${getJobColorizedString(jobId)} starting...`,
     );
@@ -812,26 +914,7 @@ export class DockerJobQueue {
       definition,
       runningMessageToServer,
     };
-    let deviceRequests:
-      | computeQueuesShared.DockerApiDeviceRequest[]
-      | undefined;
-    if (definition.requirements?.gpus) {
-      const deviceIndex = this.getGPUDeviceIndex();
-      this.queue[jobId].gpuIndices = [deviceIndex];
-      deviceRequests = [{
-        Driver: "nvidia",
-        // Count: 1,
-        DeviceIDs: [`${deviceIndex}`],
-        Capabilities: [["gpu"]],
-      }];
-
-      // Log GPU allocation for manual validation
-      console.log(
-        `${this.workerIdShort} ${
-          getJobColorizedString(jobId)
-        } 🎮 GPU allocated: device=${deviceIndex} (from config: ${config.gpuConfig.originalSpec})`,
-      );
-    }
+    const deviceRequests = this._allocateGpus(jobId, definition, opts?.gpuIndices);
 
     this.sender(runningMessageToServer);
 
@@ -1146,6 +1229,34 @@ export class DockerJobQueue {
   /**
    * Kills the container and removes any local state
    */
+  /**
+   * Book this job's GPU, if it needs one: the device its running container
+   * already has (`existing`), otherwise the first free one.
+   */
+  _allocateGpus(
+    jobId: string,
+    definition: DockerJobDefinitionInputRefs,
+    existing?: number[],
+  ): computeQueuesShared.DockerApiDeviceRequest[] | undefined {
+    if (!definition.requirements?.gpus || !this.queue[jobId]) {
+      return undefined;
+    }
+    const deviceIndices = existing && existing.length > 0 ? existing : [this.getGPUDeviceIndex()];
+    this.queue[jobId].gpuIndices = deviceIndices;
+    // Log GPU allocation for manual validation
+    console.log(
+      `${this.workerIdShort} ${getJobColorizedString(jobId)} 🎮 GPU ${
+        existing && existing.length > 0 ? "kept from the running container" : "allocated"
+      }: device=${deviceIndices.join(",")} (from config: ${config.gpuConfig.originalSpec})`,
+    );
+    return [{
+      Driver: "nvidia",
+      // Count: 1,
+      DeviceIDs: deviceIndices.map((index) => `${index}`),
+      Capabilities: [["gpu"]],
+    }];
+  }
+
   _killJobAndIgnore(locallyRunningJobId: string, reason?: string) {
     console.log(
       `${this.workerIdShort} ${getJobColorizedString(locallyRunningJobId)} Killing job (exists in our queue? ${!!this
