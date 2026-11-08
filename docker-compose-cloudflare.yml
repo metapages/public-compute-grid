@@ -246,7 +246,8 @@ services:
       - minio.worker-metaframe.localhost:host-gateway
     restart: always
     volumes:
-      - ./app/.cache/s3:/data
+      # per compose project: two stacks run from one checkout must not share a store
+      - ./app/.cache/s3/${COMPOSE_PROJECT_NAME}:/data
     networks:
       - default
     labels:
