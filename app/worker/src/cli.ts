@@ -9,6 +9,8 @@ import { processes } from "/@/processes.ts";
 
 import { Command } from "@cliffy/command";
 
+import mod from "../mod.json" with { type: "json" };
+
 // Global reference to the DockerJobQueue for cleanup
 let globalDockerJobQueue: DockerJobQueue | null = null;
 
@@ -57,6 +59,16 @@ await new Command()
   // Put all the sub-commands here
   .command("run", runCommand)
   .command("test", testCommand)
+  .command(
+    "version",
+    new Command()
+      .description("Print the worker release version")
+      .action(() => {
+        console.log(mod.version);
+        // the webhook cron registered on import would keep the process alive
+        Deno.exit(0);
+      }),
+  )
   // end sub-commands
   .reset()
   .action(function () {
