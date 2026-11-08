@@ -1,8 +1,4 @@
 {
-  "deploy": {
-    "org": "metapage",
-    "app": "container"
-  },
   "name": "@metapages/compute-queues-api",
   "exports": {},
   "tasks": {

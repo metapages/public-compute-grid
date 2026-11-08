@@ -3,8 +3,7 @@ import { createHandler } from "metapages/worker/routing/handlerDeno";
 // Side-effect import: registers the webhook retry cron. Servers opt in; the
 // test runner, which imports the shared barrel but not this entrypoint, does
 // not. Imported by module path rather than from the barrel for exactly that
-// reason, and via the @shared/ alias because the deno deploy build flattens the
-// workspace layout, which breaks a relative path out of app/api/src.
+// reason.
 import "@shared/webhooks-cron.ts";
 
 import { handlerHttp } from "@/handlerDeno.ts";

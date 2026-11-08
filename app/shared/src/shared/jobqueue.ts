@@ -65,11 +65,10 @@ import { setJobStateFinished } from "../client.ts";
  * Cross-instance messaging (job states, worker registrations, job logs, cache
  * invalidation) goes over this channel.
  *
- * The native BroadcastChannel only connects channels *within a single isolate*.
- * Deploy Classic wired it into a global message bus across every isolate of a
- * deployment; the new Deno Deploy does not, so on the native implementation an
- * api instance holding a worker's websocket never hears about a job enqueued
- * over HTTP on another instance, and the job sits Queued forever. Redis pubsub
+ * The native BroadcastChannel only connects channels *within a single isolate*,
+ * so on the native implementation an api instance holding a worker's websocket
+ * never hears about a job enqueued over HTTP on another instance, and the job
+ * sits Queued forever. Redis pubsub
  * is the bus instead wherever there are several api instances: today only the
  * `remote` docker stack, which mirrors a multi-instance server. Native is only
  * correct where a single process is the whole server — the worker's
@@ -78,8 +77,8 @@ import { setJobStateFinished } from "../client.ts";
  * On Cloudflare each queue lives in exactly one Durable Object, so there are no
  * other instances to tell: the runtime installs a no-op channel with
  * setBroadcastChannelFactory before any queue is created. Production runs
- * there, so it sets neither REDIS_URL nor DENO_BROADCAST_REDIS_URL, and none
- * should be added (#319).
+ * there, so it sets neither REDIS_URL nor DENO_BROADCAST_REDIS_URL, and neither
+ * should be added.
  */
 const redisUrl: string | undefined = getEnv("DENO_BROADCAST_REDIS_URL") ||
   getEnv("REDIS_URL");

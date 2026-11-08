@@ -147,10 +147,9 @@ Local stack is HTTPS via mkcert at `https://worker-metaframe.localhost`; run `mk
   `app/cloudflare/justfile` or it will 404 in production.** The api also still runs on Deno for the local and remote
   docker stacks and for the local-mode worker — that is not a deployment target.
 - The production Worker's only config is `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT` (secrets) and
-  `AWS_REGION`, `AWS_S3_BUCKET` (vars). The Deno Deploy era `DENO_DEPLOY_TOKEN`, `DENO_KV_URL`, `DENO_KV_ACCESS_TOKEN`,
-  `REDIS_URL` / `DENO_BROADCAST_REDIS_URL` are gone and must not be added back: D1 replaces Deno KV, the Durable Object
-  replaces the Redis bus. The docker compose stacks still set their own `DENO_KV_*` / `REDIS_URL` for their local
-  services.
+  `AWS_REGION`, `AWS_S3_BUCKET` (vars). `DENO_KV_URL`, `DENO_KV_ACCESS_TOKEN` and `REDIS_URL` /
+  `DENO_BROADCAST_REDIS_URL` must not be added to it: D1 replaces Deno KV, the Durable Object replaces the Redis bus.
+  The docker compose stacks still set their own `DENO_KV_*` / `REDIS_URL` for their local services.
 - Bumping `app/worker/mod.json` version → worker binary + docker images published, git tag pushed.
 
 ## Editing rules of thumb
