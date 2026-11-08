@@ -1,4 +1,5 @@
 import { config, getConfig } from "/@/config.ts";
+import { makeEnsureQueue } from "/@/lib/ensure-queue.ts";
 import { createMcpServer, MCP_TOOLS } from "@metapages/compute-queues-mcp/server-factory";
 import { serveMcpStreamableHttp } from "@metapages/compute-queues-mcp/streamable-http";
 import { type Context, Hono } from "hono";
@@ -837,19 +838,18 @@ app.get("/*", serveStatic({ root: "../browser/dist" }));
 app.get("/", serveStatic({ path: "../browser/dist/index.html" }));
 app.get("*", serveStatic({ path: "../browser/dist/index.html" }));
 
-const ensureQueue = async (queue: string): Promise<BaseDockerJobQueue> => {
-  // Initialize queue if it doesn't exist
-  if (!userJobQueues[queue]) {
-    userJobQueues[queue] = new LocalDockerJobQueue({
+// Initialize the queue if it doesn't exist. Concurrent first requests share
+// one setup rather than racing it (#347)
+const ensureQueue: (queue: string) => Promise<BaseDockerJobQueue> = makeEnsureQueue(
+  userJobQueues,
+  (queue) =>
+    new LocalDockerJobQueue({
       serverId: "local",
       address: queue,
       dataDirectory: getConfig().dataDirectory,
       debug: config.debug,
-    });
-    await userJobQueues[queue].setup();
-  }
-  return userJobQueues[queue];
-};
+    }),
+);
 const handleWebsocket = async (socket: WebSocket, request: Request) => {
   const url = new URL(request.url);
   const pathTokens = url.pathname.split("/").filter((x) => x !== "");
