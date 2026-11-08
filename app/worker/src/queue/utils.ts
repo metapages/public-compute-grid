@@ -97,3 +97,18 @@ export const convertStringToDockerCommand = (
 // const gitUrl = "https://github.com/user/repo.git"; // Or "git@github.com:user/repo.git"
 // const dockerTag = generateDockerImageTag(gitUrl);
 // console.log(`Generated Docker image tag: ${dockerTag}`);
+
+/**
+ * The numeric GPU device indices in a container's HostConfig.DeviceRequests
+ * (`--gpus "device=1,3"` is `DeviceIDs: ["1", "3"]`). Undefined when there are
+ * none: no GPUs, or devices named by UUID, which the worker never allocates.
+ */
+export const gpuIndicesFromDeviceRequests = (
+  deviceRequests: { DeviceIDs?: string[] | null }[] | null | undefined,
+): number[] | undefined => {
+  const indices = (deviceRequests ?? [])
+    .flatMap((request) => request.DeviceIDs ?? [])
+    .filter((id) => /^\d+$/.test(id))
+    .map((id) => parseInt(id, 10));
+  return indices.length > 0 ? indices : undefined;
+};
