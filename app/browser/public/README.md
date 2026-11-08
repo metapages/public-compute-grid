@@ -8,7 +8,7 @@ Run a worker pointing to a queue `public1` (you can change this queue name to an
 unguessable):
 
 ```
-docker run  --pull always --restart unless-stopped -tid -v /var/run/docker.sock:/var/run/docker.sock -v /tmp:/tmp metapage/metaframe-docker-worker:0.39.0 run --cpus=4 --gpus=0 public1
+docker run  --pull always --restart unless-stopped -tid -v /var/run/docker.sock:/var/run/docker.sock -v /tmp:/tmp metapage/metaframe-docker-worker:0.54.87 run --cpus=4 --gpus=0 public1
 ```
 
 ## Quickstart: Run a job from the browser
@@ -108,7 +108,7 @@ can run any programming language.
 2. Configure the docker job
 3. Run a worker (or a bunch) pointing to a queue: `public1` (warning: this is a public shared compute queue)
    ```
-   docker run --pull always --restart unless-stopped -tid -v /var/run/docker.sock:/var/run/docker.sock -v /tmp:/tmp metapage/metaframe-docker-worker:0.39.0 run --cpus=4 --gpus=0 public1
+   docker run --pull always --restart unless-stopped -tid -v /var/run/docker.sock:/var/run/docker.sock -v /tmp:/tmp metapage/metaframe-docker-worker:0.54.87 run --cpus=4 --gpus=0 public1
    ```
 
 If you have GPUs, you can add `--gpus=1` (or more) to the worker command.
