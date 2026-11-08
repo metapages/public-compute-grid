@@ -95,7 +95,7 @@ services:
       "--unstable-cron",
       "src/cli.ts",
     ]
-    command: run --id=test-worker1 --cpus=2 --gpus=0 --api-address=http://api:8787 --data-directory ${WORKER_DATA_DIRECTORY:-/tmp/worker-metapage-io-dev1} local1
+    command: run --id=test-worker1-${COMPOSE_PROJECT_NAME} --cpus=2 --gpus=0 --api-address=http://api:8787 --data-directory ${WORKER_DATA_DIRECTORY:-/tmp/worker-metapage-io-dev1} local1
     build:
       context: .
       dockerfile: app/worker/Dockerfile
@@ -145,7 +145,7 @@ services:
       "--unstable-cron",
       "src/cli.ts",
     ]
-    command: run --id=test-worker2 --cpus=2 --gpus=0 --api-address=http://api:8787 --data-directory ${WORKER_DATA_DIRECTORY:-/tmp/worker-metapage-io-dev2}-2 local1
+    command: run --id=test-worker2-${COMPOSE_PROJECT_NAME} --cpus=2 --gpus=0 --api-address=http://api:8787 --data-directory ${WORKER_DATA_DIRECTORY:-/tmp/worker-metapage-io-dev2}-2 local1
     build:
       context: .
       dockerfile: app/worker/Dockerfile
