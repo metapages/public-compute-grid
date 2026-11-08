@@ -157,11 +157,14 @@ test mode="remote" +args="": _build_shared check (_validate_mode mode)
         done
     }
 
+    # APP_PORT is published on the host (traefik, or the local worker), so it is
+    # free-picked in every mode: a fixed port collides with any other test stack
+    # on the same docker daemon, and CI runners host several (one per CI job,
+    # plus pr-daemon branches).
+    export APP_PORT=$(get_free_port)
     if [ "{{ mode }}" = "local" ]; then
-        export APP_PORT=$(get_free_port)
         export WORKER_LOCAL_PORT=$(get_free_port)
     else
-        export APP_PORT=8081
         export WORKER_LOCAL_PORT=8000
     fi
     echo -e "Using APP_PORT=${APP_PORT}"

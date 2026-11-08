@@ -265,7 +265,10 @@ services:
       - --providers.docker=true
       - --providers.docker.endpoint=unix:///var/run/docker.sock
       - --providers.docker.watch=true
-      - --providers.docker.constraints=Label(`custom.label`,`worker-metaframe.localhost`)
+      # Only this compose project's containers: every stack on the docker daemon
+      # carries the same custom.label, and two stacks' routers share names (api,
+      # s3), so an unscoped traefik routes into, or drops routes for, the other.
+      - --providers.docker.constraints=Label(`custom.label`,`worker-metaframe.localhost`) && Label(`com.docker.compose.project`,`${COMPOSE_PROJECT_NAME}`)
       - --providers.docker.exposedbydefault=false
       - --providers.file.filename=/etc/traefik/config.yml
       - --providers.file.watch=true
