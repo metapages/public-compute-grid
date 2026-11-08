@@ -30,6 +30,10 @@ export interface Arguments {
   maxJobDuration: number;
   // If true, containers are not deleted after they finish.
   DebugDisableContainerDeletion: boolean;
+  // Replace this worker with the latest release when one is out (remote mode).
+  autoUpdate: boolean;
+  // How often to check for a new release, in ms.
+  autoUpdateInterval: number;
 }
 
 /**
@@ -54,6 +58,8 @@ export const config: Arguments = {
   debug: false, //{ type: Boolean, alias: 'd', description: `Debug mode (default: false)`, optional: true },
   maxJobDuration: parseDuration("5m") as number, //{ type: number, alias: 't', description: `Maximum duration of a job (default: 5m)`, optional: true },
   DebugDisableContainerDeletion: false, // for debugging and testing.
+  autoUpdate: false,
+  autoUpdateInterval: parseDuration("1h") as number,
 };
 
 export const getConfig = (): Arguments => {
