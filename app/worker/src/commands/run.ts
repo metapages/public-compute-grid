@@ -22,6 +22,7 @@ import {
   WebsocketMessageTypeServerBroadcast,
   WebsocketMessageTypeWorkerToServer,
   type WebsocketMessageWorkerToServer,
+  type WorkerHandoverState,
 } from "@metapages/compute-queues-shared";
 
 import { getKv } from "../../../shared/src/shared/kv.ts";
@@ -29,6 +30,8 @@ import mod from "../../mod.json" with { type: "json" };
 import { setGlobalDockerJobQueue } from "../cli.ts";
 import { killAndRemoveContainerForJob } from "../queue/cleanup.ts";
 import { JobDefinitionCache } from "../queue/JobDefinitionCache.ts";
+import { shouldStartInStandby, startAutoUpdate, takeOverFromPredecessor } from "../upgrade/autoUpdate.ts";
+import { HANDOVER_ID_ENV } from "../upgrade/successor.ts";
 
 const VERSION: string = mod.version;
 
@@ -59,6 +62,15 @@ export const runCommand = new Command()
     "Maximum duration of a job. Default: 5m",
   )
   .option("--debug [debug:boolean]", "Debug mode", { default: undefined })
+  .option(
+    "--auto-update [autoUpdate:boolean]",
+    "Replace this worker with the latest release when one is out: same config, same worker id, running jobs handed over (remote mode)",
+    { default: undefined },
+  )
+  .option(
+    "--auto-update-interval [autoUpdateInterval:string]",
+    "How often --auto-update checks for a new release. Default: 1h",
+  )
   .action(async (options, queue?: string) => {
     const METAPAGE_IO_WORKER_CPUS = Deno.env.get(`${EnvPrefix}CPUS`);
     config.cpus = typeof options.cpus === "number"
@@ -119,9 +131,30 @@ export const runCommand = new Command()
       : (METAPAGE_IO_WORKER_JOB_MAX_DURATION || "5m");
     config.maxJobDuration = parseDuration(stringDuration) as number;
 
+    const METAPAGE_IO_WORKER_AUTO_UPDATE = Deno.env.get(`${EnvPrefix}AUTO_UPDATE`);
+    config.autoUpdate = typeof options.autoUpdate === "boolean"
+      ? options.autoUpdate
+      : METAPAGE_IO_WORKER_AUTO_UPDATE === "true";
+    const autoUpdateInterval = typeof options.autoUpdateInterval === "string"
+      ? options.autoUpdateInterval
+      : (Deno.env.get(`${EnvPrefix}AUTO_UPDATE_INTERVAL`) || "1h");
+    config.autoUpdateInterval = Math.max(
+      (parseDuration(autoUpdateInterval) as number | null) ?? (ms("1h") as number),
+      ms("10s") as number,
+    );
+
+    // Set by a predecessor that is handing over to this worker (--auto-update):
+    // keep its id, so the queue sees one worker across the upgrade.
+    const handoverId = Deno.env.get(HANDOVER_ID_ENV);
+
     if (options.id && typeof options.id === "string") {
       config.id = options.id;
       console.log(`🔥 Worker ID set from command line to ${config.id}`);
+    } else if (handoverId) {
+      config.id = handoverId;
+      console.log(`🔥 Worker ID set from the upgrade handover to ${config.id}`);
+      const kv = await getKv();
+      await kv.set(["workerId"], config.id);
     } else {
       const kv = await getKv();
       const existingId: string | null = (await kv.get<string>(["workerId"]))
@@ -220,7 +253,8 @@ export const runCommand = new Command()
         localHandler,
       );
     } else {
-      connectToServer({
+      const standby = await shouldStartInStandby();
+      const dockerJobQueue = await connectToServer({
         server: config.mode === "local"
           // ? `http://localhost:${config.port}`
           ? `http://0.0.0.0:${config.port}`
@@ -231,7 +265,24 @@ export const runCommand = new Command()
         workerId: config.id,
         port: config.port,
         maxJobDuration: stringDuration,
+        handover: standby ? "standby" : undefined,
       });
+      const upgradeArgs = {
+        queue: dockerJobQueue,
+        workerId: config.id,
+        server: config.server,
+        queueId: config.queue,
+      };
+      if (standby) {
+        takeOverFromPredecessor(upgradeArgs).catch((err) => console.log(`🔁 handover failed: ${err}`));
+      }
+      if (config.autoUpdate) {
+        startAutoUpdate({
+          ...upgradeArgs,
+          intervalMs: config.autoUpdateInterval,
+          maxJobDurationMs: config.maxJobDuration,
+        });
+      }
     }
   });
 
@@ -248,9 +299,10 @@ export async function connectToServer(
     workerId: string;
     port: number;
     maxJobDuration: string;
+    handover?: WorkerHandoverState;
   },
-) {
-  const { server, queueId, cpus, gpus, workerId, port, maxJobDuration } = args;
+): Promise<DockerJobQueue> {
+  const { server, queueId, cpus, gpus, workerId, port, maxJobDuration, handover } = args;
 
   const url = config.mode === "local"
     ? `ws://localhost:${port}/q/${queueId}/worker`
@@ -299,6 +351,7 @@ export async function connectToServer(
     maxJobDuration,
     queue: queueId,
     jobDefinitions: jobDefinitionCache,
+    handover,
   };
   const dockerJobQueue = new DockerJobQueue(dockerJobQueueArgs);
   setGlobalDockerJobQueue(dockerJobQueue);
@@ -582,7 +635,9 @@ export async function connectToServer(
           const clearJobCacheConfirm = possibleMessage
             .payload as PayloadClearJobCache;
           const jobIdToClear = clearJobCacheConfirm.jobId;
-          if (!jobIdToClear) {
+          // In standby the job containers labelled with this worker id are
+          // the predecessor's: not ours to remove yet.
+          if (!jobIdToClear || dockerJobQueue.handover === "standby") {
             break;
           }
           console.log(
@@ -624,4 +679,6 @@ export async function connectToServer(
       console.log(`🚨 Error processing message: ${err}`);
     }
   });
+
+  return dockerJobQueue;
 }
