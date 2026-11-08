@@ -303,7 +303,18 @@ export interface WorkerStatusResponse {
   gpus: number;
   queue: Record<string, { jobId: string; finished: boolean }>;
   maxJobDuration?: string;
+  /** The worker's release version (absent on workers older than 0.54.88). */
+  version?: string;
+  /**
+   * Where this worker is in an --auto-update handover, if it is in one:
+   * "standby": a successor, connected and registered, not claiming jobs yet.
+   * "draining": a predecessor that has stopped claiming jobs.
+   * "retiring": a predecessor ready for its successor to stop it.
+   */
+  handover?: WorkerHandoverState;
 }
+
+export type WorkerHandoverState = "standby" | "draining" | "retiring";
 
 export interface JobStatusPayload {
   jobId: string;

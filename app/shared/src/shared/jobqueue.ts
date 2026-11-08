@@ -985,6 +985,7 @@ export class BaseDockerJobQueue {
       return result;
     }
     const { promise: allResponded, resolve: markAllResponded } = Promise.withResolvers<void>();
+    let responses = 0;
 
     // First attach listeners to all the workers
     const eventUnbinds: (() => void)[] = [];
@@ -1017,8 +1018,15 @@ export class BaseDockerJobQueue {
               runningJobs,
             );
 
-            result[status.id] = status;
-            if (Object.keys(result).length >= expectedResponders) {
+            // Two sockets can share a worker id during an --auto-update
+            // handover: keep both, so the successor is visible next to its
+            // predecessor (the worker verifies the handover from this).
+            // Version and response count: two sockets can share the version
+            // too (a reconnect while the old half-open socket is unswept).
+            const key = result[status.id] ? `${status.id}@${status.version ?? "unknown"}#${responses}` : status.id;
+            result[key] = status;
+            responses++;
+            if (responses >= expectedResponders) {
               markAllResponded();
             }
           }
@@ -1633,8 +1641,16 @@ export class BaseDockerJobQueue {
               );
             }
 
+            // One entry per socket, not per worker id. During an --auto-update
+            // handover the successor runs with its predecessor's id, on its
+            // own socket, while the predecessor still holds its jobs. Keyed by
+            // id, the successor's registration overwrote the predecessor's
+            // entry but kept the predecessor's socket, so the predecessor
+            // closing then dropped the id altogether and its running jobs were
+            // requeued as WorkerLost. Keyed by socket, the id stays registered
+            // as long as either process is connected.
             const indexOfCurrent = this.workers.myWorkers.findIndex(
-              (w) => w.registration.id === newWorkerRegistration.id,
+              (w) => w.connection === connection.socket,
             );
             // If there is nothing
             if (indexOfCurrent < 0) {
@@ -1909,7 +1925,9 @@ export class BaseDockerJobQueue {
     if (!messageString) {
       return;
     }
-    const failedWorkers: string[] = [];
+    // The entries, not their ids: two sockets can share an id (an --auto-update
+    // handover), and a dead one must not take the live one with it.
+    const failedWorkers: typeof this.workers.myWorkers = [];
 
     if (this.debug) {
       console.log(
@@ -1933,7 +1951,7 @@ export class BaseDockerJobQueue {
               )
             } websocket not open (state: ${worker.connection.readyState})`,
           );
-          failedWorkers.push(worker.registration.id);
+          failedWorkers.push(worker);
         }
       } catch (err) {
         console.log(
@@ -1943,7 +1961,7 @@ export class BaseDockerJobQueue {
             )
           }: ${err}`,
         );
-        failedWorkers.push(worker.registration.id);
+        failedWorkers.push(worker);
       }
     });
 
@@ -1952,12 +1970,12 @@ export class BaseDockerJobQueue {
       console.log(
         `🚨 Removing ${failedWorkers.length} failed workers: ${
           failedWorkers
-            .map((id) => getWorkerColorizedString(id))
+            .map((worker) => getWorkerColorizedString(worker.registration.id))
             .join(", ")
         }`,
       );
       this.workers.myWorkers = this.workers.myWorkers.filter(
-        (worker) => !failedWorkers.includes(worker.registration.id),
+        (worker) => !failedWorkers.includes(worker),
       );
       this.myWorkersHaveChanged();
     }
