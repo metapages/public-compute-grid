@@ -21,6 +21,8 @@ import { serveMcpStreamableHttp } from "@metapages/compute-queues-mcp/streamable
 import { retryUnsuccessfulWebhooks } from "@shared/webhooks.ts";
 import { Hono } from "hono";
 
+import mod from "../../worker/mod.json" with { type: "json" };
+
 interface DurableObjectId {
   toString(): string;
 }
@@ -42,7 +44,7 @@ export interface Env {
 
 declare const WebSocketPair: { new (): { 0: WebSocket; 1: WebSocket } };
 
-const app = createApp();
+const app = createApp({ workerVersion: mod.version });
 
 const handle = async (request: Request): Promise<Response> =>
   (await app.fetch(request)) ?? new Response("Not found", { status: 404 });
