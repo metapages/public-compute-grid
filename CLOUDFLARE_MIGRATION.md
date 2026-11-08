@@ -149,6 +149,13 @@ Production infrastructure exists and is validated:
 - [ ] Publish a worker release so deployed workers pick up the quiet-while-idle cadence (bump `app/worker/mod.json`).
       Without it queues stay resident: older workers re-register every 10s. They keep working either way
 
+**Every deploy smoke-checks itself** (issue #342): `just cloudflare deploy` ends with `just cloudflare smoke <env>`,
+which waits until `/` and a queue status answer 200 and then another 45s, because Durable Objects keep restarting on the
+new version for a while and an earlier check gives false failures. It then checks `/`, `/docs/`, `/llms.txt`, a queue
+status, an MCP `initialize` and a blob upload/exists/download, and exits non-zero (failing the Actions run) if any of
+them fails. It needs no worker and enqueues nothing. `SKIP_SMOKE=1` skips it; `just cloudflare smoke <url>` runs it
+against any deployment.
+
 **Rollback** is `wrangler rollback`, or a redeploy of a previous Worker version — not a return to Deno Deploy.
 
 ### The two tokens
