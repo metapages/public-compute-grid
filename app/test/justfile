@@ -47,9 +47,7 @@ watch mode="remote" +testfile="":
     deno test --unsafely-ignore-certificate-errors --allow-all --unstable-broadcast-channel --unstable-cron --unstable-kv src/{{ args }}
     echo "✅ functional tests"
 
-# Waits for API_URL to answer first: `up` returns once the api is healthy, but
-# traefik only routes a container after it sees that, a beat later, and until
-# then the suite's first requests get traefik's 404.
+# Wait for API_URL first: traefik routes the api a beat after compose sees it healthy
 @test-in-docker mode="remote" stack="test":
     docker compose --project-name={{ stack }} -f docker-compose.yml -f docker-compose-{{ mode }}.yml -f docker-compose-test-{{ mode }}.yml exec test deno eval --unsafely-ignore-certificate-errors 'const url = `${Deno.env.get("API_URL")}/healthz`; for (let i = 0; i < 120; i++) { try { const r = await fetch(url); await r.body?.cancel(); if (r.ok) Deno.exit(0); } catch { /* not up yet */ } await new Promise((r) => setTimeout(r, 500)); } console.error(`${url} did not answer 200 within 60s`); Deno.exit(1);'
     docker compose --project-name={{ stack }} -f docker-compose.yml -f docker-compose-{{ mode }}.yml -f docker-compose-test-{{ mode }}.yml exec test deno test --unsafely-ignore-certificate-errors --unstable-cron --allow-all src
