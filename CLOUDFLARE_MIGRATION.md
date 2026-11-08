@@ -28,18 +28,17 @@ with no `Deno.*` or Workers-only calls. Only the runtime adapters are runtime-sp
 
 The migration is merged and deployed; what is left lives in its own issues.
 
-| issue | what                                                    | when                         |
-| ----- | ------------------------------------------------------- | ---------------------------- |
-| #316  | Point `container.mtfm.io` at the Worker (zone + domain) | next                         |
-| #330  | A double-claimed job runs to completion twice           | any time                     |
-| #318  | Publish a worker release so idle workers go quiet       | any time                     |
-| #319  | Remove the Deno Deploy era env vars and secrets         | any time                     |
-| #320  | Delete the Deno Deploy app and the old S3 bucket        | after #316 has settled       |
-| #315  | Worker can go deaf (ping/pong weaknesses)               | when it next recurs          |
-| #322  | Stricter worker version gate                            | after #318, or when it costs |
+| issue | what                                              | when                         |
+| ----- | ------------------------------------------------- | ---------------------------- |
+| #330  | A double-claimed job runs to completion twice     | any time                     |
+| #318  | Publish a worker release so idle workers go quiet | any time                     |
+| #319  | Remove the Deno Deploy era env vars and secrets   | any time                     |
+| #320  | Delete the Deno Deploy app and the old S3 bucket  | once the domain has settled  |
+| #315  | Worker can go deaf (ping/pong weaknesses)         | when it next recurs          |
+| #322  | Stricter worker version gate                      | after #318, or when it costs |
 
-Done since this table was written: #317 (deploy token rotated), #321 (docs-only pushes), #314 (two suites on one queue).
-`just test cloudflare` now passes 71/71.
+Done since this table was written: #317 (deploy token rotated), #321 (docs-only pushes), #314 (two suites on one queue),
+#316 (`container.mtfm.io` is served by the Worker as of 2026-11-07). `just test cloudflare` passes 71/71.
 
 ## 0. Integration tests first
 
@@ -192,14 +191,17 @@ A Worker can only serve a hostname in a zone on this Cloudflare account, and `mt
 2. **Move the whole `mtfm.io` zone** to Cloudflare (nameserver change at the registrar). Every record has to be copied
    first, and `js.mtfm.io` and anything else in the zone move with it
 
-- [ ] Whichever route, then a Workers **Custom Domain** for `container.mtfm.io` on the `compute-queues` Worker, added to
-      `wrangler.jsonc` so it is in version control. Not added yet on purpose: `routes` for a zone this account does not
-      hold makes every deploy fail
-- [ ] Lower the `container.mtfm.io` TTL in Google Cloud DNS to 60s and **wait out the old 4h TTL**
-- [ ] Smoke-test the custom domain before the flip (a hosts override works while DNS still points at the old A record)
-- [ ] Flip the record. Workers use ReconnectingWebSocket, so they reattach on their own
-- [ ] Confirm on the real hostname: a job submitted and followed to completion, build and run logs, outputs from R2,
-      `/`, `/docs`, `/mcp`, cron
+**Done 2026-11-07, by route 2**: the whole `mtfm.io` zone is on Cloudflare (`jacob`/`aida.ns.cloudflare.com`), and
+`container.mtfm.io` is a Workers Custom Domain on the `compute-queues` Worker.
+
+- [x] The Custom Domain, and `routes` in `wrangler.jsonc` so it is in version control
+- [x] TTL: moot in the end — the zone moved to Cloudflare, which left the record at TTL 300 well before the flip
+- [x] Smoke-tested first on a throwaway hostname (`flip-probe.mtfm.io`) rather than via a hosts override: attach,
+      confirm the Worker answers, delete. That also established what rollback looks like
+- [x] Flipped
+- [x] Confirmed on the real hostname: `just test-url https://container.mtfm.io` 10/10 — a job submitted and followed to
+      completion, build and run logs, outputs from R2, `/`, `/docs`, `/llms.txt`, `/mcp/health`, and `/mcp/ws` gone
+      (404)
 
 **Keep `workers_dev: true` after the domain is live.** Uploaded inputs are stored as absolute `url` DataRefs
 (`${address}/f/<hash>`, `app/shared/src/shared/jobtools.ts`), so jobs submitted against the workers.dev origin carry
@@ -280,6 +282,27 @@ the local-mode worker run, and those are development and test targets, not deplo
       `app/worker/src/lib/local-handler.ts` duplicates the api routes and is the first thing to fold in
 
 ## Findings along the way
+
+- The domain flip, for anyone doing the next one: `override_existing_dns_record: true` on
+  `PUT /accounts/{id}/workers/domains` does **not** override an externally managed record — it still answers
+  `Hostname 'container.mtfm.io' already has externally managed DNS records (A, CNAME, etc). Delete them first`. So the
+  sequence is delete the records, then attach. Deleting a Custom Domain removes the record Cloudflare created for it,
+  which makes rollback clean: delete the domain, recreate the old records.
+- `container.mtfm.io` had an **AAAA** record as well as the A record, both pointing at Deno Deploy. Attaching the Custom
+  Domain only displaces the record it conflicts with, so leaving the AAAA in place would have sent IPv6 clients to the
+  old origin and IPv4 clients to the Worker — a split that no smoke test on one address would have caught. List every
+  record for the hostname before a flip, not just the A.
+- The token for all of this is **account-owned**, so it is managed on the account's API Tokens page and is invisible on
+  `/profile/api-tokens`; `GET /user/tokens/verify` rejects it outright while `GET /accounts/{id}/tokens/verify`
+  describes it. Worth knowing before hunting for permissions that look missing. It has no expiry, unlike the one that
+  lapsed on 2026-11-01.
+- `wrangler deploy` with several environments defined warns that it is picking the top-level environment by implication.
+  Production now names it explicitly (`--env ""`), because that warning describes exactly how a staging deploy reaches
+  production by accident.
+- Seen once on the first run against the real hostname, not on the re-run: the big-log contract test read **3485** log
+  lines where the job wrote 3000 — duplicated, not truncated. Only one worker was attached, so this is not the
+  double-claim duplication of #330; the suspect is the late-log append path, which appends lines arriving after a job's
+  logs were flushed. The re-run passed 10/10, so it is intermittent.
 
 - A queue's Durable Object could drop its worker the moment the object was rebuilt, leaving every job Queued:
   `getApiDockerJobQueue` memoizes queues in a module-level map, which is per _isolate_, not per Durable Object. A new
