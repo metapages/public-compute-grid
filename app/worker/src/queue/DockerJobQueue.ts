@@ -61,9 +61,17 @@ export class DockerJobQueue {
   private lastLoggedJobStateSignature: string = "";
   /** Jobs we have already explained we cannot claim, so the reason is logged once */
   private unclaimableJobsLogged = new Set<string>();
+  /**
+   * Set while this worker is in an --auto-update handover. In every handover
+   * state the worker claims nothing: a successor ("standby") waits for its
+   * predecessor, which shares its worker id, to stop claiming; a predecessor
+   * ("draining", "retiring") is on its way out. Running jobs are untouched.
+   */
+  handover: computeQueuesShared.WorkerHandoverState | undefined;
 
   constructor(args: DockerJobQueueArgs) {
-    const { sender, cpus, gpus, id, maxJobDuration, queue, jobDefinitions } = args;
+    const { sender, cpus, gpus, id, maxJobDuration, queue, jobDefinitions, handover } = args;
+    this.handover = handover;
     this.cpus = cpus;
     this.gpus = gpus;
     this.sender = sender;
@@ -219,6 +227,8 @@ export class DockerJobQueue {
       id: this.workerId,
       cpus: this.cpus,
       gpus: this.gpus,
+      version: Version,
+      handover: this.handover,
       queue: Object.fromEntries(
         Object.entries(this.queue).map(([key, item]) => {
           return [
@@ -351,11 +361,62 @@ export class DockerJobQueue {
       this.gotFirstCompleteJobState = true;
     }
 
-    if (this.gotFirstCompleteJobState && !this.performedInitialContainerCheckAfterJobState) {
-      this.performedInitialContainerCheckAfterJobState = true;
-      await this.killOrphanedJobs();
-      await this.checkForLocallyRunningJobs();
+    await this.initialContainerCheck();
+  }
+
+  /**
+   * Once, after the first full job state: kill containers nobody owns. Not
+   * while in a handover: a successor in standby shares its predecessor's
+   * worker id, so the predecessor's job containers look like ours-but-unknown
+   * and would be killed.
+   */
+  private async initialContainerCheck() {
+    if (this.handover || !this.gotFirstCompleteJobState || this.performedInitialContainerCheckAfterJobState) {
+      return;
     }
+    this.performedInitialContainerCheckAfterJobState = true;
+    await this.killOrphanedJobs();
+    await this.checkForLocallyRunningJobs();
+  }
+
+  /** Stop claiming jobs, for an --auto-update handover. Running jobs carry on. */
+  enterHandover(state: computeQueuesShared.WorkerHandoverState) {
+    if (this.handover !== state) {
+      console.log(`${this.workerIdShort} 🔁 handover: ${state} (not claiming jobs)`);
+    }
+    this.handover = state;
+  }
+
+  /**
+   * Leave the handover and claim jobs again: a successor taking over, or a
+   * predecessor whose upgrade was abandoned. Jobs the server says are running
+   * on this worker id and that have a running container are adopted, not
+   * restarted (see dockerJobExecute).
+   */
+  async exitHandover() {
+    if (!this.handover) {
+      return;
+    }
+    console.log(`${this.workerIdShort} 🔁 handover over (was ${this.handover}), claiming jobs`);
+    this.handover = undefined;
+    this.register();
+    this._checkRunningJobs();
+    await this._claimJobs();
+    await this.initialContainerCheck();
+  }
+
+  /**
+   * True when every local job is past setup and its container is running, so
+   * the worker can exit without losing work: the containers outlive it, and a
+   * worker with the same id adopts them. A job still copying inputs, building,
+   * or uploading outputs would have to start over.
+   */
+  isSafeToHandOverRunningJobs(): boolean {
+    return Object.values(this.queue).every((item) => item.phase === DockerRunPhase.Running);
+  }
+
+  runningJobCount(): number {
+    return Object.keys(this.queue).length;
   }
 
   async onUpdateUpdateASubsetOfJobs(
@@ -590,6 +651,10 @@ export class DockerJobQueue {
         );
       }
       this._needsAnotherClaimJobs = true;
+      return;
+    }
+
+    if (this.handover) {
       return;
     }
 
