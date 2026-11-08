@@ -46,11 +46,14 @@ export interface Pin {
 
 const basename = (path: string) => path.split("/").pop() ?? path;
 
-/** Lockfiles and changelogs record history, so they are never rewritten */
+/**
+ * Lockfiles and changelogs record history, and test fixtures use whatever
+ * versions the test needs, so none of them are ever rewritten
+ */
 export const isExcludedPath = (path: string): boolean => {
   const name = basename(path).toLowerCase();
   return name.endsWith(".lock") || name.includes("lock.json") || name.includes("lock.yaml") ||
-    name.startsWith("changelog");
+    name.startsWith("changelog") || /[._]test\.[jt]sx?$/.test(name);
 };
 
 /**

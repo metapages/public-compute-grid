@@ -7,8 +7,6 @@ import { runCommand } from "/@/commands/run.ts";
 import { testCommand } from "/@/commands/test.ts";
 import { processes } from "/@/processes.ts";
 
-import mod from "../mod.json" with { type: "json" };
-
 import { Command } from "@cliffy/command";
 
 import mod from "../mod.json" with { type: "json" };

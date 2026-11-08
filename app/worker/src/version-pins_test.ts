@@ -54,10 +54,21 @@ Deno.test("syncPins skips lines carrying the ignore marker, or below it", () => 
   assertEquals(result.text.split("\n")[3], `${IMAGE}1.2.3`);
 });
 
-Deno.test("lockfiles and changelogs are excluded", () => {
-  for (const path of ["deno.lock", "docs/package-lock.json", "pnpm-lock.yaml", "CHANGELOG.md", "app/x/changelog.txt"]) {
+Deno.test("lockfiles, changelogs and test files are excluded", () => {
+  for (
+    const path of [
+      "deno.lock",
+      "docs/package-lock.json",
+      "pnpm-lock.yaml",
+      "CHANGELOG.md",
+      "app/x/changelog.txt",
+      "app/worker/src/upgrade/successor_test.ts",
+      "app/browser/src/thing.test.tsx",
+    ]
+  ) {
     assertEquals(isExcludedPath(path), true, path);
     assertEquals(syncPins(path, `${IMAGE}0.1.0`, "1.2.3").stale, []);
   }
   assertEquals(isExcludedPath("README.md"), false);
+  assertEquals(isExcludedPath("app/worker/src/upgrade/successor.ts"), false);
 });
