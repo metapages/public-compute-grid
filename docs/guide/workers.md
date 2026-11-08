@@ -96,17 +96,20 @@ to Docker Hub tags; pre-releases are ignored, it only moves forward) and replace
 
 1. It asks the server first: `GET /api/v1/worker/versions` says which versions the server accepts, so a worker never
    runs ahead of the API it talks to.
-2. It starts a successor container that is a copy of its own (`docker inspect`) with only the image tag changed: same
+2. It **pauses new jobs**. Jobs already running carry on: a worker never hands a running job over, because only the
+   worker running it knows when it has finished and uploads its outputs.
+3. It starts a successor container that is a copy of its own (`docker inspect`) with only the image tag changed: same
    args, env, mounts, network, restart policy, GPUs, privileged flag, labels, and the same worker id.
-3. The successor connects in **standby**: registered on the queue, claiming nothing. The old worker waits until it sees
-   it in `/q/<queue>/status`, then stops claiming jobs.
-4. The successor stops and removes the old container, takes its name, and starts claiming. Jobs that were running keep
-   running: their containers are siblings on the host's docker, so the successor adopts them instead of restarting them.
-   The old worker only hands over once every job is past setup (inputs copied, image built).
+4. The successor connects in **standby**: registered on the queue, claiming nothing. The old worker waits until it sees
+   it in `/q/<queue>/status`, and until its running jobs have finished.
+5. With no jobs left, the old worker says it is ready. The successor stops and removes the old container, takes its
+   name, and starts claiming.
 
-If anything goes wrong before step 4 (the image cannot be pulled, the successor never registers, it dies) the successor
-is removed, the old worker carries on, and it backs off. The new worker is what stops the old one, so a failed upgrade
-never leaves the queue without a worker.
+While the old worker waits for its jobs, the queue gets no new work from it: other workers on the queue pick it up, or
+it waits for the successor. If anything goes wrong before step 5 (the image cannot be pulled, the successor never
+registers, it dies, a job is still running after `--max-job-duration`) the successor is removed, the old worker claims
+jobs again, and it retries later (after 5 minutes, then doubling, never later than the next regular check). The new
+worker is what stops the old one, so a failed upgrade never leaves the queue without a worker.
 
 The worker must be able to see its own container through the mounted docker socket, so this does not apply to the
 standalone image (its docker is its own), Kubernetes, or Fly/GCP-style deployments that recreate the worker from config.

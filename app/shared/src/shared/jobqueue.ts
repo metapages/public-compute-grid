@@ -1012,7 +1012,9 @@ export class BaseDockerJobQueue {
             // Two sockets can share a worker id during an --auto-update
             // handover: keep both, so the successor is visible next to its
             // predecessor (the worker verifies the handover from this).
-            const key = result[status.id] ? `${status.id}@${status.version ?? responses}` : status.id;
+            // Version and response count: two sockets can share the version
+            // too (a reconnect while the old half-open socket is unswept).
+            const key = result[status.id] ? `${status.id}@${status.version ?? "unknown"}#${responses}` : status.id;
             result[key] = status;
             responses++;
             if (responses >= expectedResponders) {

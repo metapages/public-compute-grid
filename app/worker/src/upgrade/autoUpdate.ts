@@ -3,40 +3,52 @@
  * release, keeping its configuration and its worker id, without leaving the
  * queue without a worker.
  *
+ * A worker never hands over running jobs: only the worker that ran a job
+ * knows when it finished and uploads its outputs. So an upgrade pauses new
+ * jobs as soon as it begins, and completes only once the running ones are
+ * done.
+ *
  * In docker (the usual install):
  *
  *   predecessor (this version)                successor (new version)
  *   ─────────────────────────                 ───────────────────────
  *   newer release found, server gate allows
- *   pull image, create a container that is
- *   this one with only the image changed  ──▶ starts in "standby": connects,
+ *   pull the image
+ *   "draining": stops claiming new jobs
+ *   create a container that is this one
+ *   with only the image changed           ──▶ starts in "standby": connects,
  *                                             registers with the same worker
  *                                             id, claims nothing
  *   sees it in /q/<queue>/status
  *   (same id, new version, standby)
- *   "draining": stops claiming jobs, waits
- *   until its running jobs can be handed
- *   over (or have finished, standalone)
- *   "retiring"                            ──▶ sees "retiring" in the status
+ *   waits for its running jobs to finish
+ *   (and upload their outputs)
+ *   "retiring" (only ever reported with
+ *   no jobs left)                         ──▶ sees "retiring" in the status
  *                                             stops + removes the predecessor
  *                                             takes its container name
- *                                             claims jobs: running ones are
- *                                             adopted, their containers kept
+ *                                             claims jobs
  *
  * Any failure before the successor takes over (no image, it never registers,
- * it dies, it never stops us) removes the successor; this worker claims jobs
- * again and backs off. The successor is what stops the predecessor, so a
- * failed upgrade never leaves the queue with no worker.
+ * it dies, jobs outlast --max-job-duration, it never stops us) removes the
+ * successor; this worker claims jobs again and retries later. The successor
+ * is what stops the predecessor, so a failed upgrade never leaves the queue
+ * with no worker.
  *
  * A `deno compile`d binary re-execs in place instead: download, check the new
- * binary runs, drain, swap the file, execv. Same pid throughout.
+ * binary runs, pause and wait for jobs, swap the file, execv. Same pid
+ * throughout.
  *
  * Fly and GCP deployments are recreated from their config, which is being
  * deprecated: they are not handled here (the container they run in is not
  * theirs to recreate through a docker socket anyway).
  */
 import type { Container, ContainerInspectInfo } from "dockerode";
-import { compareReleaseVersions, isWorkerUpgradeAllowed } from "@metapages/compute-queues-shared";
+import {
+  compareReleaseVersions,
+  isWorkerUpgradeAllowed,
+  type WorkerStatusResponse,
+} from "@metapages/compute-queues-shared";
 import humanizeDuration from "humanize-duration";
 
 import { config } from "/@/config.ts";
@@ -44,21 +56,17 @@ import { docker } from "/@/queue/dockerClient.ts";
 import type { DockerJobQueue } from "/@/queue/DockerJobQueue.ts";
 
 import mod from "../../mod.json" with { type: "json" };
-import { binaryDownloadUrl, getLatestReleaseVersion, getQueueLocalWorkers, getWorkerVersionGate } from "./releases.ts";
+import { predecessorStateFrom, retryDelay, successorContainerName, takeoverDecision } from "./handover.ts";
+import { type HandoverDeps, handOverToSuccessor, waitForRunningJobs } from "./handoverFlow.ts";
+import { binaryDownloadUrl, getLatestReleaseVersion, getQueueWorkers, getWorkerVersionGate } from "./releases.ts";
 import { execInPlace, inspectOwnContainer, isCompiledBinary, isInContainer } from "./self.ts";
 import { HANDOVER_FROM_ENV, HANDOVER_ID_ENV, successorImage, successorSpec } from "./successor.ts";
 
 const VERSION: string = mod.version;
 
 const POLL_INTERVAL = 3_000;
-/** How long a successor gets to start, connect and register. */
-const SUCCESSOR_REGISTER_DEADLINE = 3 * 60_000;
-/** How long a retiring worker waits for its successor to stop it. */
-const SUCCESSOR_TAKEOVER_DEADLINE = 3 * 60_000;
-/** Backoff ceiling, as a multiple of the check interval. */
-const MAX_BACKOFF_FACTOR = 24;
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 const log = (message: string) => console.log(`🔁 auto-update: ${message}`);
 
@@ -116,7 +124,7 @@ export const startAutoUpdate = async (args: AutoUpdateArgs) => {
       failures = 0;
     } catch (err) {
       failures++;
-      next = args.intervalMs * Math.min(2 ** failures, MAX_BACKOFF_FACTOR);
+      next = retryDelay(args.intervalMs, failures);
       log(`💥 upgrade failed, still running ${VERSION}, next try in ${humanizeDuration(next)}: ${err}`);
     }
     setTimeout(check, next);
@@ -124,6 +132,23 @@ export const startAutoUpdate = async (args: AutoUpdateArgs) => {
   // Soon after start, not immediately: let the worker connect first.
   setTimeout(check, Math.min(args.intervalMs, 60_000));
 };
+
+const handoverDeps = (args: AutoUpdateArgs, version: string): HandoverDeps => ({
+  queue: args.queue,
+  workerId: args.workerId,
+  version,
+  timing: {
+    poll: POLL_INTERVAL,
+    registerDeadline: 3 * 60_000,
+    // the jobs' own time limit, plus time to upload their outputs
+    jobsDeadline: args.maxJobDurationMs + 2 * 60_000,
+    takeoverDeadline: 3 * 60_000,
+  },
+  getWorkers: () => getQueueWorkers(args.server, args.queueId),
+  sleep,
+  now: () => Date.now(),
+  log,
+});
 
 const checkOnce = async (args: AutoUpdateArgs, method: Method, refusedLogged: Set<string>) => {
   const latest = await getLatestReleaseVersion();
@@ -209,78 +234,17 @@ const assertRunning = async (container: Container, what: string) => {
   }
 };
 
-/** Wait until the successor is on the queue: same worker id, the new version, in standby. */
-const verifySuccessor = async (args: AutoUpdateArgs, successor: Container, version: string) => {
-  const deadline = Date.now() + SUCCESSOR_REGISTER_DEADLINE;
-  while (Date.now() < deadline) {
-    await assertRunning(successor, "before registering");
-    try {
-      const workers = await getQueueLocalWorkers(args.server, args.queueId);
-      if (workers.some((w) => w.id === args.workerId && w.version === version && w.handover === "standby")) {
-        log(`successor ${version} is registered on queue ${args.queueId} ✅`);
-        return;
-      }
-    } catch (err) {
-      log(`cannot read the queue status yet: ${err}`);
-    }
-    await sleep(POLL_INTERVAL);
-  }
-  throw new Error(
-    `the successor did not register on queue ${args.queueId} within ${
-      humanizeDuration(SUCCESSOR_REGISTER_DEADLINE)
-    }:\n${await containerLogsTail(
-      successor,
-    )}`,
-  );
-};
-
-/**
- * Stop claiming jobs, then wait until the running ones can be left behind:
- * - adopt (job containers on the host's docker): every job's container is
- *   running, so the successor adopts it. Jobs still copying inputs, building
- *   or uploading outputs are let through that phase first.
- * - drain (standalone: job containers die with this container's dockerd):
- *   every job has finished.
- * Bounded by --max-job-duration: no job outlives that anyway.
- */
-const drain = async (args: AutoUpdateArgs, mode: "adopt" | "drain", successor?: Container) => {
-  args.queue.enterHandover("draining");
-  const deadline = Date.now() + args.maxJobDurationMs + 60_000;
-  let lastLogged = 0;
-  while (Date.now() < deadline) {
-    const done = mode === "adopt" ? args.queue.isSafeToHandOverRunningJobs() : args.queue.runningJobCount() === 0;
-    if (done) {
-      return;
-    }
-    if (Date.now() - lastLogged > 60_000) {
-      lastLogged = Date.now();
-      log(
-        mode === "adopt"
-          ? `waiting for jobs to reach a running container before handing them over`
-          : `waiting for ${args.queue.runningJobCount()} running job(s) to finish (standalone: they cannot be handed over)`,
-      );
-    }
-    if (successor) {
-      await assertRunning(successor, "while this worker was draining");
-    }
-    await sleep(POLL_INTERVAL);
-  }
-  log(`draining took longer than --max-job-duration, handing over anyway`);
-};
-
 const upgradeContainer = async (args: AutoUpdateArgs, version: string) => {
   const self = await inspectOwnContainer();
   if (!self) {
     throw new Error("cannot inspect this worker's own container");
   }
-  const standalone = isStandalone();
-  const image = successorImage(self.Config.Image, version, standalone);
+  const image = successorImage(self.Config.Image, version, isStandalone());
   log(`pulling ${image}`);
   await pullImage(image);
 
   const currentImage = await docker.getImage(self.Image).inspect().catch(() => undefined);
-  const baseName = self.Name.replace(/^\//, "");
-  const name = `${baseName}-${version}`.replace(/[^a-zA-Z0-9_.-]/g, "-");
+  const name = successorContainerName(self.Name, version);
   // a leftover from an earlier attempt that did not clean up
   await docker.getContainer(name).remove({ force: true }).catch(() => {});
 
@@ -291,29 +255,30 @@ const upgradeContainer = async (args: AutoUpdateArgs, version: string) => {
     name,
     env: { [HANDOVER_FROM_ENV]: self.Id, [HANDOVER_ID_ENV]: args.workerId },
   });
-  const successor = await docker.createContainer(spec.options);
-  log(`created successor ${name} (${successor.id.slice(0, 12)})`);
-  try {
-    for (const network of spec.extraNetworks) {
-      await docker.getNetwork(network.name).connect({ Container: successor.id, EndpointConfig: network.config });
+
+  // The upgrade begins: no new jobs from here on. The running ones finish
+  // here, while the successor starts up alongside.
+  await handOverToSuccessor(handoverDeps(args, version), async () => {
+    const container = await docker.createContainer(spec.options);
+    try {
+      for (const network of spec.extraNetworks) {
+        await docker.getNetwork(network.name).connect({ Container: container.id, EndpointConfig: network.config });
+      }
+    } catch (err) {
+      // not handed back yet, so nobody else would remove it
+      await container.remove({ force: true }).catch(() => {});
+      throw err;
     }
-    await successor.start();
-    await verifySuccessor(args, successor, version);
-    await drain(args, standalone ? "drain" : "adopt", successor);
-    args.queue.enterHandover("retiring");
-    log(`ready to be replaced, waiting for ${name} to stop this container`);
-    const deadline = Date.now() + SUCCESSOR_TAKEOVER_DEADLINE;
-    while (Date.now() < deadline) {
-      await assertRunning(successor, "before taking over");
-      await sleep(POLL_INTERVAL);
-    }
-    throw new Error(`the successor did not take over within ${humanizeDuration(SUCCESSOR_TAKEOVER_DEADLINE)}`);
-  } catch (err) {
-    log(`abandoning the upgrade, removing ${name}`);
-    await successor.remove({ force: true }).catch((removeErr) => log(`could not remove ${name}: ${removeErr}`));
-    await args.queue.exitHandover();
-    throw err;
-  }
+    return {
+      name: `${name} (${container.id.slice(0, 12)})`,
+      start: async () => {
+        await container.start();
+      },
+      assertRunning: (when) => assertRunning(container, when),
+      logsTail: () => containerLogsTail(container),
+      remove: () => container.remove({ force: true }),
+    };
+  });
 };
 
 const upgradeBinary = async (args: AutoUpdateArgs, version: string) => {
@@ -346,9 +311,15 @@ const upgradeBinary = async (args: AutoUpdateArgs, version: string) => {
     throw new Error(`the downloaded binary reports version "${reported}", expected ${version}`);
   }
 
-  // Job containers run on the host's docker and outlive this process; the
-  // re-exec'd worker has the same id and adopts them.
-  await drain(args, "adopt");
+  // No running jobs across the exec: pause new ones, let these finish.
+  args.queue.enterHandover("draining");
+  try {
+    await waitForRunningJobs(handoverDeps(args, version));
+  } catch (err) {
+    await Deno.remove(download).catch(() => {});
+    await args.queue.exitHandover();
+    throw err;
+  }
   args.queue.enterHandover("retiring");
   try {
     await Deno.rename(exe, previous);
@@ -396,24 +367,23 @@ export const takeOverFromPredecessor = async (
   const predecessor = docker.getContainer(predecessorId);
   log(`standby: waiting for ${predecessorId.slice(0, 12)} to stop claiming jobs`);
   while (true) {
-    // Gone means docker says so (404): a hiccup talking to docker must not
-    // read as "the predecessor is gone" and start a second claimer.
-    const info = await predecessor.inspect().catch((err) => (err?.statusCode === 404 ? null : undefined));
-    if (info === undefined) {
-      await sleep(POLL_INTERVAL);
-      continue;
-    }
-    let ready = !info?.State?.Running;
-    if (!ready) {
+    const inspected = await predecessor.inspect().then(
+      (info) => ({ ok: true as const, info }),
+      (error) => ({ ok: false as const, error }),
+    );
+    const state = predecessorStateFrom(inspected);
+    const info = inspected.ok ? inspected.info : undefined;
+    let workers: WorkerStatusResponse[] | null = null;
+    if (state === "running") {
       try {
-        const workers = await getQueueLocalWorkers(args.server, args.queueId);
-        ready = workers.some((w) => w.id === args.workerId && w.handover === "retiring");
+        workers = await getQueueWorkers(args.server, args.queueId);
       } catch (err) {
         if (config.debug) {
           log(`cannot read the queue status: ${err}`);
         }
       }
     }
+    const ready = takeoverDecision(state, workers, args.workerId) === "take-over";
     if (ready) {
       if (info) {
         log(`stopping predecessor ${info.Name.replace(/^\//, "")} (${predecessorId.slice(0, 12)})`);

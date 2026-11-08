@@ -86,3 +86,41 @@ Deno.test("two sockets with one worker id: both registered, both in status, id s
   successor.close();
   assertEquals(queue.getWorkerRegistrations().length, 0);
 });
+
+Deno.test("two sockets with one worker id and one version (a reconnect before the old socket is swept): neither status is lost", async () => {
+  const queue = new BaseDockerJobQueue({
+    serverId: "test",
+    address: "handover-test-same-version",
+    periodicWork: false,
+  });
+  const halfOpen = new FakeWorkerSocket("0.54.88");
+  const reconnected = new FakeWorkerSocket("0.54.88", "standby");
+  await queue.connectWorker({ socket: halfOpen as unknown as WebSocket });
+  halfOpen.register();
+  await queue.connectWorker({ socket: reconnected as unknown as WebSocket });
+  reconnected.register();
+
+  const workers = Object.values(await queue.getStatusFromLocalWorkers());
+  assertEquals(workers.length, 2);
+  assertEquals(workers.map((w) => w.handover ?? "none").sort(), ["none", "standby"]);
+
+  halfOpen.close();
+  reconnected.close();
+});
+
+Deno.test("a dead socket is swept without taking a live socket with the same worker id", async () => {
+  const queue = new BaseDockerJobQueue({ serverId: "test", address: "handover-test-sweep", periodicWork: false });
+  const dead = new FakeWorkerSocket("0.54.87");
+  const live = new FakeWorkerSocket("0.54.88", "standby");
+  await queue.connectWorker({ socket: dead as unknown as WebSocket });
+  dead.register();
+  await queue.connectWorker({ socket: live as unknown as WebSocket });
+  live.register();
+
+  // the socket dies without a close event; the next broadcast finds it
+  dead.readyState = WebSocket.CLOSED;
+  await queue.broadcastJobStatesToWebsockets();
+  assertEquals(queue.getWorkerRegistrations().map((r) => r.version), ["0.54.88"]);
+
+  live.close();
+});

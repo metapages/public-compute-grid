@@ -6,6 +6,8 @@ import {
   type WorkerVersionGate,
 } from "@metapages/compute-queues-shared";
 
+import { workersFromQueueStatus } from "./handover.ts";
+
 const GITHUB_REPOSITORY = "metapages/public-compute-grid";
 const DOCKER_HUB_REPOSITORY = "metapage/metaframe-docker-worker";
 /** The binary asset each release carries (linux x86_64). */
@@ -73,13 +75,14 @@ export const getWorkerVersionGate = async (server: string): Promise<WorkerVersio
   }
 };
 
-/** The workers connected to this queue's server, as `/q/<queue>/status` reports them. */
-export const getQueueLocalWorkers = async (server: string, queue: string): Promise<WorkerStatusResponse[]> => {
-  const status = await fetchJson(`${server}/q/${queue}/status`) as {
-    localWorkers?: Record<string, WorkerStatusResponse>;
-  };
-  return Object.values(status?.localWorkers ?? {});
-};
+/**
+ * Every worker on this queue, as `/q/<queue>/status` reports them: on the
+ * instance that answered and on every other instance (see workersFromQueueStatus).
+ */
+export const getQueueWorkers = async (server: string, queue: string): Promise<WorkerStatusResponse[]> =>
+  workersFromQueueStatus(
+    await fetchJson(`${server}/q/${queue}/status`) as Parameters<typeof workersFromQueueStatus>[0],
+  );
 
 export const binaryDownloadUrl = (version: string) =>
   `https://github.com/${GITHUB_REPOSITORY}/releases/download/${version}/${BINARY_ASSET_NAME}`;
