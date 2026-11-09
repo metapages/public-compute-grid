@@ -53,14 +53,16 @@ deploy version="":
 
     # The same commit that triggers publish-worker.yml updates every doc and
     # config that pins the worker image, so they can't drift (#336)
-    # It prints "path:line: old -> new" per pin; stage those files and no others
-    SYNCED=$(just ../sync-worker-version | tee /dev/stderr | { grep -oE '^[^ :]+:[0-9]+:' || true; } | cut -d: -f1 | sort -u)
+    # --files-only prints the rewritten paths (relative to the repo root) on
+    # stdout, one per line, and the per-pin log on stderr. Stage those files
+    # and no others.
+    SYNCED=$(cd worker && deno run --allow-read --allow-write --allow-run src/version-pins.ts sync --files-only)
 
     echo "chore: bump version to $VERSION"
     # Commit changes
     git add worker/mod.json
     if [ -n "$SYNCED" ]; then
-        (cd "$(git rev-parse --show-toplevel)" && git add $SYNCED)
+        printf '%s\n' "$SYNCED" | (cd "$(git rev-parse --show-toplevel)" && while IFS= read -r f; do git add -- "$f"; done)
     fi
     git commit -m "chore: bump version to $VERSION"
     git push
