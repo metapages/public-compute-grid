@@ -13,12 +13,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: "0"
 
       - name: Setup Just CLI
-        uses: extractions/setup-just@v1
+        uses: extractions/setup-just@v4
         with:
           just-version: "1.35.0"
 
@@ -37,12 +37,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: "0"
 
       - name: Setup Just CLI
-        uses: extractions/setup-just@v1
+        uses: extractions/setup-just@v4
         with:
           just-version: "1.35.0"
 
@@ -52,7 +52,7 @@ jobs:
           deno-version: "2.9.3"
 
       - name: Setup Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v4
 
       - name: Build and release
         run: just publish-versioned-artifacts
