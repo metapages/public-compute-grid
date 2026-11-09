@@ -9,15 +9,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v5
         with:
-          node-version: "23.5.0"
+          node-version: "24"
 
       - name: Setup Just CLI
-        uses: extractions/setup-just@v1
+        uses: extractions/setup-just@v4
         with:
           just-version: "1.35.0"
 
