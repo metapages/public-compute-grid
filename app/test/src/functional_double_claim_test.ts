@@ -4,11 +4,17 @@
  * container gets anywhere, otherwise a short job runs to completion twice:
  * twice the compute, twice the side effects, and every log line twice.
  *
- * Black box: only the API is used. Each job prints a marker and its
- * container's hostname (unique per container), after a 1s sleep that leaves
- * a losing copy plenty of time to be killed before it prints anything. A
- * duplicate shows up as the marker twice in the job's run log, or as a
- * hostname in the logs or outputs that is not the one in the stored result.
+ * Black box: only the API is used. The server already drops log lines and
+ * results from a worker it does not record as running the job, so a losing
+ * copy cannot be seen in the job's logs or result. What can be seen is the
+ * worker still holding it: /q/:queue/status asks every worker which jobs it
+ * has. While the jobs run that is polled, and a job held by a worker other
+ * than the one that finished it, in two polls in a row (each poll takes
+ * seconds), is a copy that was not dropped. The old code held it for 6s+.
+ *
+ * Each job also prints a marker and its container's hostname (unique per
+ * container), and writes the hostname to /outputs, so the stored result, run
+ * log and outputs must all come from one container.
  *
  * Needs two workers, so it only runs against the remote/cloudflare stacks.
  */
@@ -45,6 +51,30 @@ const getJson = async <T>(path: string): Promise<T> => {
 const runLogLines = async (jobId: string): Promise<string[]> => {
   const { data } = await getJson<{ data: LogLine[] }>(`/q/${QUEUE_ID}/j/${jobId}/run-logs.json`);
   return data.map((l) => l[0]);
+};
+
+/**
+ * jobId -> ids of the workers holding it right now. Walks the whole status
+ * response: worker statuses sit under localWorkers and under each
+ * otherServers entry, in shapes that differ per server implementation.
+ */
+const jobsHeldByWorkers = async (): Promise<Map<string, Set<string>>> => {
+  const held = new Map<string, Set<string>>();
+  const walk = (value: unknown) => {
+    if (!value || typeof value !== "object") {
+      return;
+    }
+    const v = value as { id?: unknown; queue?: unknown };
+    if (typeof v.id === "string" && v.queue && typeof v.queue === "object") {
+      for (const jobId of Object.keys(v.queue)) {
+        if (!held.has(jobId)) held.set(jobId, new Set());
+        held.get(jobId)!.add(v.id);
+      }
+    }
+    Object.values(value).forEach(walk);
+  };
+  walk(await getJson<unknown>(`/q/${QUEUE_ID}/status`));
+  return held;
 };
 
 const output = async (jobId: string, name: string): Promise<string> => {
@@ -84,6 +114,23 @@ Deno.test("a double-claimed short job runs to completion exactly once", async ()
       assertEquals(response.status, 200, await response.text());
     }));
 
+    // Poll which workers hold which of our jobs until the jobs are done and
+    // any losing copy has had the old 6s delay to be dropped.
+    const jobIds = new Set(jobs.map((j) => j.jobId));
+    const polls: Map<string, Set<string>>[] = [];
+    let polling = true;
+    const poller = (async () => {
+      while (polling) {
+        try {
+          const held = await jobsHeldByWorkers();
+          polls.push(new Map([...held].filter(([jobId]) => jobIds.has(jobId))));
+        } catch (err) {
+          console.log(`status poll failed: ${err}`);
+          await delay(500);
+        }
+      }
+    })();
+
     const finished = new Map<string, InMemoryDockerJob>();
     await withDeadline(
       (async () => {
@@ -104,6 +151,9 @@ Deno.test("a double-claimed short job runs to completion exactly once", async ()
     // A losing copy that was not killed finishes up to a few seconds later:
     // give it the time to stream its lines and upload its outputs.
     await delay(8_000);
+    polling = false;
+    await poller;
+    assert(polls.length >= 2, `only ${polls.length} status polls`);
 
     for (const { jobId, marker } of jobs) {
       const job = finished.get(jobId)!;
@@ -129,6 +179,13 @@ Deno.test("a double-claimed short job runs to completion exactly once", async ()
 
       // and its outputs were not overwritten by a second copy
       assertEquals(await output(jobId, "hostname.txt"), hostname, `${jobId} outputs written by another container`);
+
+      // no other worker kept a copy of it around
+      const winner = job.worker;
+      for (let i = 1; i < polls.length; i++) {
+        const losers = [...(polls[i].get(jobId) ?? [])].filter((w) => w !== winner && polls[i - 1].get(jobId)?.has(w));
+        assertEquals(losers, [], `${jobId} finished on ${winner} but still held by ${losers} across two status polls`);
+      }
     }
   } finally {
     await Promise.all(
