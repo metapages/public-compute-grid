@@ -12,11 +12,11 @@ import { saveAs } from "file-saver";
 import JSZip from "jszip";
 
 export const getDynamicInputsCount = (currentJobDefinition: DockerJobDefinitionMetadata | undefined) => {
-  return currentJobDefinition?.definition?.inputs ? Object.keys(currentJobDefinition.definition.inputs).length : 0;
+  return Object.keys({ ...currentJobDefinition?.definition?.inputs, ...currentJobDefinition?.inputs }).length;
 };
 
 export const getConfigInputs = (currentJobDefinition: DockerJobDefinitionMetadata | undefined): InputsRefs => {
-  return currentJobDefinition.definition?.configFiles || {};
+  return currentJobDefinition.definition?.files || {};
 };
 
 export const getOutputs = (job?: DockerJobDefinitionRow) => {

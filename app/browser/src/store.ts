@@ -24,9 +24,10 @@ import {
   WebsocketMessageTypeClientToServer,
 } from "/@shared/client";
 
-import { getHashParamValueJsonFromWindow, setHashParamValueJsonInWindow } from "@metapages/hash-query";
+import { getHashParamsFromWindow, setHashParamValueJsonInWindow } from "@metapages/hash-query";
 
 import { cache } from "./cache";
+import { decodeHashJsonObject } from "./hooks/useHashParamJsonObject";
 import { LogsMode } from "./components/sections/logs/DisplayLogs";
 
 let _cachedMostRecentSubmit: WebsocketMessageClientToServer | undefined;
@@ -193,6 +194,10 @@ export const useStore = create<MainStore>((set, get) => ({
       time: Date.now(),
       enqueued: {
         id: definitionBlob.hash,
+        jobId: definitionBlob.jobId,
+        jobHash: definitionBlob.jobHash,
+        inputsHash: definitionBlob.inputsHash,
+        inputs: definitionBlob.inputs,
         definition: definitionBlob.definition,
         control: definitionBlob.control,
       },
@@ -561,9 +566,9 @@ export const useStore = create<MainStore>((set, get) => ({
         get().submitJob();
       }
     });
-    const inputs: Record<string, string> = getHashParamValueJsonFromWindow("inputs") || {};
-    inputs[get().mainInputFile] = get().mainInputFileContent;
-    setHashParamValueJsonInWindow("inputs", inputs);
+    const files = decodeHashJsonObject<Record<string, string>>(getHashParamsFromWindow()[1]["files"]) || {};
+    files[get().mainInputFile] = get().mainInputFileContent;
+    setHashParamValueJsonInWindow("files", files);
     get().setMainInputFileContent(null);
   },
 

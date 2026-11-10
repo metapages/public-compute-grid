@@ -3,6 +3,7 @@ import {
   DockerJobFinishedReason,
   type DockerJobImageBuild,
   DockerJobState,
+  type EnqueueJob,
   type InMemoryDockerJob,
   type InputsRefs,
   type StateChangeValueFinished,
@@ -279,7 +280,7 @@ export const isParentInjectedHashParamKey = (key: string): boolean =>
  * Fields are grouped into:
  * 1. Scalar/array fields from DockerJobDefinitionInputsBase64V1 (fully known)
  * 2. Structured sub-objects with whitelisted sub-fields (build, requirements)
- * 3. Open-ended Record fields where all keys are included (env, inputs, configFiles)
+ * 3. Open-ended Record fields where all keys are included (env, files, inputs)
  *    - these are marked with comments since we can't whitelist individual keys
  */
 const buildJobHashBlob = (job: DockerJobDefinitionInputRefs): Record<string, unknown> => {
@@ -339,18 +340,18 @@ const buildJobHashBlob = (job: DockerJobDefinitionInputRefs): Record<string, unk
     }
   }
 
+  // --- Open-ended Record: files (all keys included, DataRef cleaned) ---
+  // NOTE: file names are unbounded - determined by the user's job configuration.
+  const cleanedFiles = cleanInputsRefsForHash(job.files);
+  if (cleanedFiles && Object.keys(cleanedFiles).length > 0) {
+    blob.files = cleanedFiles;
+  }
+
   // --- Open-ended Record: inputs (all keys included, DataRef cleaned) ---
   // NOTE: input names are unbounded - determined by the user's metaframe inputs.
   const cleanedInputs = cleanInputsRefsForHash(job.inputs);
   if (cleanedInputs && Object.keys(cleanedInputs).length > 0) {
     blob.inputs = cleanedInputs;
-  }
-
-  // --- Open-ended Record: configFiles (all keys included, DataRef cleaned) ---
-  // NOTE: configFile names are unbounded - determined by the user's URL hash "inputs" param.
-  const cleanedConfigFiles = cleanInputsRefsForHash(job.configFiles);
-  if (cleanedConfigFiles && Object.keys(cleanedConfigFiles).length > 0) {
-    blob.configFiles = cleanedConfigFiles;
   }
 
   return blob;
@@ -364,6 +365,109 @@ export const shaDockerJob = (
   }
   const blob = buildJobHashBlob(job);
   return shaObject(blob);
+};
+
+const SHA256 = /^[0-9a-f]{64}$/;
+const JOB_NAME = /^[A-Za-z0-9_-]{1,128}$/;
+
+/** A sha256 in a job URL is a content address: it only ever means that content. */
+export const isSha256 = (value: string): boolean => SHA256.test(value);
+
+/** Names are safe in a URL path and a store key, and cannot be mistaken for a sha256. */
+export const isJobName = (value: string): boolean => JOB_NAME.test(value) && !/^[0-9a-fA-F]{64}$/.test(value);
+
+/** A submission's `jobId` that cannot be accepted. Clients get a 400. */
+export class InvalidJobIdError extends Error {
+  override name = "InvalidJobIdError";
+}
+
+/** sha256 of a run's inputs: the `i` in `/j/<job>?i=<inputs>` */
+export const shaInputs = (inputs: InputsRefs): Promise<string> => {
+  return shaObject(cleanInputsRefsForHash(inputs));
+};
+
+/**
+ * The definition a run actually executes: its job's definition with the run's
+ * inputs folded in. This is what is stored under the run id and what workers
+ * receive, so a run looks like any other job to the queue and the workers.
+ */
+export const mergeRunInputs = (
+  job: Pick<EnqueueJob, "definition" | "inputs">,
+): DockerJobDefinitionInputRefs => {
+  if (!job.inputs || Object.keys(job.inputs).length === 0) {
+    return job.definition;
+  }
+  return { ...job.definition, inputs: { ...job.definition.inputs, ...job.inputs } };
+};
+
+/**
+ * Derives a submission's ids. Safe to call on an already prepared job.
+ *
+ *   jobHash    = sha256(definition)
+ *   jobId      = the client's name for the job, else jobHash
+ *   inputsHash = sha256(inputs)
+ *   id         = sha256(definition + inputs), the run
+ *
+ * Results are keyed by content, not by jobId, so publishing a new version under
+ * the same name runs it rather than answering with the old version's results.
+ *
+ * Every id is derived here, never taken from the client: they decide what a
+ * content address points at (see DB.queueJobRecordIdentity). Likewise a `jobId` is
+ * either the hash of this definition or a name, otherwise anyone could publish
+ * other content at a job's hash.
+ *
+ * Inputs inside the definition are a run's inputs, not part of the job: that is
+ * how a stored run holds them (see mergeRunInputs).
+ */
+export const prepareEnqueueJob = async (
+  job: Omit<EnqueueJob, "id"> & { id?: string },
+): Promise<EnqueueJob> => {
+  const { inputs: runInputs, jobHash: _jobHash, inputsHash: _inputsHash, ...rest } = job;
+  const { inputs: definitionInputs, ...definition } = job.definition;
+  const inputs = { ...definitionInputs, ...runInputs };
+  const hasInputs = Object.keys(inputs).length > 0;
+  const jobHash = await shaDockerJob(definition);
+  if (job.jobId && job.jobId !== jobHash && !isJobName(job.jobId)) {
+    throw new InvalidJobIdError(
+      `Invalid jobId "${job.jobId}": it must be the sha256 of this job's definition, ` +
+        `or a name of 1-128 characters from A-Z a-z 0-9 _ - (and not itself shaped like a sha256)`,
+    );
+  }
+  const prepared: EnqueueJob = {
+    ...rest,
+    definition,
+    id: await shaDockerJob(mergeRunInputs({ definition, inputs })),
+    jobId: job.jobId || jobHash,
+    jobHash,
+  };
+  if (hasInputs) {
+    prepared.inputs = inputs;
+    prepared.inputsHash = await shaInputs(inputs);
+  }
+  return prepared;
+};
+
+/**
+ * The canonical URL path of a job or a run:
+ *
+ *   /j/<sha256 job>
+ *   /j/<sha256 job>?i=<sha256 inputs>
+ *   /j/<named job>?v=<sha256 job>&i=<sha256 inputs>
+ */
+export const formatJobUrlPath = (
+  job: { jobId?: string; jobHash?: string; inputsHash?: string },
+): string => {
+  const params: string[] = [];
+  if (job.jobHash && job.jobHash !== job.jobId) params.push(`v=${job.jobHash}`);
+  if (job.inputsHash) params.push(`i=${job.inputsHash}`);
+  return `/j/${job.jobId}${params.length ? `?${params.join("&")}` : ""}`;
+};
+
+/** A client-chosen name in a response header: it can hold anything, including quotes and newlines. */
+export const formatContentDisposition = (filename: string): string => {
+  const name = filename.split("/").pop() ?? filename;
+  const ascii = name.replace(/[^\x20-\x7e]|["\\]/g, "_");
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 };
 
 const reduceUrlToHashVersion = (url: string): string => {

@@ -24,7 +24,7 @@ const validationSchema = yup.object({
 });
 interface FormType extends yup.InferType<typeof validationSchema> {}
 
-export const AddInputButtonAndModal: React.FC<{
+export const AddJobFileButtonAndModal: React.FC<{
   add: (input: string) => void;
   showText: boolean;
 }> = ({ add, showText }) => {
@@ -55,7 +55,7 @@ export const AddInputButtonAndModal: React.FC<{
 
   return (
     <>
-      <HStack onClick={onToggle} aria-label="add input">
+      <HStack onClick={onToggle} aria-label="add job file" cursor="pointer">
         <Icon as={Plus} />
         {showText ? <Text size={"med"}>New File</Text> : null}
       </HStack>
@@ -64,7 +64,7 @@ export const AddInputButtonAndModal: React.FC<{
         <ModalOverlay sx={{ right: 0, width: "50%" }} />
         <ModalContent>
           <ModalHeader>
-            <Text>New input (file) name</Text>
+            <Text>New job file path</Text>
           </ModalHeader>
           <form onSubmit={formik.handleSubmit}>
             <ModalBody>

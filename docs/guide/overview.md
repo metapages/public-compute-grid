@@ -67,8 +67,9 @@ generated from a UUID is private in practice. Pick accordingly.
 Inside the container: `/inputs` is read, `/outputs` is collected, `/job-cache` survives between jobs on the same worker.
 Whatever ends up in `/outputs` comes back attached to the result.
 
-The job id is `sha256(definition)`, so identical work is deduplicated: the second submitter of the same definition joins
-the first one's job, and a definition that already ran returns its cached result immediately.
+The job id is `sha256(definition)`, and a run is a job plus its inputs, so identical work is deduplicated: the second
+submitter of the same job on the same inputs joins the first one's run, and one that already ran returns its cached
+result immediately.
 
 ## Workers are interchangeable
 

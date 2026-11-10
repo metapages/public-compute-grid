@@ -7,6 +7,7 @@ import {
   ConsoleLogLine,
   DockerJobFinishedReason,
   DockerJobState,
+  formatJobUrlPath,
   InMemoryDockerJob,
   StateChangeValueFinished,
 } from "/@shared/client";
@@ -111,7 +112,9 @@ export const JobStatus: React.FC = () => {
         </HStack>
 
         {!isMinimalHeader && jobId && (
-          <Link href={`${resolvedQueue === "local" ? LocalModeBaseUrl : ApiOrigin}/j/${jobId}`} isExternal>
+          <Link
+            href={`${resolvedQueue === "local" ? LocalModeBaseUrl : ApiOrigin}${formatJobUrlPath(newJobDefinition)}`}
+            isExternal>
             <Text cursor={"copy"} onClick={copyJobId} fontSize={"0.7rem"}>
               Id: {jobId.slice(0, 5)}
             </Text>

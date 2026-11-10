@@ -44,6 +44,12 @@ export interface Volume {
   container: string;
 }
 // this goes in
+// A job file with a relative path: mounted under the container's working directory
+export interface WorkdirFile {
+  host: string;
+  name: string;
+}
+
 export interface DockerJobArgs {
   workItem: WorkerJobQueueItem;
   workerId: string;
@@ -58,6 +64,7 @@ export interface DockerJobArgs {
   workdir?: string;
   shmSize?: string;
   volumes?: Array<Volume>;
+  workdirFiles?: Array<WorkdirFile>;
   outputsDir: string;
   deviceRequests?: DockerApiDeviceRequest[];
   // always defined, no jobs run forever

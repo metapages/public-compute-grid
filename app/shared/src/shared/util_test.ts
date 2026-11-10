@@ -1,7 +1,15 @@
-import { assertEquals, assertNotEquals } from "std/assert";
+import { assertEquals, assertNotEquals, assertRejects } from "std/assert";
 
 import { DataRefType, type DockerJobDefinitionInputRefs } from "@shared/types.ts";
-import { isParentInjectedHashParamKey, shaDockerJob } from "@shared/util.ts";
+import {
+  formatContentDisposition,
+  formatJobUrlPath,
+  InvalidJobIdError,
+  isParentInjectedHashParamKey,
+  mergeRunInputs,
+  prepareEnqueueJob,
+  shaDockerJob,
+} from "@shared/util.ts";
 
 // A minimal job definition used as a base for tests
 const baseJob: DockerJobDefinitionInputRefs = {
@@ -82,10 +90,10 @@ Deno.test("shaDockerJob: presigned URL params are stripped from inputs", async (
   assertEquals(hash1, hash2);
 });
 
-Deno.test("shaDockerJob: presigned URL params are stripped from configFiles", async () => {
+Deno.test("shaDockerJob: presigned URL params are stripped from files", async () => {
   const jobWithPresigned: DockerJobDefinitionInputRefs = {
     ...baseJob,
-    configFiles: {
+    files: {
       config: {
         value: "https://example.com/config/presignedurl/abc123?token=xyz",
         type: DataRefType.url,
@@ -94,7 +102,7 @@ Deno.test("shaDockerJob: presigned URL params are stripped from configFiles", as
   };
   const jobWithoutPresigned: DockerJobDefinitionInputRefs = {
     ...baseJob,
-    configFiles: {
+    files: {
       config: {
         value: "https://example.com/config",
         type: DataRefType.url,
@@ -245,7 +253,7 @@ Deno.test("shaDockerJob: full job with all fields produces stable hash", async (
     inputs: {
       data: { value: "aGVsbG8=", type: DataRefType.base64 },
     },
-    configFiles: {
+    files: {
       "config.yaml": { value: "key: value", type: DataRefType.utf8 },
     },
   };
@@ -502,4 +510,102 @@ Deno.test("shaDockerJob: input ref with null type produces same hash as omitted 
   const hash1 = await shaDockerJob(jobWithType);
   const hash2 = await shaDockerJob(jobWithNullType);
   assertEquals(hash1, hash2);
+});
+
+Deno.test("prepareEnqueueJob: inputs are not part of the job id, only of the run id", async () => {
+  const a = await prepareEnqueueJob({
+    definition: baseJob,
+    inputs: { "a.txt": { type: DataRefType.utf8, value: "a" } },
+  });
+  const b = await prepareEnqueueJob({
+    definition: baseJob,
+    inputs: { "a.txt": { type: DataRefType.utf8, value: "b" } },
+  });
+  const none = await prepareEnqueueJob({ definition: baseJob });
+
+  assertEquals(a.jobId, none.jobId);
+  assertEquals(b.jobId, none.jobId);
+  assertEquals(none.id, none.jobId);
+  assertNotEquals(a.id, b.id);
+  assertNotEquals(a.id, none.id);
+  assertNotEquals(a.inputsHash, b.inputsHash);
+  assertEquals(none.inputsHash, undefined);
+});
+
+Deno.test("prepareEnqueueJob: a run has the id of the same job with its inputs in the definition", async () => {
+  const inputs = { "a.txt": { type: DataRefType.utf8, value: "a" } };
+  const run = await prepareEnqueueJob({ definition: baseJob, inputs });
+  assertEquals(run.id, await shaDockerJob({ ...baseJob, inputs }));
+  assertEquals(mergeRunInputs(run).inputs, inputs);
+});
+
+Deno.test("prepareEnqueueJob: is idempotent", async () => {
+  const inputs = { "a.txt": { type: DataRefType.utf8, value: "a" } };
+  const once = await prepareEnqueueJob({ definition: baseJob, inputs, jobId: "my-job" });
+  assertEquals(await prepareEnqueueJob(once), once);
+});
+
+Deno.test("prepareEnqueueJob: a named job's run id comes from its content, so new versions run", async () => {
+  const v1 = await prepareEnqueueJob({ definition: baseJob, jobId: "my-job" });
+  const v2 = await prepareEnqueueJob({ definition: { ...baseJob, command: "other" }, jobId: "my-job" });
+  assertEquals(v1.jobId, "my-job");
+  assertEquals(v1.id, v1.jobHash);
+  assertNotEquals(v1.id, v2.id);
+});
+
+Deno.test("prepareEnqueueJob: inputs in a definition are the run's, not part of the job", async () => {
+  const inputs = { "a.txt": { type: DataRefType.utf8, value: "a" } };
+  const inDefinition = await prepareEnqueueJob({ definition: { ...baseJob, inputs } });
+  assertEquals(inDefinition, await prepareEnqueueJob({ definition: baseJob, inputs }));
+  assertEquals(inDefinition.jobHash, await shaDockerJob(baseJob));
+  assertEquals(inDefinition.definition.inputs, undefined);
+  assertEquals(inDefinition.inputs, inputs);
+});
+
+Deno.test("prepareEnqueueJob: a stored run's definition gives the same run", async () => {
+  const inputs = { "a.txt": { type: DataRefType.utf8, value: "a" } };
+  const run = await prepareEnqueueJob({ definition: baseJob, inputs });
+  assertEquals((await prepareEnqueueJob({ definition: mergeRunInputs(run) })).id, run.id);
+});
+
+Deno.test("shaDockerJob: files are part of the job", async () => {
+  const withFile = await shaDockerJob({ ...baseJob, files: { "run.py": { value: "1" } } });
+  assertNotEquals(withFile, await shaDockerJob(baseJob));
+  assertNotEquals(withFile, await shaDockerJob({ ...baseJob, files: { "run.py": { value: "2" } } }));
+  assertEquals(await shaDockerJob({ ...baseJob, files: {} }), await shaDockerJob(baseJob));
+});
+
+Deno.test("formatJobUrlPath: the URL forms", () => {
+  assertEquals(formatJobUrlPath({ jobId: "h", jobHash: "h" }), "/j/h");
+  assertEquals(formatJobUrlPath({ jobId: "h", jobHash: "h", inputsHash: "i" }), "/j/h?i=i");
+  assertEquals(formatJobUrlPath({ jobId: "name", jobHash: "h", inputsHash: "i" }), "/j/name?v=h&i=i");
+});
+
+Deno.test("prepareEnqueueJob: ids sent by a client are dropped or recomputed", async () => {
+  const forged = { jobHash: "victim", inputsHash: "anyinputs", definition: baseJob };
+  const hash = await shaDockerJob(baseJob);
+  const chosen = await prepareEnqueueJob({ ...forged, id: "attacker" });
+  assertEquals([chosen.id, chosen.jobHash, chosen.inputsHash], [hash, hash, undefined]);
+
+  const derived = await prepareEnqueueJob(forged);
+  assertEquals([derived.id, derived.jobHash, derived.inputsHash], [hash, hash, undefined]);
+
+  const named = await prepareEnqueueJob({ ...forged, jobId: "name" });
+  assertEquals([named.jobHash, named.inputsHash], [hash, undefined]);
+});
+
+Deno.test("prepareEnqueueJob: a jobId is the job's own sha256, or a name", async () => {
+  const hash = await shaDockerJob(baseJob);
+  assertEquals((await prepareEnqueueJob({ definition: baseJob, jobId: hash })).jobId, hash);
+  assertEquals((await prepareEnqueueJob({ definition: baseJob, jobId: "a-Name_1" })).jobId, "a-Name_1");
+  for (const jobId of ["b".repeat(64), "B".repeat(64), "a/b", "a b", "a.json", "a?b", "a#b", "x".repeat(129)]) {
+    await assertRejects(() => prepareEnqueueJob({ definition: baseJob, jobId }), InvalidJobIdError);
+  }
+});
+
+Deno.test("formatContentDisposition: a file name cannot break the header", () => {
+  assertEquals(formatContentDisposition("dir/a.txt"), `attachment; filename="a.txt"; filename*=UTF-8''a.txt`);
+  const header = formatContentDisposition('a"b\r\nx: y é.txt');
+  assertEquals(header, `attachment; filename="a_b__x: y _.txt"; filename*=UTF-8''a%22b%0D%0Ax%3A%20y%20%C3%A9.txt`);
+  new Headers({ "Content-Disposition": header });
 });

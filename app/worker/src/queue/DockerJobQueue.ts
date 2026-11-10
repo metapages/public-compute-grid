@@ -27,6 +27,7 @@ import {
   type DockerJobQueueArgs,
   DockerRunPhase,
   type Volume,
+  type WorkdirFile,
   type WorkerJobQueueItem,
 } from "./types.ts";
 
@@ -293,7 +294,9 @@ export class DockerJobQueue {
     }
   }
 
-  private startPeriodicRegistration() {
+  // Restarted on every new connection: losing one stops it (see stopPeriodicRegistration)
+  public startPeriodicRegistration() {
+    this.stopPeriodicRegistration();
     // Re-register so the server always knows about this worker, which matters
     // after a clean server restart.
     //
@@ -893,6 +896,7 @@ export class DockerJobQueue {
       }
       let volumes: Volume[];
       let outputsDir: string;
+      let workdirFiles: WorkdirFile[];
       try {
         if (isRemoved()) {
           return;
@@ -909,6 +913,7 @@ export class DockerJobQueue {
         queueItem.phase = DockerRunPhase.Building;
         volumes = volumesResult.volumes;
         outputsDir = volumesResult.outputsDir;
+        workdirFiles = volumesResult.workdirFiles;
       } catch (err) {
         console.error(`${this.workerIdShort} 💥 `, err);
         if (isRemoved()) {
@@ -975,6 +980,7 @@ export class DockerJobQueue {
         env: definition.env,
         shmSize: definition.shmSize,
         volumes,
+        workdirFiles,
         outputsDir,
         deviceRequests,
         maxJobDuration: definition?.maxDuration

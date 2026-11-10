@@ -1,4 +1,4 @@
-import { type DataRef, DataRefType } from "@metapages/compute-queues-shared";
+import { type DataRef, DataRefType, formatContentDisposition } from "@metapages/compute-queues-shared";
 import { db } from "@/db/db.ts";
 import { getDownloadPresignedUrl } from "@/routes/api/v1/download.ts";
 import type { Context } from "hono";
@@ -11,7 +11,9 @@ export const getJobInputsHandler = async (c: Context) => {
       c.status(400);
       return c.text("Missing jobId");
     }
-    const filename = c.req.path.split("/inputs/").splice(1).join("/inputs/");
+    // This handler serves both /inputs/<name> and /files/<name>
+    const folder = /^(?:\/q\/[^/]+)?\/j\/[^/]+\/files\//.test(c.req.path) ? "files" : "inputs";
+    const filename = c.req.path.split(`/${folder}/`).splice(1).join(`/${folder}/`);
 
     if (!filename) {
       c.status(400);
@@ -26,7 +28,7 @@ export const getJobInputsHandler = async (c: Context) => {
     }
 
     // Look for the file in inputs
-    const inputs = jobDefinition.inputs;
+    const inputs = jobDefinition[folder];
     if (!inputs || !inputs[filename]) {
       c.status(404);
       return c.text(`Input file '${filename}' not found`);
@@ -57,7 +59,7 @@ export const getJobInputsHandler = async (c: Context) => {
           return new Response(bytes, {
             headers: {
               "Content-Type": mime.getType(filename) || "application/octet-stream",
-              "Content-Disposition": `attachment; filename="${filename.split("/").pop()}"`, // optional
+              "Content-Disposition": formatContentDisposition(filename), // optional
               "Content-Length": bytes.length.toString(),
             },
           });

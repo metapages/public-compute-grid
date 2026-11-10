@@ -4,8 +4,10 @@ import {
   DataRefType,
   type DockerJobDefinitionInputRefs,
   type EnqueueJob,
+  formatJobUrlPath,
   type InputsRefs,
-  shaDockerJob,
+  mergeRunInputs,
+  prepareEnqueueJob,
 } from "@metapages/compute-queues-shared";
 import { nanoid } from "nanoid";
 import { buildShortViewUrl, buildViewUrl } from "../util/view-url.ts";
@@ -47,9 +49,22 @@ export const submitJobTool: Tool = {
         description: "Command to execute in the container",
         default: "echo 'Hello World'",
       },
+      files: {
+        type: "object",
+        description:
+          "The job's own files (scripts, config) as key-value pairs where key is the path and value is file content. " +
+          "A relative path is under the container's working directory, an absolute path is used as is. " +
+          "Part of the job's id.",
+        additionalProperties: {
+          type: "string",
+        },
+        default: {},
+      },
       inputs: {
         type: "object",
-        description: "Input files as key-value pairs where key is filename and value is file content",
+        description:
+          "The data this run processes, as key-value pairs where key is filename and value is file content. " +
+          "Written to /inputs. Not part of the job's id: the same job can run on many inputs.",
         additionalProperties: {
           type: "string",
         },
@@ -91,6 +106,7 @@ export async function handleSubmitJob(
       dockerfile,
       buildContext,
       command = "echo 'Hello World'",
+      files = {},
       inputs = {},
       env = {},
       maxDuration = "30m",
@@ -105,10 +121,10 @@ export async function handleSubmitJob(
       throw new Error("Must specify either 'image', 'gitRepo', or 'dockerfile'");
     }
 
-    // Convert inputs to DataRef format
-    const inputsRefs: InputsRefs | undefined = inputs
-      ? Object.fromEntries(
-        Object.entries(inputs).map(([key, value]) => [
+    // Convert files and inputs to DataRef format
+    const toRefs = (contents: Record<string, unknown>): InputsRefs =>
+      Object.fromEntries(
+        Object.entries(contents).map(([key, value]) => [
           key,
           {
             // A DataRef value is a string; stringify anything else so a
@@ -117,13 +133,12 @@ export async function handleSubmitJob(
             type: DataRefType.utf8,
           },
         ]),
-      )
-      : undefined;
+      );
 
     // Build job definition following DockerJobDefinitionInputRefs structure
     const jobDefinition: DockerJobDefinitionInputRefs = {
       command,
-      inputs: inputsRefs,
+      files: toRefs(files),
       env,
       maxDuration,
     };
@@ -149,28 +164,25 @@ export async function handleSubmitJob(
       jobDefinition.image = image;
     }
 
-    // Generate job ID
-    const jobId = await shaDockerJob(jobDefinition);
-
-    // Create EnqueueJob object
-    const enqueuedJob: EnqueueJob = {
-      id: jobId,
+    // Create EnqueueJob object, deriving the job and run ids
+    const enqueuedJob: EnqueueJob = await prepareEnqueueJob({
       definition: jobDefinition,
+      inputs: toRefs(inputs),
       control: {
         namespace,
       },
-    };
+    });
 
     const result = await client.submitJob(queue, enqueuedJob);
 
     // Short form for humans; the embedded form is the fallback for anywhere the
     // definition has not been persisted, and stays useful because it is
     // self-contained and survives the job data expiring.
-    const viewUrl = buildShortViewUrl(client.publicUrl, result.jobId, queue);
-    const selfContainedUrl = buildViewUrl(client.publicUrl, jobDefinition, queue);
+    const viewUrl = buildShortViewUrl(client.publicUrl, formatJobUrlPath(enqueuedJob), queue);
+    const selfContainedUrl = buildViewUrl(client.publicUrl, mergeRunInputs(enqueuedJob), queue);
     const resultUrl = `${client.publicUrl.replace(/\/$/, "")}/q/${
       encodeURIComponent(queue)
-    }/j/${result.jobId}/result.json`;
+    }/j/${enqueuedJob.id}/result.json`;
 
     return {
       content: [
@@ -179,7 +191,10 @@ export async function handleSubmitJob(
           text: JSON.stringify(
             {
               success: true,
-              jobId: result.jobId,
+              // the run: what the other tools take. canonicalJobId is the job without its inputs.
+              jobId: enqueuedJob.id,
+              canonicalJobId: result.jobId,
+              inputsHash: enqueuedJob.inputsHash,
               queue,
               viewUrl,
               selfContainedUrl,

@@ -49,6 +49,18 @@ const app = createApp({ workerVersion: mod.version });
 const handle = async (request: Request): Promise<Response> =>
   (await app.fetch(request)) ?? new Response("Not found", { status: 404 });
 
+const isCopy = (request: Request): boolean =>
+  request.method === "POST" && /^\/j\/[^/]+\/copy$/.test(new URL(request.url).pathname);
+
+/** A copy has no queue in its path: it enqueues on the queue named in the body. */
+const queueForCopy = async (request: Request): Promise<string | undefined> => {
+  if (!isCopy(request)) {
+    return undefined;
+  }
+  const body = await request.clone().json().catch(() => undefined) as { queue?: string } | undefined;
+  return body?.queue;
+};
+
 /**
  * Which queue's Durable Object owns this request, if any. Mirrors the queue
  * routes in handlerHono.ts and handlerWs.ts: /q/:queue/... plus the deprecated
@@ -93,7 +105,7 @@ const serveJobPage = async (env: Env, request: Request): Promise<Response> => {
 export class QueueDurableObject extends QueueDurableObjectBase<Env> {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const queueName = queueForPath(url.pathname);
+    const queueName = queueForPath(url.pathname) ?? await queueForCopy(request);
     if (!queueName) {
       return new Response(`Not a queue path: ${url.pathname}`, { status: 404 });
     }
@@ -168,13 +180,12 @@ const route = async (request: Request, env: Env): Promise<Response> => {
   }
 
   // Copying a job enqueues it on the queue named in the body
-  const copy = url.pathname.match(/^\/j\/[^/]+\/copy$/);
-  if (copy && request.method === "POST") {
-    const body = await request.clone().json().catch(() => undefined) as { queue?: string } | undefined;
-    if (!body?.queue) {
+  if (isCopy(request)) {
+    const copyQueue = await queueForCopy(request);
+    if (!copyQueue) {
       return Response.json({ error: "Missing queue" }, { status: 400 });
     }
-    return toQueue(env, body.queue, request);
+    return toQueue(env, copyQueue, request);
   }
 
   if (url.pathname === "/mcp") {

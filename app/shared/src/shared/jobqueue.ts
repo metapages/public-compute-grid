@@ -53,6 +53,7 @@ import {
   getWorkerColorizedString,
   isJobDeletedOrRemoved,
   isJobOkForSending,
+  prepareEnqueueJob,
   resolveMostCorrectJob,
   setJobStateRemoved,
   setJobStateRunning,
@@ -1405,6 +1406,7 @@ export class BaseDockerJobQueue {
       );
     }
 
+    enqueued = await prepareEnqueueJob(enqueued);
     const jobId = enqueued.id;
 
     // A finished record whose results are gone (isFinishedJobMissingResults)
@@ -1455,6 +1457,9 @@ export class BaseDockerJobQueue {
       );
       return undefined;
     }
+    // Only now: a refused submission must not move a name to its version, or
+    // record a run that does not exist.
+    await this.db.queueJobRecordIdentity(enqueued);
     this.state.jobs[jobId] = inMemoryJob;
     this.checkForSourceConflicts();
 
@@ -1665,7 +1670,11 @@ export class BaseDockerJobQueue {
                   workerIdColorized || "unknown"
                 } ✨ 🔗 Worker RE-registering (so broadcasting) `,
               );
+              // This may be a reconnect: the worker now lives on this socket. The old
+              // socket's close can arrive after this, and must not remove the worker.
               this.workers.myWorkers[indexOfCurrent].registration = newWorkerRegistration;
+              this.workers.myWorkers[indexOfCurrent].connection = connection.socket;
+              this.workers.myWorkers[indexOfCurrent].emitter = emitter;
               if (this.debug) {
                 console.log(`🔍 [DEBUG] Server worker ${workerIdColorized} re-registered`);
               }

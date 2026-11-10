@@ -29,9 +29,13 @@ Consequences that surprise people, and that you should preserve when editing:
 
 - **No auth.** Security is URL obscurity — a queue name nobody can guess is a private queue. Do not add auth assumptions
   to route handlers.
-- **Job id = hash of the definition** (`shaDockerJob` in `app/shared/src/shared/jobtools.ts`). Submitting the same
+- **Job id = hash of the definition** (`shaDockerJob` in `app/shared/src/shared/util.ts`). Submitting the same
   definition twice is deduplicated to one job, and its cached result comes straight back. Anything that must produce a
   distinct job has to change the definition.
+- **Run = job + inputs** (`prepareEnqueueJob`). `EnqueueJob.inputs` are not part of the job id. `EnqueueJob.id` is the
+  run id, and is what the queue, results and logs are keyed by; a stored run is its definition with the inputs folded
+  into `definition.inputs`, so the state machine and workers need nothing else. `/j/<job>?v=&i=` is turned into the run
+  id by `makeJobUrlMiddleware`.
 - **The API stores no compute.** It is a coordination layer (D1 in production, Deno KV in the docker stacks) plus S3
   blobs. All execution happens on workers that other people own.
 - **Data expires** (~1 month in production). Nothing here is durable storage.

@@ -3,9 +3,9 @@
  *
  *   1. Embedded (long): `/#?job=<base64-json>&queue=<q>` — the whole definition
  *      lives in the hash. This is the editable, self-contained form.
- *   2. Short:           `/j/<jobId>#?queue=<q>` — only the sha256 id is in the
- *      path; the definition is fetched from the server by id at boot (see
- *      hydrateShortJobFromPath, called from index.tsx) and stashed here.
+ *   2. Short:           `/j/<jobId>[?v=<version>&i=<inputs>]#?queue=<q>` — only
+ *      the ids are in the URL; the definition is fetched from the server at boot
+ *      (see hydrateShortJobFromPath, called from index.tsx) and stashed here.
  *
  * `useJobDefinitionParam()` is a drop-in for `useHashParamJson("job")` that
  * reads from whichever form is active. The MCP server's `submit_job` returns the
@@ -26,6 +26,8 @@ interface ShortJobStore {
   // URL mode. Its presence is what flips reads/writes into short-URL behaviour.
   shortJobId: string | undefined;
   shortJobDefinition: DockerJobDefinitionParamsInUrlHash | undefined;
+  // The page was opened at a job URL that has nothing behind it
+  shortJobNotFound: boolean;
   setShortJob: (
     shortJobId: string | undefined,
     shortJobDefinition: DockerJobDefinitionParamsInUrlHash | undefined,
@@ -35,6 +37,7 @@ interface ShortJobStore {
 export const useShortJobStore = create<ShortJobStore>(set => ({
   shortJobId: undefined,
   shortJobDefinition: undefined,
+  shortJobNotFound: false,
   setShortJob: (shortJobId, shortJobDefinition) => set({ shortJobId, shortJobDefinition }),
 }));
 
@@ -59,13 +62,14 @@ export const hydrateShortJobFromPath = async (): Promise<boolean> => {
     return false;
   }
   try {
-    const resp = await fetch(`${window.location.origin}/j/${jobId}/definition.json`);
-    if (!resp.ok) {
-      return false;
-    }
-    const json = await resp.json();
+    // `v` and `i` go straight through: the server resolves them to the run
+    const resp = await fetch(`${window.location.origin}/j/${jobId}/definition.json${window.location.search}`);
+    const json = resp.ok ? await resp.json() : undefined;
     const definition = json?.data as DockerJobDefinitionParamsInUrlHash | undefined;
     if (!definition) {
+      if (resp.status === 404 || resp.ok) {
+        useShortJobStore.setState({ shortJobNotFound: true });
+      }
       return false;
     }
     useShortJobStore.getState().setShortJob(jobId, definition);

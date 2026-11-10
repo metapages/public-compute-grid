@@ -7,5 +7,6 @@ export * from "./shared/jobqueue.ts";
 export * from "./shared/db.ts";
 export * from "./shared/constants.ts";
 export * from "./shared/stream-handler.ts";
+export * from "./shared/job-url.ts";
 export * from "./shared/env.ts";
 export * from "./shared/workerVersions.ts";
