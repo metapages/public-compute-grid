@@ -250,6 +250,55 @@ Deno.test("contract: logs bigger than a store value are kept after the job finis
   }));
 });
 
+type QueueStatus = { localWorkers?: Record<string, { queue?: Record<string, unknown> }> };
+
+/** Workers connected to this server that say they are running the job right now */
+const workersRunningJob = async (jobId: string): Promise<string[]> => {
+  const { body } = await getJson<QueueStatus>(`/q/${QUEUE_ID}/status`);
+  return Object.entries(body?.localWorkers ?? {})
+    .filter(([, worker]) => worker?.queue?.[jobId])
+    .map(([workerId]) => workerId);
+};
+
+Deno.test("contract: a finished job is not run a second time", async () => {
+  // #346: a broadcast from before the server saw the worker's Finished still
+  // said Running on that worker, and the worker started the job again. Count
+  // executions, not log lines: whether a second run's output reaches the stored
+  // log depends on timing, so it can run twice with a clean log.
+  // Only a deployment with real latency between worker and server opens the
+  // window (`just test-url <url>`); against a local-mode worker this passes either way.
+  // It hit about one job in four there, so run a few.
+  const runs = 4;
+  const settleMs = 10_000;
+  await Promise.all(Array.from({ length: runs }, async () => {
+    const marker = nonce();
+    // Each run prints an id only that run can know
+    const { jobId } = await submitJob(
+      `sh -c 'echo "${marker}-execution-$(cat /proc/sys/kernel/random/uuid)"'`,
+      `contract-once-${marker}`,
+    );
+    const events = await readSse(`${API_URL}/q/${QUEUE_ID}/j/${jobId}/stream`);
+    assertEquals((events.find((e) => e.event === "final")?.data as { reason: string })?.reason, "Success");
+
+    // A worker drops a job from its own queue before reporting it Finished, so
+    // any worker listing it from here on is running it again. A re-run starts
+    // within about a second and takes about as long again: watch past that.
+    const deadline = Date.now() + settleMs;
+    while (Date.now() < deadline) {
+      const workers = await workersRunningJob(jobId);
+      assertEquals(workers, [], `finished job ${jobId} is running again on ${workers.join(", ")}`);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    const { status, body } = await getJson<LogsResponse>(`/q/${QUEUE_ID}/j/${jobId}/run-logs.json`);
+    assertEquals(status, 200);
+    const executions = new Set(
+      body.data.map((l) => l[0]).join("").split("\n").filter((l) => l.startsWith(`${marker}-execution-`)),
+    );
+    assertEquals(executions.size, 1, `the job ran ${executions.size} times: ${JSON.stringify([...executions])}`);
+  }));
+});
+
 Deno.test("contract: namespaces.json", { ignore: remoteOnly }, async () => {
   const marker = nonce();
   const namespace = `contract-ns-${marker}`;

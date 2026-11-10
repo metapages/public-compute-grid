@@ -3,7 +3,7 @@ import parseDuration from "parse-duration";
 import { config } from "/@/config.ts";
 import { ensureIsolateNetwork } from "/@/docker/network.ts";
 import { convertIOToVolumeMounts, getOutputs } from "/@/queue/IO.ts";
-import { convertStringToDockerCommand, getDockerFiltersForJob } from "/@/queue/utils.ts";
+import { convertStringToDockerCommand, getDockerFiltersForJob, gpuIndicesFromDeviceRequests } from "/@/queue/utils.ts";
 
 import * as computeQueuesShared from "@metapages/compute-queues-shared";
 import {
@@ -12,7 +12,7 @@ import {
   getJobColorizedString,
   getWorkerColorizedString,
   type InMemoryDockerJob,
-  resolvePreferredWorker,
+  isJobClaimedByPreferredOtherWorker,
 } from "@metapages/compute-queues-shared";
 
 import mod from "../../mod.json" with { type: "json" };
@@ -61,9 +61,27 @@ export class DockerJobQueue {
   private lastLoggedJobStateSignature: string = "";
   /** Jobs we have already explained we cannot claim, so the reason is logged once */
   private unclaimableJobsLogged = new Set<string>();
+  /**
+   * Jobs this worker has finished and reported, keyed by id, holding the
+   * Finished state change we sent. Until the server reflects that, its
+   * broadcasts still say the job is Running on us, and with no local entry
+   * that looks exactly like a job we lost in a restart: without this record
+   * _claimJobs would run the job a second time (#346). Cleared as soon as the
+   * server says anything other than "Running on us" for the id, so a genuine
+   * resubmission of the same id can be claimed again.
+   */
+  finishedAndReported = new Map<string, computeQueuesShared.WebsocketMessageWorkerToServer>();
+  /**
+   * Set while this worker is in an --auto-update handover. In every handover
+   * state the worker claims nothing: a successor ("standby") waits for its
+   * predecessor, which shares its worker id, to stop claiming; a predecessor
+   * ("draining", "retiring") is on its way out. Running jobs are untouched.
+   */
+  handover: computeQueuesShared.WorkerHandoverState | undefined;
 
   constructor(args: DockerJobQueueArgs) {
-    const { sender, cpus, gpus, id, maxJobDuration, queue, jobDefinitions } = args;
+    const { sender, cpus, gpus, id, maxJobDuration, queue, jobDefinitions, handover } = args;
+    this.handover = handover;
     this.cpus = cpus;
     this.gpus = gpus;
     this.sender = sender;
@@ -219,6 +237,8 @@ export class DockerJobQueue {
       id: this.workerId,
       cpus: this.cpus,
       gpus: this.gpus,
+      version: Version,
+      handover: this.reportedHandover(),
       queue: Object.fromEntries(
         Object.entries(this.queue).map(([key, item]) => {
           return [
@@ -351,10 +371,86 @@ export class DockerJobQueue {
       this.gotFirstCompleteJobState = true;
     }
 
-    if (this.gotFirstCompleteJobState && !this.performedInitialContainerCheckAfterJobState) {
-      this.performedInitialContainerCheckAfterJobState = true;
-      await this.killOrphanedJobs();
-      await this.checkForLocallyRunningJobs();
+    await this.initialContainerCheck();
+  }
+
+  /**
+   * Once, after the first full job state: kill containers nobody owns. Not
+   * while in a handover: a successor in standby shares its predecessor's
+   * worker id, so the predecessor's job containers look like ours-but-unknown
+   * and would be killed.
+   */
+  private async initialContainerCheck() {
+    if (this.handover || !this.gotFirstCompleteJobState || this.performedInitialContainerCheckAfterJobState) {
+      return;
+    }
+    this.performedInitialContainerCheckAfterJobState = true;
+    await this.killOrphanedJobs();
+    await this.checkForLocallyRunningJobs();
+  }
+
+  /** Stop claiming jobs, for an --auto-update handover. Running jobs carry on. */
+  enterHandover(state: computeQueuesShared.WorkerHandoverState) {
+    if (this.handover !== state) {
+      console.log(`${this.workerIdShort} 🔁 handover: ${state} (not claiming jobs)`);
+    }
+    this.handover = state;
+  }
+
+  /**
+   * Leave the handover and claim jobs again: a successor taking over, or a
+   * predecessor whose upgrade was abandoned. A clean handover leaves no jobs
+   * behind; if the predecessor died with jobs, the server still lists them as
+   * running on this worker id and they are picked up like after any restart
+   * (a still-running container is reattached, see dockerJobExecute).
+   */
+  async exitHandover() {
+    if (!this.handover) {
+      return;
+    }
+    console.log(`${this.workerIdShort} 🔁 handover over (was ${this.handover}), claiming jobs`);
+    this.handover = undefined;
+    this.register();
+    this._checkRunningJobs();
+    await this._claimJobs();
+    await this.initialContainerCheck();
+  }
+
+  runningJobCount(): number {
+    return Object.keys(this.queue).length;
+  }
+
+  /**
+   * The handover state as the queue should see it. "retiring" tells the
+   * successor to stop this worker, which is only safe with no jobs: a job
+   * still running or uploading its outputs would be cut off. So while any job
+   * is here, a retiring worker still reports "draining".
+   */
+  reportedHandover(): computeQueuesShared.WorkerHandoverState | undefined {
+    if (this.handover === "retiring" && this.runningJobCount() > 0) {
+      return "draining";
+    }
+    return this.handover;
+  }
+
+  /**
+   * The GPU devices an already running container for this job was created
+   * with, so a job picked up again after a restart keeps its device in the
+   * allocation table instead of being given (and double-booking) another.
+   */
+  async findRunningJobGpuIndices(jobId: string): Promise<number[] | undefined> {
+    try {
+      const container = await getRunningContainerForJob({ jobId, workerId: this.workerId });
+      if (!container) {
+        return undefined;
+      }
+      const info = await container.inspect();
+      return gpuIndicesFromDeviceRequests(info.HostConfig?.DeviceRequests);
+    } catch (err) {
+      console.log(
+        `${this.workerIdShort} ${getJobColorizedString(jobId)} could not read the running container's GPUs: ${err}`,
+      );
+      return undefined;
     }
   }
 
@@ -402,6 +498,16 @@ export class DockerJobQueue {
     //   }
     // });
 
+    // Once the server has stopped saying a job we finished is running on us,
+    // the record has done its job. Anything after that (Queued again, Running
+    // elsewhere, gone) is a new life for the id.
+    for (const jobId of [...this.finishedAndReported.keys()]) {
+      const apiJob = this.apiQueue[jobId];
+      if (apiJob?.state !== DockerJobState.Running || apiJob.worker !== this.workerId) {
+        this.finishedAndReported.delete(jobId);
+      }
+    }
+
     // Prefetch the job definitions for the jobs in the queue
     // this will also only prefetch the jobs that are not already in the cache
     this.jobDefinitions.prefetch(Object.keys(jobStates));
@@ -422,7 +528,19 @@ export class DockerJobQueue {
     for (const [locallyRunningJobId, locallyRunningJob] of Object.entries(this.queue)) {
       // do we have local jobs the server doesn't even know about? This should never happen
       // Maybe it could be in the case where the browser disconnected and you want the jobs to keep going
-      if (!this.apiQueue[locallyRunningJobId] || this.apiQueue[locallyRunningJobId].state === DockerJobState.Finished) {
+      const apiJob = this.apiQueue[locallyRunningJobId];
+      if (apiJob?.state === DockerJobState.Finished && apiJob.worker && apiJob.worker !== this.workerId) {
+        // Another worker already finished it: our copy can only duplicate the
+        // work and its side effects, so there is nothing to wait for.
+        console.log(
+          `${this.workerIdShort} ${getJobColorizedString(locallyRunningJobId)} finished elsewhere by ${
+            getWorkerColorizedString(apiJob.worker)
+          }, killing our version`,
+        );
+        this._killJobAndIgnore(locallyRunningJobId, `finished by worker ${apiJob.worker}`);
+        continue;
+      }
+      if (!apiJob || apiJob.state === DockerJobState.Finished) {
         // we can only kill the job if we know it's not running on the server
         // if (isAllJobs) {
         console.log(
@@ -518,53 +636,29 @@ export class DockerJobQueue {
         case DockerJobState.Running:
           // good!
           // except if another worker has taken it, then kill ours (server is dictator)
-          if (
-            serverJobState.worker !== this.workerId
-          ) {
-            const preferredWorker = resolvePreferredWorker(
-              this.workerId,
-              serverJobState.worker,
+          if (serverJobState.worker === this.workerId) {
+            break;
+          }
+          if (isJobClaimedByPreferredOtherWorker(serverJobState, this.workerId)) {
+            // Kill now, not after a delay: the server resolves two Running
+            // claims with the same resolvePreferredWorker, so it never hands
+            // the job back to us while the preferred worker has it. Waiting
+            // just lets a short job run to completion twice (#330). If our
+            // container has not started yet, killing here means it never does.
+            console.log(
+              `${this.workerIdShort} ${
+                getJobColorizedString(locallyRunningJobId)
+              } running, but elsewhere also, and preferred there: ${
+                getWorkerColorizedString(serverJobState.worker)
+              }. Killing our version (phase=${locallyRunningJob.phase})`,
             );
-            if (preferredWorker === this.workerId) {
-              console.log(
-                `${this.workerIdShort} ${
-                  getJobColorizedString(locallyRunningJobId)
-                } running, but elsewhere apparently ${
-                  getWorkerColorizedString(serverJobState.worker)
-                }. We are keeping ours since we are preferred`,
-              );
-            } else {
-              console.log(
-                `${this.workerIdShort} ${
-                  getJobColorizedString(locallyRunningJobId)
-                } running, but elsewhere also, and preferred there: ${
-                  getWorkerColorizedString(serverJobState.worker)
-                }. setInterval to check then maybe kill`,
-              );
-              // Do not remove immediately, because there might be a race condition
-              setTimeout(() => {
-                if (!this.queue[locallyRunningJobId] || !this.apiQueue[locallyRunningJobId]) {
-                  // gone!
-                  return;
-                }
-                const isRunningElsewhereStill = this.apiQueue[locallyRunningJobId].state === DockerJobState.Running &&
-                  this.apiQueue[locallyRunningJobId].worker !== this.workerIdShort;
-                const preferredWorkerAfterSomeTime = resolvePreferredWorker(
-                  this.workerId,
-                  this.apiQueue[locallyRunningJobId].worker,
-                );
-                if (isRunningElsewhereStill && preferredWorkerAfterSomeTime !== this.workerId) {
-                  console.log(
-                    `${this.workerIdShort} ${
-                      getJobColorizedString(locallyRunningJobId)
-                    } after some time, job is still preferred by ${
-                      getWorkerColorizedString(this.apiQueue[locallyRunningJobId].worker)
-                    } , so killing our version`,
-                  );
-                  this._killJobAndIgnore(locallyRunningJobId);
-                }
-              }, ms("6s") as number);
-            }
+            this._killJobAndIgnore(locallyRunningJobId, `claimed by preferred worker ${serverJobState.worker}`);
+          } else {
+            console.log(
+              `${this.workerIdShort} ${getJobColorizedString(locallyRunningJobId)} running, but elsewhere apparently ${
+                getWorkerColorizedString(serverJobState.worker)
+              }. We are keeping ours since we are preferred`,
+            );
           }
           break;
       }
@@ -593,6 +687,10 @@ export class DockerJobQueue {
       return;
     }
 
+    if (this.handover) {
+      return;
+    }
+
     // Set running flag
     this._isClaimingJobs = true;
     try {
@@ -617,6 +715,18 @@ export class DockerJobQueue {
 
         // check docker if they are?
         for (const runningJobId of jobsServerSaysAreRunningOnMe) {
+          const finishedMessage = this.finishedAndReported.get(runningJobId);
+          if (finishedMessage && !this.queue[runningJobId]) {
+            // A stale broadcast from before the server saw our Finished, not a
+            // job we lost. Remind the server instead of running it again.
+            console.log(
+              `${this.workerIdShort} 🎳 _claimJobs runningJobId=${
+                getJobColorizedString(runningJobId)
+              } server says running on me but I already finished it, resending Finished`,
+            );
+            this.sender(finishedMessage);
+            continue;
+          }
           if (!this.queue[runningJobId]) {
             console.log(
               `${this.workerIdShort} 🎳 _claimJobs runningJobId=${
@@ -626,7 +736,15 @@ export class DockerJobQueue {
             try {
               const definition = await this.jobDefinitions.get(runningJobId);
               if (definition) {
-                this._startJob(runningJobId, definition);
+                // Picked up again (a restart with the same worker id): its
+                // container may already hold a GPU, so record that one.
+                const gpuIndices = definition.requirements?.gpus
+                  ? await this.findRunningJobGpuIndices(runningJobId)
+                  : undefined;
+                if (this.queue[runningJobId]) {
+                  continue;
+                }
+                this._startJob(runningJobId, definition, { gpuIndices });
               } else {
                 console.log(
                   `${this.workerIdShort} ${getJobColorizedString(runningJobId)} 🎳 _claimJobs failed to get definition`,
@@ -689,6 +807,12 @@ export class DockerJobQueue {
             );
             continue;
           }
+          // The definition fetch awaited: a state broadcast may have arrived
+          // meanwhile saying another worker already claimed this job. Starting
+          // it anyway would only race that worker (#330).
+          if (this.apiQueue[jobKey]?.state !== computeQueuesShared.DockerJobState.Queued || this.queue[jobKey]) {
+            continue;
+          }
           // (job.history[0].value as computeQueuesShared.StateChangeValueQueued)
           //   .definition;
           // Can I start this job?
@@ -737,7 +861,11 @@ export class DockerJobQueue {
     }
   }
 
-  _startJob(jobId: string, definition: DockerJobDefinitionInputRefs): void {
+  _startJob(
+    jobId: string,
+    definition: DockerJobDefinitionInputRefs,
+    opts?: { gpuIndices?: number[] },
+  ): void {
     console.log(
       `${this.workerIdShort} ${getJobColorizedString(jobId)} starting...`,
     );
@@ -769,34 +897,23 @@ export class DockerJobQueue {
       },
     };
 
+    // This is a new run of the id, so the server saying Running on us is true again
+    this.finishedAndReported.delete(jobId);
+
     // add a placeholder on the queue for this job
-    this.queue[jobId] = {
+    const queueItem: WorkerJobQueueItem = {
       phase: DockerRunPhase.CopyInputs,
       time: valueRunning.time,
       execution: null,
       definition,
       runningMessageToServer,
     };
-    let deviceRequests:
-      | computeQueuesShared.DockerApiDeviceRequest[]
-      | undefined;
-    if (definition.requirements?.gpus) {
-      const deviceIndex = this.getGPUDeviceIndex();
-      this.queue[jobId].gpuIndices = [deviceIndex];
-      deviceRequests = [{
-        Driver: "nvidia",
-        // Count: 1,
-        DeviceIDs: [`${deviceIndex}`],
-        Capabilities: [["gpu"]],
-      }];
-
-      // Log GPU allocation for manual validation
-      console.log(
-        `${this.workerIdShort} ${
-          getJobColorizedString(jobId)
-        } 🎮 GPU allocated: device=${deviceIndex} (from config: ${config.gpuConfig.originalSpec})`,
-      );
-    }
+    this.queue[jobId] = queueItem;
+    // Killed before its container exists (e.g. another worker won the claim
+    // while inputs were copying): _killJobAndIgnore can only remove the queue
+    // entry, so check that this exact entry is still ours before each step.
+    const isRemoved = () => this.queue[jobId] !== queueItem;
+    const deviceRequests = this._allocateGpus(jobId, definition, opts?.gpuIndices);
 
     this.sender(runningMessageToServer);
 
@@ -812,24 +929,27 @@ export class DockerJobQueue {
       let volumes: Volume[];
       let outputsDir: string;
       try {
-        if (!this.queue[jobId]) {
+        if (isRemoved()) {
           return;
         }
-        this.queue[jobId].phase = DockerRunPhase.CopyInputs;
+        queueItem.phase = DockerRunPhase.CopyInputs;
         const volumesResult = await convertIOToVolumeMounts(
           { id: jobId, definition },
           config.server,
           { keepOutputs: !!(await getRunningContainerForJob({ jobId, workerId: this.workerId })) },
         );
-        if (!this.queue[jobId]) {
+        if (isRemoved()) {
           return;
         }
-        this.queue[jobId].phase = DockerRunPhase.Building;
+        queueItem.phase = DockerRunPhase.Building;
         volumes = volumesResult.volumes;
         outputsDir = volumesResult.outputsDir;
       } catch (err) {
         console.error(`${this.workerIdShort} 💥 `, err);
-        // TODO too much code duplication here
+        if (isRemoved()) {
+          // killed meanwhile: the error is ours to ignore, not the job's
+          return;
+        }
         // Delete from our local queue before sending
         // TODO: cache locally before attempting to send
         delete this.queue[jobId];
@@ -849,30 +969,17 @@ export class DockerJobQueue {
           } as computeQueuesShared.DockerRunResultWithOutputs,
         };
 
-        // console.log(
-        //   `${this.workerIdShort} ${jobString} 🤡 SENDINGDockerJobState.Finished reason`,
-        //   valueError.reason,
-        // );
-
-        this.sender({
-          type: computeQueuesShared.WebsocketMessageTypeWorkerToServer.StateChange,
-          payload: {
-            job: jobId,
-            tag: this.workerId,
-            state: computeQueuesShared.DockerJobState.Finished,
-            value: valueError,
-          },
-        });
+        this._reportFinished(jobId, valueError);
         return;
       }
 
-      if (isKilled.value) {
+      if (isKilled.value || isRemoved()) {
         return;
       }
 
       // TODO hook up the durationMax to a timeout
       // TODO add input mounts
-      const workItem = this.queue[jobId];
+      const workItem = queueItem;
       const executionArgs: DockerJobArgs = {
         workItem,
         workerId: this.workerId,
@@ -907,10 +1014,8 @@ export class DockerJobQueue {
       const dockerExecution: DockerJobExecution = dockerJobExecute(
         executionArgs,
       );
-      if (this.queue[jobId]) {
-        this.queue[jobId].execution = dockerExecution;
-      }
-      if (!this.queue[jobId]) {
+      queueItem.execution = dockerExecution;
+      if (isRemoved()) {
         console.log(
           `${this.workerIdShort} ${jobString} after await jobBlob.hash no job in queue so killing`,
         );
@@ -1065,21 +1170,7 @@ export class DockerJobQueue {
           workItem.phase = DockerRunPhase.Ended;
           delete this.queue[jobId];
 
-          // console.log(
-          //   `${this.workerIdShort} ${jobString} 🤡 SENDINGDockerJobState.Finished reason`,
-          //   valueFinished.reason,
-          // );
-
-          this.sender({
-            type: computeQueuesShared.WebsocketMessageTypeWorkerToServer
-              .StateChange,
-            payload: {
-              job: jobId,
-              tag: this.workerId,
-              state: computeQueuesShared.DockerJobState.Finished,
-              value: valueFinished,
-            },
-          });
+          this._reportFinished(jobId, valueFinished);
         },
       ).catch((err: unknown) => {
         workItem.phase = DockerRunPhase.Ended;
@@ -1107,20 +1198,7 @@ export class DockerJobQueue {
           } as computeQueuesShared.DockerRunResultWithOutputs,
         };
 
-        // console.log(
-        //   `${this.workerIdShort} ${jobString} 🤡 SENDINGDockerJobState.Finished reason`,
-        //   valueError.reason,
-        // );
-
-        this.sender({
-          type: computeQueuesShared.WebsocketMessageTypeWorkerToServer.StateChange,
-          payload: {
-            job: jobId,
-            tag: this.workerId,
-            state: computeQueuesShared.DockerJobState.Finished,
-            value: valueError,
-          },
-        });
+        this._reportFinished(jobId, valueError);
       }).finally(() => {
         // I had the queue removal here initially but I wanted
         // to remove the element from the queue before sending to server
@@ -1130,8 +1208,56 @@ export class DockerJobQueue {
   }
 
   /**
+   * Tell the server this worker finished the job, and remember that it did so a
+   * stale "Running on me" broadcast does not start it again (#346). The local
+   * queue entry must already be gone.
+   */
+  _reportFinished(jobId: string, value: computeQueuesShared.StateChangeValueFinished) {
+    const message: computeQueuesShared.WebsocketMessageWorkerToServer = {
+      type: computeQueuesShared.WebsocketMessageTypeWorkerToServer.StateChange,
+      payload: {
+        job: jobId,
+        tag: this.workerId,
+        state: computeQueuesShared.DockerJobState.Finished,
+        value,
+      },
+    };
+    // Record before sending, in case the server's answer comes back before send returns.
+    this.finishedAndReported.set(jobId, message);
+    this.sender(message);
+  }
+
+  /**
    * Kills the container and removes any local state
    */
+  /**
+   * Book this job's GPU, if it needs one: the device its running container
+   * already has (`existing`), otherwise the first free one.
+   */
+  _allocateGpus(
+    jobId: string,
+    definition: DockerJobDefinitionInputRefs,
+    existing?: number[],
+  ): computeQueuesShared.DockerApiDeviceRequest[] | undefined {
+    if (!definition.requirements?.gpus || !this.queue[jobId]) {
+      return undefined;
+    }
+    const deviceIndices = existing && existing.length > 0 ? existing : [this.getGPUDeviceIndex()];
+    this.queue[jobId].gpuIndices = deviceIndices;
+    // Log GPU allocation for manual validation
+    console.log(
+      `${this.workerIdShort} ${getJobColorizedString(jobId)} 🎮 GPU ${
+        existing && existing.length > 0 ? "kept from the running container" : "allocated"
+      }: device=${deviceIndices.join(",")} (from config: ${config.gpuConfig.originalSpec})`,
+    );
+    return [{
+      Driver: "nvidia",
+      // Count: 1,
+      DeviceIDs: deviceIndices.map((index) => `${index}`),
+      Capabilities: [["gpu"]],
+    }];
+  }
+
   _killJobAndIgnore(locallyRunningJobId: string, reason?: string) {
     console.log(
       `${this.workerIdShort} ${getJobColorizedString(locallyRunningJobId)} Killing job (exists in our queue? ${!!this
