@@ -29,6 +29,19 @@ const dockerAvailable = (() => {
   }
 })();
 
+/**
+ * The environment for the test's workers: ours, minus the server config of
+ * whatever stack the tests run alongside. `just app test` exports the compose
+ * stack's blob store (AWS_*) before running these tests, and a local-mode
+ * worker that sees it stores jobs there instead of in its data directory.
+ */
+const workerEnv = () =>
+  Object.fromEntries(
+    Object.entries(Deno.env.toObject()).filter(([name]) =>
+      !/^(AWS_|DENO_KV_|DENO_BROADCAST_|REDIS_URL$|METAPAGE_IO_|LIVE_LOGS_DIRECTORY$|API_URL$|QUEUE_ID$)/.test(name)
+    ),
+  );
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const freePort = () => {
@@ -92,6 +105,8 @@ Deno.test({
           "--no-kill-orphans",
         ],
         cwd: WORKER_DIR,
+        env: workerEnv(),
+        clearEnv: true,
         stdout: "piped",
         stderr: "piped",
         stdin: "null",
@@ -127,8 +142,9 @@ Deno.test({
           },
         }),
       });
-      const { jobId } = await submitted.json();
-      assert(jobId, "the job was not submitted");
+      const submission = await submitted.json();
+      const jobId = submission?.jobId;
+      assert(submitted.ok && jobId, `the job was not submitted: ${submitted.status} ${JSON.stringify(submission)}`);
 
       // Let the job get some way into running, then give the spool its flush
       // interval: the kill below allows nothing else.
