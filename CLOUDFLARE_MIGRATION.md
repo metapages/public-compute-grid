@@ -28,22 +28,23 @@ with no `Deno.*` or Workers-only calls. Only the runtime adapters are runtime-sp
 
 The migration is merged and deployed; what is left lives in its own issues.
 
-| issue | what                                                          | when                             |
-| ----- | ------------------------------------------------------------- | -------------------------------- |
-| #346  | A finished job is started again on the same worker            | **first** — it runs twice        |
-| #330  | A double-claimed job runs to completion twice                 | with #346                        |
-| #342  | Smoke-test each Cloudflare deploy, after it settles           | next: #346 is only visible there |
-| #341  | Run `just test cloudflare` in CI                              | any time                         |
-| #347  | Concurrent first requests to a new queue get a half-built one | any time, small                  |
-| #320  | Delete the Deno Deploy app and the old S3 bucket              | once the domain has settled      |
-| #315  | Worker can go deaf (ping/pong weaknesses)                     | when it next recurs              |
-| #322  | Stricter worker version gate                                  | when it costs                    |
-| #343  | Pre-existing test flakes                                      | when they bite                   |
-| #344  | Worker on Node, one server/worker/CLI program                 | the long-term direction          |
+| issue | what                                                          | when                              |
+| ----- | ------------------------------------------------------------- | --------------------------------- |
+| #330  | A double-claimed job runs to completion twice                 | **first** — it runs twice         |
+| #342  | Smoke-test each Cloudflare deploy, after it settles           | next: #346 was only visible there |
+| #341  | Run `just test cloudflare` in CI                              | any time                          |
+| #347  | Concurrent first requests to a new queue get a half-built one | any time, small                   |
+| #320  | Delete the Deno Deploy app and the old S3 bucket              | once the domain has settled       |
+| #315  | Worker can go deaf (ping/pong weaknesses)                     | when it next recurs               |
+| #322  | Stricter worker version gate                                  | when it costs                     |
+| #343  | Pre-existing test flakes                                      | when they bite                    |
+| #344  | Worker on Node, one server/worker/CLI program                 | the long-term direction           |
 
 Done since this table was written: #317 (deploy token rotated), #321 (docs-only pushes), #314 (two suites on one queue),
 #316 (`container.mtfm.io` is served by the Worker as of 2026-11-07), #318 (0.54.87 published), #319 (Deno Deploy era env
-vars). `just test cloudflare` passes 71/71, and `just test-url https://container.mtfm.io` 9/10 — the failure is #346.
+vars), #346 (a finished job restarted by a stale broadcast). `just test cloudflare` passes 71/71, and
+`just test-url https://container.mtfm.io` passes with a worker that has the #346 fix (that recipe runs the worker from
+this checkout, so it tests the branch's worker against production's server).
 
 ## 0. Integration tests first
 
@@ -315,7 +316,11 @@ the local-mode worker run, and those are development and test targets, not deplo
   `Running` on that worker for about a second, and `_claimJobs` reads "running on me but not local" as a job to restart.
   The late-log append path then faithfully appends a second execution's output. Filed as #346. It needs real round-trip
   latency, so neither `just test cloudflare` nor a local-mode worker shows it: only a deployed stack does, which is the
-  argument for #342.
+  argument for #342. Fixed by having the worker remember the jobs it has finished and reported, and answer a stale
+  `Running` with its `Finished` again instead of a second run. The log line count turned out to be a weak detector: the
+  second run's output does not always reach the stored log, so a job can run twice with exactly 3000 lines. The contract
+  test `a finished job is not run a second time` counts executions instead, by watching `/q/<queue>/status` for a worker
+  that still lists the job after it finished.
 
 - A queue's Durable Object could drop its worker the moment the object was rebuilt, leaving every job Queued:
   `getApiDockerJobQueue` memoizes queues in a module-level map, which is per _isolate_, not per Durable Object. A new
