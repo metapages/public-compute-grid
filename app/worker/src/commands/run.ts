@@ -1,5 +1,6 @@
 import { config, parseGpuSpec } from "/@/config.ts";
 import { prepGpus, runChecksOnInterval } from "/@/docker/utils.ts";
+import { checkConnection, type ClockReading, monotonicNow, PingStats } from "/@/lib/connection-watchdog.ts";
 import { localHandler } from "/@/lib/local-handler.ts";
 import { processes, waitForDocker } from "/@/processes.ts";
 import { clearCache } from "/@/queue/dockerImage.ts";
@@ -329,11 +330,16 @@ export async function connectToServer(
     rws.send(JSON.stringify(message));
   };
 
-  let timeLastPong = Date.now();
-  let _timeLastPing = Date.now();
+  // Silence is measured on the monotonic clock: see connection-watchdog.ts.
+  const connectionTimes = {
+    lastPong: monotonicNow(),
+    lastMessage: monotonicNow(),
+    lastOpen: monotonicNow(),
+  };
+  let _timeLastPing = monotonicNow();
   let consecutivePingFailures = 0;
-  let lastMessageReceived = Date.now();
   let connectionUptime = Date.now();
+  const pingStats = new PingStats(ms("1m") as number);
 
   const kv = await getKv();
 
@@ -376,9 +382,11 @@ export async function connectToServer(
   rws.addEventListener("open", () => {
     console.log(`${getWorkerColorizedString(workerId)} 🚀 connected! ${url} `);
     // This isn't a PING, but it's when we start measuring
-    _timeLastPing = Date.now();
-    timeLastPong = Date.now();
-    lastMessageReceived = Date.now();
+    _timeLastPing = monotonicNow();
+    connectionTimes.lastPong = monotonicNow();
+    connectionTimes.lastMessage = monotonicNow();
+    connectionTimes.lastOpen = monotonicNow();
+    pingStats.onOpen();
     connectionUptime = Date.now();
     consecutivePingFailures = 0;
     dockerJobQueue.register();
@@ -404,14 +412,17 @@ export async function connectToServer(
   // let closed = false;
   // const pingInterval =
   setInterval(() => {
-    if (Date.now() - _timeLastPing < pingInterval()) {
+    if (monotonicNow() - _timeLastPing < pingInterval()) {
       return;
     }
     if (rws.readyState === rws.OPEN) {
-      // console.log("🌳 pinging");
       try {
         rws.send("PING");
-        _timeLastPing = Date.now();
+        _timeLastPing = monotonicNow();
+        const line = pingStats.onPing(_timeLastPing);
+        if (line) {
+          console.log(`${getWorkerColorizedString(workerId)} ${line}`);
+        }
         // Reset failure counter on successful ping
         consecutivePingFailures = 0;
       } catch (err) {
@@ -437,44 +448,38 @@ export async function connectToServer(
   });
 
   const reconnectCheckInterval = ms("3s") as number;
+  let previousReading: ClockReading = { monotonic: monotonicNow(), wall: Date.now() };
   const reconnectCheck = () => {
-    const timeSinceLastPong = Date.now() - timeLastPong;
-    const timeSinceLastMessage = Date.now() - lastMessageReceived;
-    // Tolerate the quiet an idle queue is entitled to: these thresholds have to
-    // sit above the ping cadence, or the worker reconnects on its own silence.
-    const tolerance = silenceTolerance();
+    const now: ClockReading = { monotonic: monotonicNow(), wall: Date.now() };
+    const isOpen = rws.readyState === rws.OPEN;
+    if (isOpen) {
+      connectionTimes.lastOpen = now.monotonic;
+    }
+    const decision = checkConnection({
+      now,
+      previous: previousReading,
+      isOpen,
+      times: connectionTimes,
+      // Tolerate the quiet an idle queue is entitled to: these thresholds have
+      // to sit above the ping cadence, or the worker reconnects on its own
+      // silence.
+      silenceTolerance: silenceTolerance(),
+      // Not tied to busy/idle: a reconnect cycle (connectionTimeout plus
+      // backoff) can take ~12s, longer than the busy silence tolerance.
+      notOpenTolerance: SILENCE_TOLERANCE_IDLE,
+    });
+    previousReading = now;
 
-    if (
-      timeSinceLastPong >= tolerance &&
-      rws.readyState === rws.OPEN
-    ) {
+    if (decision.reconnect) {
       console.log(
-        `🚨 Reconnecting because no PONG since ${humanizeDuration(timeSinceLastPong)} >= ${
-          humanizeDuration(tolerance)
-        }`,
+        `${getWorkerColorizedString(workerId)} 🚨 Reconnecting: ${decision.reason} ` +
+          `[readyState=${rws.readyState}, ${pingStats.summary()}]`,
       );
-      rws.reconnect();
-    } else if (
-      timeSinceLastMessage >= tolerance * 3 &&
-      rws.readyState === rws.OPEN
-    ) {
-      console.log(
-        `🚨 No messages received for ${humanizeDuration(timeSinceLastMessage)}, reconnecting`,
-      );
+      // Give the new attempt a full tolerance to reach OPEN before the
+      // not-OPEN branch fires again.
+      connectionTimes.lastOpen = now.monotonic;
       rws.reconnect();
     }
-
-    // Log connection health every minute
-    // if ((Date.now() % 60000) < 3000) { // Every minute
-    //   console.log(
-    //     `📊 Connection health: uptime=${
-    //       humanizeDuration(Date.now() - connectionUptime)
-    //     }, ` +
-    //       `lastPong=${humanizeDuration(timeSinceLastPong)}, ` +
-    //       `lastMessage=${humanizeDuration(timeSinceLastMessage)}, ` +
-    //       `pingFailures=${consecutivePingFailures}`,
-    //   );
-    // }
 
     setTimeout(reconnectCheck, reconnectCheckInterval);
   };
@@ -485,7 +490,7 @@ export async function connectToServer(
   // Liveness, not activity: this tracks when the socket last carried a
   // JobStates message, so it must start at "now" — starting at 0 makes the
   // watchdog below see ~56 years of silence and reconnect immediately.
-  let timeSinceLastJobStates = Date.now();
+  let timeSinceLastJobStates = monotonicNow();
 
   setInterval(() => {
     // Only while this worker has jobs. A server that is sleeping because the
@@ -494,7 +499,7 @@ export async function connectToServer(
     if (!isBusy()) {
       return;
     }
-    const silence = Date.now() - timeSinceLastJobStates;
+    const silence = monotonicNow() - timeSinceLastJobStates;
     if (silence > SILENCE_TOLERANCE_BUSY * 2) {
       console.log(
         `🚨 Reconnecting because no JobStates since ${humanizeDuration(silence)} >= ${
@@ -508,10 +513,11 @@ export async function connectToServer(
   rws.addEventListener("message", (message: MessageEvent) => {
     try {
       const messageString = message.data.toString();
-      lastMessageReceived = Date.now(); // Update last message time
+      connectionTimes.lastMessage = monotonicNow();
 
       if (messageString.startsWith("PONG")) {
-        timeLastPong = Date.now();
+        connectionTimes.lastPong = monotonicNow();
+        pingStats.onPong();
         const pongedWorkerId = messageString.split(" ")[1];
         if (pongedWorkerId !== workerId) {
           console.log(
@@ -556,7 +562,7 @@ export async function connectToServer(
           // carries no jobs — an idle queue broadcasts `{jobs:{}}` steadily, and
           // only counting non-empty ones left the watchdog reconnecting forever
           // whenever nothing was running.
-          timeSinceLastJobStates = Date.now();
+          timeSinceLastJobStates = monotonicNow();
 
           // if (Object.keys(allJobsStatesPayload?.state?.jobs || {}).length > 0) {
           //   console.log(
@@ -592,7 +598,7 @@ export async function connectToServer(
 
           // See the note in the JobStates case: any broadcast means the socket
           // is alive, empty payload included.
-          timeSinceLastJobStates = Date.now();
+          timeSinceLastJobStates = monotonicNow();
 
           if (!someJobsPayload) {
             console.log({
