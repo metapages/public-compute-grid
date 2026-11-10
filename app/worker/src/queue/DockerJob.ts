@@ -275,7 +275,7 @@ export const dockerJobExecute = (args: DockerJobArgs): DockerJobExecution => {
     }
 
     // Check for existing job container
-    const existingRunningContainer = await getRunningContainerForJob({ jobId: id });
+    const existingRunningContainer = await getRunningContainerForJob({ jobId: id, workerId });
 
     if (isKilled.value) {
       return;
