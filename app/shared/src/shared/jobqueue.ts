@@ -342,6 +342,8 @@ export class BaseDockerJobQueue {
   protected readonly address: string;
   protected readonly addressShortString: string;
   protected readonly serverId: string;
+  /** When this queue instance was built (ms): a rebuilt queue, e.g. after a Durable Object eviction, gets a new one. */
+  protected readonly instanceStartedAt: number = Date.now();
   protected readonly dataDirectory: string;
   protected readonly channel: BroadcastChannel;
   protected readonly channelEmitter: Emitter<BroadcastMessageEvents>;
@@ -742,7 +744,14 @@ export class BaseDockerJobQueue {
       clientCount: this.clients.length,
       queueInfo: {
         address: this.address,
+        // The id this queue instance broadcasts as. On Deno it is the
+        // process's id, shared by every queue the process serves. On
+        // Cloudflare it is generated each time the queue's Durable Object
+        // builds the queue, so together with instanceStartedAt it shows
+        // whether the object was evicted and rebuilt since the last look.
         serverId: this.serverId,
+        // When this queue instance was built (ms since epoch).
+        instanceStartedAt: this.instanceStartedAt,
         // Which cross-instance bus this server is on. "in-isolate" means this
         // server cannot hear any other, which looks exactly like a healthy
         // single-instance deployment until a worker lands somewhere else.
@@ -1665,17 +1674,7 @@ export class BaseDockerJobQueue {
                   workerIdColorized || "unknown"
                 } ✨ 🔗 Worker RE-registering (so broadcasting) `,
               );
-              // A worker that reconnects registers on its new socket before the
-              // old one's close event arrives. Keeping the old socket here meant
-              // that close event (which matches by socket) removed the worker
-              // the moment it came back, while the new socket, which answers
-              // PINGs with the worker's id, never told it so: the worker stayed
-              // connected but unregistered and no job was given to it again.
-              this.workers.myWorkers[indexOfCurrent] = {
-                registration: newWorkerRegistration,
-                connection: connection.socket,
-                emitter,
-              };
+              this.workers.myWorkers[indexOfCurrent].registration = newWorkerRegistration;
               if (this.debug) {
                 console.log(`🔍 [DEBUG] Server worker ${workerIdColorized} re-registered`);
               }

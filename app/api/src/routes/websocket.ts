@@ -8,14 +8,15 @@ export interface WebsocketUrlParameters {
 export const getApiDockerJobQueue = async (
   queue: string,
   // A Cloudflare Durable Object passes periodicWork: false and schedules
-  // maintenance itself, because a timer would keep it resident and billed.
-  opts?: { periodicWork?: boolean },
+  // maintenance itself, because a timer would keep it resident and billed. It
+  // also passes its own serverId, one per queue instance (see queue-do.ts).
+  opts?: { periodicWork?: boolean; serverId?: string },
 ): Promise<ApiDockerJobQueue> => {
   if (!userJobQueues[queue]) {
     // TODO: hydrate queue from some kind of persistence
     // actually the queue should handle that itself
     const jobQueue = new ApiDockerJobQueue({
-      serverId: getServerInstanceId(),
+      serverId: opts?.serverId ?? getServerInstanceId(),
       address: queue,
       periodicWork: opts?.periodicWork,
     });
