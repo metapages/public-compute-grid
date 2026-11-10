@@ -511,6 +511,7 @@ pr-daemon-check:
     just app/worker/test
     just app/shared/test
     just app/cli/test
+    just app/cloudflare/test
     echo "✅ pr-daemon check passed"
 
 # Format all supported files

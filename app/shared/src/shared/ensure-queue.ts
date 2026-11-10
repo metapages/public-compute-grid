@@ -14,14 +14,21 @@
  * on the next call rather than cached. A queue whose setup failed is disposed
  * before the error is passed on: its constructor already opened a broadcast
  * channel (and maybe timers), which would otherwise stay open with no db.
+ *
+ * Any arguments after the queue name are passed on to `create()`. They only
+ * matter to the call that builds the queue: a caller that finds it built, or
+ * still setting up, gets that queue whatever it passed.
  */
-export const makeEnsureQueue = <Q extends { setup(): Promise<unknown>; dispose?(): void }>(
+export const makeEnsureQueue = <
+  Q extends { setup(): Promise<unknown>; dispose?(): void },
+  A extends unknown[] = [],
+>(
   registry: { [queue: string]: Q },
-  create: (queue: string) => Q,
-): (queue: string) => Promise<Q> => {
+  create: (queue: string, ...args: A) => Q,
+): (queue: string, ...args: A) => Promise<Q> => {
   const inFlight = new Map<string, Promise<Q>>();
 
-  return (queue: string): Promise<Q> => {
+  return (queue: string, ...args: A): Promise<Q> => {
     const existing = registry[queue];
     if (existing) {
       return Promise.resolve(existing);
@@ -29,7 +36,7 @@ export const makeEnsureQueue = <Q extends { setup(): Promise<unknown>; dispose?(
     let pending = inFlight.get(queue);
     if (!pending) {
       pending = (async () => {
-        const q = create(queue);
+        const q = create(queue, ...args);
         try {
           await q.setup();
         } catch (err) {

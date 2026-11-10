@@ -7,41 +7,35 @@ export interface WebsocketUrlParameters {
   token: string;
 }
 
-const makeEnsureApiQueue = (periodicWork: boolean | undefined) =>
-  makeEnsureQueue(
-    userJobQueues as { [queue: string]: ApiDockerJobQueue },
-    // TODO: hydrate queue from some kind of persistence
-    // actually the queue should handle that itself
-    (queue) =>
-      new ApiDockerJobQueue({
-        serverId: getServerInstanceId(),
-        address: queue,
-        periodicWork,
-      }),
-  );
+type ApiQueueOptions = { periodicWork?: boolean; serverId?: string };
 
-// One per periodicWork value, since create() only gets the queue name. A
-// process only ever uses one of them: the Deno API never passes the option, a
-// Cloudflare isolate always passes false. As before, a queue that already
-// exists is returned whatever the option.
-const ensureApiQueue = {
-  default: makeEnsureApiQueue(undefined),
-  noPeriodicWork: makeEnsureApiQueue(false),
-};
+const ensureApiQueue = makeEnsureQueue(
+  userJobQueues as { [queue: string]: ApiDockerJobQueue },
+  // TODO: hydrate queue from some kind of persistence
+  // actually the queue should handle that itself
+  (queue: string, opts?: ApiQueueOptions) =>
+    new ApiDockerJobQueue({
+      serverId: opts?.serverId ?? getServerInstanceId(),
+      address: queue,
+      periodicWork: opts?.periodicWork,
+    }),
+);
 
 /**
  * The queue for a name, created on first use. It is only published (and so
  * only handed to any caller) once its setup() has finished; concurrent first
- * calls share that setup.
+ * calls share that setup, and only the call that builds the queue has its
+ * opts applied. As before, a queue that already exists is returned whatever
+ * the opts.
  * https://github.com/metapages/public-compute-grid/issues/347
  */
 export const getApiDockerJobQueue = (
   queue: string,
   // A Cloudflare Durable Object passes periodicWork: false and schedules
-  // maintenance itself, because a timer would keep it resident and billed.
-  opts?: { periodicWork?: boolean },
-): Promise<ApiDockerJobQueue> =>
-  opts?.periodicWork === false ? ensureApiQueue.noPeriodicWork(queue) : ensureApiQueue.default(queue);
+  // maintenance itself, because a timer would keep it resident and billed. It
+  // also passes its own serverId, one per queue instance (see queue-do.ts).
+  opts?: ApiQueueOptions,
+): Promise<ApiDockerJobQueue> => ensureApiQueue(queue, opts);
 
 export async function wsHandlerClient(
   token: string,

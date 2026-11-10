@@ -118,3 +118,21 @@ Deno.test("a queue whose setup failed is disposed, not left half-built", async (
   assertEquals(q.disposed, false);
   assertStrictEquals(registry["q"], q);
 });
+
+Deno.test("extra arguments reach create() for the call that builds the queue", async () => {
+  const registry: { [queue: string]: FakeQueue } = {};
+  const seen: (string | undefined)[] = [];
+  const ensureQueue = makeEnsureQueue(registry, (queue: string, opts?: { tag?: string }) => {
+    seen.push(opts?.tag);
+    return new FakeQueue(queue);
+  });
+
+  const [a, b] = await Promise.all([ensureQueue("q", { tag: "first" }), ensureQueue("q", { tag: "second" })]);
+  assertStrictEquals(a, b);
+  assertEquals(seen, ["first"]);
+
+  // Once removed (as dispose() does), the next caller's arguments build the new one
+  delete registry["q"];
+  await ensureQueue("q", { tag: "third" });
+  assertEquals(seen, ["first", "third"]);
+});
