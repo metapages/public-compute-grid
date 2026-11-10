@@ -105,7 +105,10 @@ output="$(curl -fsS "$api/q/local/j/${job_id}/outputs/result.txt")"
 grep -q "container started" "$data_dir/worker-b.log" && fail "the restarted worker started a container: the job ran again"
 creates="$(sort -u "$data_dir/creates.txt" | grep -c . || true)"
 [ "$creates" = "1" ] || fail "$creates containers were created for the job, expected 1"
-for _ in $(seq 1 10); do
+# Removed by the periodic cleanup once the worker sees the job Finished in the
+# server's state, not when Finished is sent. After a restart that can take until
+# the next full job state (~20s).
+for _ in $(seq 1 60); do
     [ -z "$(docker ps -aq --filter "id=${container}")" ] && break
     sleep 1
 done
