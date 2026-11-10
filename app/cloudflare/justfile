@@ -186,6 +186,21 @@ url env="staging":
 wrangler +args="":
     {{ WRANGLER }} {{ args }}
 
+# Unit tests. `cloudflare:workers` only exists in workerd, so the tests run with
+# an import map that stands in a stub for it. --import-map replaces the workspace
+
+# maps rather than adding to them, so it is the root imports plus this member's.
+test +args="src":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    map=$(mktemp -t cloudflare-test-import-map.XXXXXX)
+    trap 'rm -f "$map"' EXIT
+    jq --arg here "$PWD" -s '{imports: (.[0].imports
+        + (.[1].imports | map_values(if startswith(".") then "\($here)/\(.)" else . end))
+        + {"cloudflare:workers": "\($here)/src/test/cloudflare-workers.ts"})}' \
+        ../../deno.json deno.json > "$map"
+    deno test --allow-all --unstable-kv --import-map "$map" {{ args }}
+
 # Typecheck the Cloudflare entry
 @check:
     deno check src/worker.ts scripts/
