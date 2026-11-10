@@ -33,6 +33,7 @@
 import { DurableObject } from "cloudflare:workers";
 
 import { getApiDockerJobQueue } from "@/routes/websocket.ts";
+import { generateInstanceId } from "@/util/id.ts";
 import { type ApiDockerJobQueue, userJobQueues } from "@/docker-jobs/ApiDockerJobQueue.ts";
 import { WebsocketMessageTypeWorkerToServer } from "@shared/types.ts";
 
@@ -179,7 +180,16 @@ export class QueueDurableObjectBase<Env extends QueueDurableObjectEnv> extends D
       delete userJobQueues[this.queueName];
       // Rehydrates the queue's jobs from the store; periodicWork: false because
       // a timer would keep this object resident (see the file comment).
-      this.queue = await getApiDockerJobQueue(this.queueName, { periodicWork: false });
+      //
+      // A fresh serverId per queue instance, not the isolate's
+      // getServerInstanceId(): an isolate hosts many objects and outlives any
+      // one of them, so an evicted object rebuilt in a warm isolate would keep
+      // the isolate's id and look resident in /status (#338). There is no
+      // cross-isolate bus here, so the id only has to be unique per instance.
+      this.queue = await getApiDockerJobQueue(this.queueName, {
+        periodicWork: false,
+        serverId: generateInstanceId(),
+      });
       await this.restoreSockets();
     } else {
       this.dropStrangers();
