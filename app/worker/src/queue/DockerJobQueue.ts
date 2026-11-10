@@ -936,7 +936,7 @@ export class DockerJobQueue {
         const volumesResult = await convertIOToVolumeMounts(
           { id: jobId, definition },
           config.server,
-          { keepOutputs: !!(await getRunningContainerForJob({ jobId })) },
+          { keepOutputs: !!(await getRunningContainerForJob({ jobId, workerId: this.workerId })) },
         );
         if (isRemoved()) {
           return;
