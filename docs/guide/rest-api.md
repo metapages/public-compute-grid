@@ -152,6 +152,13 @@ sends `final` and closes on a terminal state, or after 30 minutes.
 
 `localWorkerCount === 0` means nothing will run.
 
+`queueInfo` also says which instance of the queue answered:
+
+| Field               | Meaning                                                                                                                                                                                                                                          |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `serverId`          | The id this queue instance broadcasts as. On the hosted API (Cloudflare) each queue lives in its own Durable Object, which is evicted when idle and rebuilt on the next request: every rebuild gets a new `serverId`. A self-hosted Deno API uses one id per process, shared by every queue it serves (`METAPAGE_IO_SERVER_ID`, else random). |
+| `instanceStartedAt` | When this queue instance was built, in ms since the epoch. `now - instanceStartedAt` is how long it has been resident; a new value means it was rebuilt since you last looked.                                                                     |
+
 ## Deprecated
 
 `GET /upload/:key`, `GET /download/:key`, `GET /:queue/status`, `GET /:queue/metrics` — use the `/f/…` and `/q/…` forms

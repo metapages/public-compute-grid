@@ -20,6 +20,7 @@ import { ContainerLabelId, ContainerLabelWorker } from "./constants.ts";
 import { docker } from "./dockerClient.ts";
 import { dockerJobExecute } from "./DockerJob.ts";
 import { getRunningContainerForJob } from "./index.ts";
+import type { FinishedJobsStore } from "./FinishedJobsStore.ts";
 import type { JobDefinitionCache } from "./JobDefinitionCache.ts";
 import {
   type DockerJobArgs,
@@ -72,6 +73,12 @@ export class DockerJobQueue {
    */
   finishedAndReported = new Map<string, computeQueuesShared.WebsocketMessageWorkerToServer>();
   /**
+   * The same record, persisted to the local KV, so it survives a restart and
+   * reaches an --auto-update successor (same worker id, same data directory),
+   * neither of which has this process's memory (#358).
+   */
+  finishedJobs: FinishedJobsStore | undefined;
+  /**
    * Set while this worker is in an --auto-update handover. In every handover
    * state the worker claims nothing: a successor ("standby") waits for its
    * predecessor, which shares its worker id, to stop claiming; a predecessor
@@ -80,8 +87,9 @@ export class DockerJobQueue {
   handover: computeQueuesShared.WorkerHandoverState | undefined;
 
   constructor(args: DockerJobQueueArgs) {
-    const { sender, cpus, gpus, id, maxJobDuration, queue, jobDefinitions, handover } = args;
+    const { sender, cpus, gpus, id, maxJobDuration, queue, jobDefinitions, handover, finishedJobs } = args;
     this.handover = handover;
+    this.finishedJobs = finishedJobs;
     this.cpus = cpus;
     this.gpus = gpus;
     this.sender = sender;
@@ -504,7 +512,7 @@ export class DockerJobQueue {
     for (const jobId of [...this.finishedAndReported.keys()]) {
       const apiJob = this.apiQueue[jobId];
       if (apiJob?.state !== DockerJobState.Running || apiJob.worker !== this.workerId) {
-        this.finishedAndReported.delete(jobId);
+        this._forgetFinished(jobId);
       }
     }
 
@@ -715,7 +723,7 @@ export class DockerJobQueue {
 
         // check docker if they are?
         for (const runningJobId of jobsServerSaysAreRunningOnMe) {
-          const finishedMessage = this.finishedAndReported.get(runningJobId);
+          const finishedMessage = this.queue[runningJobId] ? undefined : await this._getFinished(runningJobId);
           if (finishedMessage && !this.queue[runningJobId]) {
             // A stale broadcast from before the server saw our Finished, not a
             // job we lost. Remind the server instead of running it again.
@@ -897,8 +905,9 @@ export class DockerJobQueue {
       },
     };
 
-    // This is a new run of the id, so the server saying Running on us is true again
-    this.finishedAndReported.delete(jobId);
+    // This is a new run of the id, so the server saying Running on us is true
+    // again, and a record from an earlier run (even one only on disk) is stale
+    this._forgetFinished(jobId, { persisted: true });
 
     // add a placeholder on the queue for this job
     const queueItem: WorkerJobQueueItem = {
@@ -1209,10 +1218,10 @@ export class DockerJobQueue {
 
   /**
    * Tell the server this worker finished the job, and remember that it did so a
-   * stale "Running on me" broadcast does not start it again (#346). The local
-   * queue entry must already be gone.
+   * stale "Running on me" broadcast does not start it again (#346), not even
+   * after a restart (#358). The local queue entry must already be gone.
    */
-  _reportFinished(jobId: string, value: computeQueuesShared.StateChangeValueFinished) {
+  async _reportFinished(jobId: string, value: computeQueuesShared.StateChangeValueFinished) {
     const message: computeQueuesShared.WebsocketMessageWorkerToServer = {
       type: computeQueuesShared.WebsocketMessageTypeWorkerToServer.StateChange,
       payload: {
@@ -1224,7 +1233,62 @@ export class DockerJobQueue {
     };
     // Record before sending, in case the server's answer comes back before send returns.
     this.finishedAndReported.set(jobId, message);
-    this.sender(message);
+    // Persist before sending too: until the server has it, the message only
+    // lives in the socket's send queue, and a restart would lose the result.
+    if (this.finishedJobs) {
+      try {
+        await this.finishedJobs.set(jobId, message);
+      } catch (err) {
+        console.log(`${this.workerIdShort} ${getJobColorizedString(jobId)} 🚨 failed to persist Finished: ${err}`);
+      }
+    }
+    // Callers do not await this, so a throw here would be an unhandled
+    // rejection, which exits the process
+    try {
+      this.sender(message);
+    } catch (err) {
+      console.log(`${this.workerIdShort} ${getJobColorizedString(jobId)} 🚨 failed to send Finished: ${err}`);
+    }
+  }
+
+  /**
+   * The Finished this worker reported for the job, from memory or, after a
+   * restart or handover, from the local KV (then remembered in memory too, so
+   * it is cleared like any other record).
+   */
+  async _getFinished(jobId: string): Promise<computeQueuesShared.WebsocketMessageWorkerToServer | undefined> {
+    const inMemory = this.finishedAndReported.get(jobId);
+    if (inMemory || !this.finishedJobs) {
+      return inMemory;
+    }
+    try {
+      const persisted = await this.finishedJobs.get(jobId);
+      if (persisted) {
+        this.finishedAndReported.set(jobId, persisted);
+        return persisted;
+      }
+    } catch (err) {
+      console.log(`${this.workerIdShort} ${getJobColorizedString(jobId)} 🚨 failed to read persisted Finished: ${err}`);
+    }
+    return undefined;
+  }
+
+  /**
+   * Drop the finished record for the id, in memory and in the local KV. Unless
+   * `persisted`, only a record this process knows of is deleted: one it never
+   * loaded may still be needed by its predecessor or successor, and expires.
+   */
+  _forgetFinished(jobId: string, opts?: { persisted?: boolean }) {
+    const known = this.finishedAndReported.delete(jobId);
+    // Not awaited: sets and deletes go through the one KV handle in order, and
+    // the delete in _startJob is issued long before that run can report.
+    if ((known || opts?.persisted) && this.finishedJobs) {
+      this.finishedJobs.delete(jobId).catch((err) =>
+        console.log(
+          `${this.workerIdShort} ${getJobColorizedString(jobId)} 🚨 failed to delete persisted Finished: ${err}`,
+        )
+      );
+    }
   }
 
   /**

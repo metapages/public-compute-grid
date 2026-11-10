@@ -33,6 +33,7 @@
 import { DurableObject } from "cloudflare:workers";
 
 import { getApiDockerJobQueue } from "@/routes/websocket.ts";
+import { generateInstanceId } from "@/util/id.ts";
 import { type ApiDockerJobQueue, userJobQueues } from "@/docker-jobs/ApiDockerJobQueue.ts";
 import { WebsocketMessageTypeWorkerToServer } from "@shared/types.ts";
 
@@ -179,8 +180,19 @@ export class QueueDurableObjectBase<Env extends QueueDurableObjectEnv> extends D
       delete userJobQueues[this.queueName];
       // Rehydrates the queue's jobs from the store; periodicWork: false because
       // a timer would keep this object resident (see the file comment).
-      this.queue = await getApiDockerJobQueue(this.queueName, { periodicWork: false });
+      //
+      // A fresh serverId per queue instance, not the isolate's
+      // getServerInstanceId(): an isolate hosts many objects and outlives any
+      // one of them, so an evicted object rebuilt in a warm isolate would keep
+      // the isolate's id and look resident in /status (#338). There is no
+      // cross-isolate bus here, so the id only has to be unique per instance.
+      this.queue = await getApiDockerJobQueue(this.queueName, {
+        periodicWork: false,
+        serverId: generateInstanceId(),
+      });
       await this.restoreSockets();
+    } else {
+      this.dropStrangers();
     }
     return this.queue;
   }
@@ -214,6 +226,40 @@ export class QueueDurableObjectBase<Env extends QueueDurableObjectEnv> extends D
         continue;
       }
       await this.attachSocket(socket, attachment);
+    }
+  }
+
+  /**
+   * Drop every socket the queue holds that the platform no longer lists for
+   * this object (#315). Such a socket can still look registered — a worker in
+   * `/status` — while nothing sent to it is delivered, so the worker goes deaf
+   * and its jobs are never requeued. Every socket the queue holds comes
+   * through a shim, so closing the shim is enough for the queue to drop the
+   * worker or client and requeue its jobs.
+   *
+   * Runs on every wake (each entry point calls ensureQueue); a freshly built
+   * queue is consistent by construction, since restoreSockets builds it from
+   * the same list.
+   */
+  private dropStrangers(): void {
+    if (this.shims.size === 0) {
+      return;
+    }
+    const live = new Set<WebSocket>(this.doState.getWebSockets());
+    for (const [socket, shim] of this.shims) {
+      if (live.has(socket)) {
+        continue;
+      }
+      console.error(
+        `Queue ${this.queueName} held a socket this object no longer lists in getWebSockets(), dropping it`,
+      );
+      this.shims.delete(socket);
+      shim.dispatchClose();
+      try {
+        (socket as HibernatableWebSocket).close(1011, "socket no longer held by this object");
+      } catch (_err) {
+        // Expected: it is most likely already closed, or not ours to close.
+      }
     }
   }
 
