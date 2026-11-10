@@ -200,7 +200,7 @@ services:
     ]
     # Notice that the worker connects to api3 while the browser connects to api1
     # This helps check api worker communication
-    command: run --id=test-worker1 --cpus=2 --gpus=0 --api-address=http://api3:8083 --data-directory /tmp/worker-metapage-io-dev1 local1
+    command: run --id=test-worker1-${COMPOSE_PROJECT_NAME} --cpus=2 --gpus=0 --api-address=http://api3:8083 --data-directory ${WORKER_DATA_DIRECTORY:-/tmp/worker-metapage-io-dev1} local1
     build:
       context: .
       dockerfile: app/worker/Dockerfile
@@ -257,7 +257,7 @@ services:
     ]
     # Notice that the worker connects to api2 while the browser connects to api1
     # This helps check api worker communication
-    command: run --id=test-worker2 --cpus=2 --gpus=0 --api-address=http://api2:8082 --data-directory /tmp/worker-metapage-io-dev2 local1
+    command: run --id=test-worker2-${COMPOSE_PROJECT_NAME} --cpus=2 --gpus=0 --api-address=http://api2:8082 --data-directory ${WORKER_DATA_DIRECTORY:-/tmp/worker-metapage-io-dev2}-2 local1
     build:
       context: .
       dockerfile: app/worker/Dockerfile
@@ -392,7 +392,8 @@ services:
       - minio.worker-metaframe.localhost:host-gateway
     restart: always
     volumes:
-      - ./app/.cache/s3:/data
+      # per compose project: two stacks run from one checkout must not share a store
+      - ./app/.cache/s3/${COMPOSE_PROJECT_NAME}:/data
     networks:
       - default
     labels:
@@ -411,7 +412,10 @@ services:
       - --providers.docker=true
       - --providers.docker.endpoint=unix:///var/run/docker.sock
       - --providers.docker.watch=true
-      - --providers.docker.constraints=Label(`custom.label`,`worker-metaframe.localhost`)
+      # Only this compose project's containers: every stack on the docker daemon
+      # carries the same custom.label, and two stacks' routers share names (api,
+      # s3), so an unscoped traefik routes into, or drops routes for, the other.
+      - --providers.docker.constraints=Label(`custom.label`,`worker-metaframe.localhost`) && Label(`com.docker.compose.project`,`${COMPOSE_PROJECT_NAME}`)
       - --providers.docker.exposedbydefault=false
       - --providers.file.filename=/etc/traefik/config.yml
       - --providers.file.watch=true
