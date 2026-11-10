@@ -61,6 +61,12 @@ test-url url:
     done
     cd app/test && QUEUE_ID="${queue}" API_URL={{ url }} deno test --allow-all --unstable-kv src/contract_api_test.ts
 
+# Pass another checkout's app/worker as a control. Needs docker, jq and curl.
+
+# A job whose container exits while its worker is down is collected on restart, not rerun (#361)
+test-worker-restart-exited worker_dir="app/worker":
+    app/test/scripts/worker-restart-collects-exited.sh {{ worker_dir }}
+
 # target: worker (local-mode worker on :8000, queue "local" — the default) |
 # stack (the full compose stack, queue "local1") | prod (no redirect).
 # Symlinked, not copied, so edits are live; cq is pointed at the local stack so
