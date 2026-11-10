@@ -2,9 +2,13 @@ import { assert, assertEquals, assertRejects } from "std/assert";
 
 import { runChecks, waitForSettle } from "./smoke.ts";
 
-/** A stand-in deployment: healthy unless a route is named in `broken` */
-const serve = (broken: Set<string>, { notReadyFor = 0 } = {}) => {
+/**
+ * A stand-in deployment: healthy unless a route is named in `broken`, or in
+ * `hung` (accepts the request and answers nothing until stop())
+ */
+const serve = (broken: Set<string>, { notReadyFor = 0, hung = new Set<string>() } = {}) => {
   const blobs = new Map<string, string>();
+  const { promise: stopped, resolve: release } = Promise.withResolvers<void>();
   let requests = 0;
   const server = Deno.serve({ port: 0, onListen: () => {} }, async (request) => {
     const { pathname } = new URL(request.url);
@@ -12,6 +16,10 @@ const serve = (broken: Set<string>, { notReadyFor = 0 } = {}) => {
     if (requests <= notReadyFor) return new Response("restarting", { status: 503 });
     const route = pathname.startsWith("/f/") ? "/f/" : pathname.startsWith("/q/") ? "/q/" : pathname;
     if (broken.has(route)) return new Response("broken", { status: 500 });
+    if (hung.has(route)) {
+      await stopped;
+      return new Response("too late");
+    }
     if (pathname === "/") {
       return new Response("<!doctype html><html></html>", { headers: { "content-type": "text/html" } });
     }
@@ -37,7 +45,12 @@ const serve = (broken: Set<string>, { notReadyFor = 0 } = {}) => {
     }
     return new Response("not found", { status: 404 });
   });
-  return { url: `http://localhost:${server.addr.port}`, server };
+  // Hung requests would otherwise keep shutdown() waiting forever
+  const stop = () => {
+    release();
+    return server.shutdown();
+  };
+  return { url: `http://localhost:${server.addr.port}`, server: { shutdown: stop } };
 };
 
 Deno.test("smoke: a healthy deployment passes every check", async () => {
@@ -83,6 +96,41 @@ Deno.test("smoke: gives up on a deployment that never answers", async () => {
       Error,
       "not answering",
     );
+  } finally {
+    await server.shutdown();
+  }
+});
+
+Deno.test("smoke: a route that never answers fails its check instead of hanging", async () => {
+  const { url, server } = serve(new Set(), { hung: new Set(["/q/"]) });
+  try {
+    const started = Date.now();
+    const failed = (await runChecks(url, undefined, { requestTimeoutMs: 200 })).filter((r) => !r.ok);
+    assertEquals(failed.map((r) => r.name), ["GET /q/<queue>/status"]);
+    assert(failed[0].error?.includes("no answer after 0.2s"), failed[0].error);
+    assert(Date.now() - started < 5_000);
+  } finally {
+    await server.shutdown();
+  }
+});
+
+Deno.test("smoke: the settle wait gives up on a deployment that never answers", async () => {
+  const { url, server } = serve(new Set(), { hung: new Set(["/q/"]) });
+  try {
+    const logs: string[] = [];
+    await assertRejects(
+      () =>
+        waitForSettle(url, {
+          pollMs: 10,
+          settleMs: 0,
+          timeoutMs: 500,
+          requestTimeoutMs: 100,
+          log: (m) => logs.push(m),
+        }),
+      Error,
+      "timed out",
+    );
+    assert(logs.some((m) => m.includes("timed out")), logs.join("\n"));
   } finally {
     await server.shutdown();
   }

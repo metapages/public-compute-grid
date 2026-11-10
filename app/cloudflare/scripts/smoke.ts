@@ -7,14 +7,39 @@
  * 200, then wait a while more, then check the routes once. No worker is
  * needed, and nothing is enqueued.
  *
- *   deno run --allow-net scripts/smoke.ts <url> [--settle=45] [--timeout=300]
+ * Every request gives up after --request-timeout: a Durable Object stuck
+ * restarting can accept a connection and never answer, and that has to fail
+ * the deploy, not hang it until the Actions job times out hours later.
+ *
+ * Each run writes one tiny blob (deploy-smoke-<nonce>) to the bucket, since
+ * there is no delete route. The bucket's expire-35-days lifecycle rule
+ * (`just cloudflare setup`) removes it with every other blob.
+ *
+ *   deno run --allow-net scripts/smoke.ts <url> [--settle=45] [--timeout=300] [--request-timeout=30]
  */
 
-export type SmokeCheck = { name: string; run: (url: string) => Promise<void> };
+/** fetch, but giving up after the request timeout */
+export type Fetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
+
+export type SmokeCheck = { name: string; run: (url: string, fetch: Fetch) => Promise<void> };
 
 export type SmokeResult = { name: string; ok: boolean; error?: string };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export const DefaultRequestTimeoutMs = 30_000;
+
+/** fetch that aborts after timeoutMs, including reading the body */
+const timedFetch = (timeoutMs: number): Fetch => async (input, init) => {
+  try {
+    return await fetch(input, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "TimeoutError") {
+      throw new Error(`${new URL(input).pathname}: no answer after ${timeoutMs / 1000}s`);
+    }
+    throw err;
+  }
+};
 
 const nonce = () => `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
 
@@ -31,14 +56,14 @@ const sha256 = async (text: string): Promise<string> => {
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
 };
 
-/** Status of GET url, or undefined when it could not be reached */
-const statusOf = async (url: string): Promise<number | undefined> => {
+/** Status of GET url, or why there is none */
+const statusOf = async (url: string, timeoutMs: number): Promise<number | string> => {
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
     await response.body?.cancel();
     return response.status;
-  } catch {
-    return undefined;
+  } catch (err) {
+    return err instanceof DOMException && err.name === "TimeoutError" ? "timed out" : "unreachable";
   }
 };
 
@@ -48,14 +73,22 @@ const statusOf = async (url: string): Promise<number | undefined> => {
  */
 export const waitForSettle = async (
   url: string,
-  { timeoutMs = 300_000, settleMs = 45_000, pollMs = 5_000, log = console.log } = {},
+  {
+    timeoutMs = 300_000,
+    settleMs = 45_000,
+    pollMs = 5_000,
+    requestTimeoutMs = DefaultRequestTimeoutMs,
+    log = console.log,
+  } = {},
 ): Promise<void> => {
   const paths = ["/", `/q/smoke-${nonce()}/status`];
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const statuses = await Promise.all(paths.map((path) => statusOf(`${url}${path}`)));
+    // Never wait on a request past the deadline
+    const wait = Math.max(1, Math.min(requestTimeoutMs, deadline - Date.now()));
+    const statuses = await Promise.all(paths.map((path) => statusOf(`${url}${path}`, wait)));
     if (statuses.every((s) => s === 200)) break;
-    const summary = paths.map((p, i) => `${p} ${statuses[i] ?? "unreachable"}`).join(", ");
+    const summary = paths.map((p, i) => `${p} ${statuses[i]}`).join(", ");
     if (Date.now() >= deadline) {
       throw new Error(`${url} not answering after ${timeoutMs / 1000}s: ${summary}`);
     }
@@ -71,7 +104,7 @@ export const waitForSettle = async (
 export const checks: SmokeCheck[] = [
   {
     name: "GET / (browser app)",
-    run: async (url) => {
+    run: async (url, fetch) => {
       const response = await fetch(`${url}/`);
       const text = await expectStatus(response, 200, "/");
       if (!text.toLowerCase().includes("<html")) throw new Error("/ is not an html page");
@@ -79,20 +112,20 @@ export const checks: SmokeCheck[] = [
   },
   {
     name: "GET /docs/",
-    run: async (url) => {
+    run: async (url, fetch) => {
       await expectStatus(await fetch(`${url}/docs/`), 200, "/docs/");
     },
   },
   {
     name: "GET /llms.txt",
-    run: async (url) => {
+    run: async (url, fetch) => {
       const text = await expectStatus(await fetch(`${url}/llms.txt`), 200, "/llms.txt");
       if (!text.trim()) throw new Error("/llms.txt is empty");
     },
   },
   {
     name: "GET /q/<queue>/status",
-    run: async (url) => {
+    run: async (url, fetch) => {
       const text = await expectStatus(await fetch(`${url}/q/smoke-${nonce()}/status`), 200, "queue status");
       const body = JSON.parse(text);
       if (!body || typeof body !== "object" || !("jobs" in body)) {
@@ -102,7 +135,7 @@ export const checks: SmokeCheck[] = [
   },
   {
     name: "POST /mcp initialize",
-    run: async (url) => {
+    run: async (url, fetch) => {
       const response = await fetch(`${url}/mcp`, {
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
@@ -130,7 +163,7 @@ export const checks: SmokeCheck[] = [
   },
   {
     name: "PUT/exists/GET /f/<key> (blob store)",
-    run: async (url) => {
+    run: async (url, fetch) => {
       const content = `deploy-smoke-${nonce()}`;
       const key = await sha256(content);
       // PUT either stores directly or redirects to a presigned URL
@@ -154,11 +187,15 @@ export const checks: SmokeCheck[] = [
 ];
 
 /** Run every check (not stopping at the first failure) */
-export const runChecks = async (url: string, list: SmokeCheck[] = checks): Promise<SmokeResult[]> => {
+export const runChecks = async (
+  url: string,
+  list: SmokeCheck[] = checks,
+  { requestTimeoutMs = DefaultRequestTimeoutMs } = {},
+): Promise<SmokeResult[]> => {
   const results: SmokeResult[] = [];
   for (const check of list) {
     try {
-      await check.run(url);
+      await check.run(url, timedFetch(requestTimeoutMs));
       results.push({ name: check.name, ok: true });
     } catch (err) {
       results.push({ name: check.name, ok: false, error: err instanceof Error ? err.message : String(err) });
@@ -180,16 +217,21 @@ const flag = (name: string, fallback: number): number => {
 if (import.meta.main) {
   const url = Deno.args.find((a) => !a.startsWith("--"))?.replace(/\/+$/, "");
   if (!url || !/^https?:\/\//.test(url)) {
-    console.error("usage: smoke.ts <url> [--settle=45] [--timeout=300]");
+    console.error("usage: smoke.ts <url> [--settle=45] [--timeout=300] [--request-timeout=30]");
     Deno.exit(1);
   }
+  const requestTimeoutMs = flag("request-timeout", DefaultRequestTimeoutMs / 1000) * 1000;
   try {
-    await waitForSettle(url, { settleMs: flag("settle", 45) * 1000, timeoutMs: flag("timeout", 300) * 1000 });
+    await waitForSettle(url, {
+      settleMs: flag("settle", 45) * 1000,
+      timeoutMs: flag("timeout", 300) * 1000,
+      requestTimeoutMs,
+    });
   } catch (err) {
     console.error(`❌ ${err instanceof Error ? err.message : err}`);
     Deno.exit(1);
   }
-  const results = await runChecks(url);
+  const results = await runChecks(url, checks, { requestTimeoutMs });
   for (const r of results) {
     console.log(r.ok ? `✅ ${r.name}` : `❌ ${r.name}: ${r.error}`);
   }
