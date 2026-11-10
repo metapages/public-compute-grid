@@ -12,7 +12,7 @@ import {
   getJobColorizedString,
   getWorkerColorizedString,
   type InMemoryDockerJob,
-  resolvePreferredWorker,
+  isJobClaimedByPreferredOtherWorker,
 } from "@metapages/compute-queues-shared";
 
 import mod from "../../mod.json" with { type: "json" };
@@ -528,7 +528,19 @@ export class DockerJobQueue {
     for (const [locallyRunningJobId, locallyRunningJob] of Object.entries(this.queue)) {
       // do we have local jobs the server doesn't even know about? This should never happen
       // Maybe it could be in the case where the browser disconnected and you want the jobs to keep going
-      if (!this.apiQueue[locallyRunningJobId] || this.apiQueue[locallyRunningJobId].state === DockerJobState.Finished) {
+      const apiJob = this.apiQueue[locallyRunningJobId];
+      if (apiJob?.state === DockerJobState.Finished && apiJob.worker && apiJob.worker !== this.workerId) {
+        // Another worker already finished it: our copy can only duplicate the
+        // work and its side effects, so there is nothing to wait for.
+        console.log(
+          `${this.workerIdShort} ${getJobColorizedString(locallyRunningJobId)} finished elsewhere by ${
+            getWorkerColorizedString(apiJob.worker)
+          }, killing our version`,
+        );
+        this._killJobAndIgnore(locallyRunningJobId, `finished by worker ${apiJob.worker}`);
+        continue;
+      }
+      if (!apiJob || apiJob.state === DockerJobState.Finished) {
         // we can only kill the job if we know it's not running on the server
         // if (isAllJobs) {
         console.log(
@@ -624,53 +636,29 @@ export class DockerJobQueue {
         case DockerJobState.Running:
           // good!
           // except if another worker has taken it, then kill ours (server is dictator)
-          if (
-            serverJobState.worker !== this.workerId
-          ) {
-            const preferredWorker = resolvePreferredWorker(
-              this.workerId,
-              serverJobState.worker,
+          if (serverJobState.worker === this.workerId) {
+            break;
+          }
+          if (isJobClaimedByPreferredOtherWorker(serverJobState, this.workerId)) {
+            // Kill now, not after a delay: the server resolves two Running
+            // claims with the same resolvePreferredWorker, so it never hands
+            // the job back to us while the preferred worker has it. Waiting
+            // just lets a short job run to completion twice (#330). If our
+            // container has not started yet, killing here means it never does.
+            console.log(
+              `${this.workerIdShort} ${
+                getJobColorizedString(locallyRunningJobId)
+              } running, but elsewhere also, and preferred there: ${
+                getWorkerColorizedString(serverJobState.worker)
+              }. Killing our version (phase=${locallyRunningJob.phase})`,
             );
-            if (preferredWorker === this.workerId) {
-              console.log(
-                `${this.workerIdShort} ${
-                  getJobColorizedString(locallyRunningJobId)
-                } running, but elsewhere apparently ${
-                  getWorkerColorizedString(serverJobState.worker)
-                }. We are keeping ours since we are preferred`,
-              );
-            } else {
-              console.log(
-                `${this.workerIdShort} ${
-                  getJobColorizedString(locallyRunningJobId)
-                } running, but elsewhere also, and preferred there: ${
-                  getWorkerColorizedString(serverJobState.worker)
-                }. setInterval to check then maybe kill`,
-              );
-              // Do not remove immediately, because there might be a race condition
-              setTimeout(() => {
-                if (!this.queue[locallyRunningJobId] || !this.apiQueue[locallyRunningJobId]) {
-                  // gone!
-                  return;
-                }
-                const isRunningElsewhereStill = this.apiQueue[locallyRunningJobId].state === DockerJobState.Running &&
-                  this.apiQueue[locallyRunningJobId].worker !== this.workerIdShort;
-                const preferredWorkerAfterSomeTime = resolvePreferredWorker(
-                  this.workerId,
-                  this.apiQueue[locallyRunningJobId].worker,
-                );
-                if (isRunningElsewhereStill && preferredWorkerAfterSomeTime !== this.workerId) {
-                  console.log(
-                    `${this.workerIdShort} ${
-                      getJobColorizedString(locallyRunningJobId)
-                    } after some time, job is still preferred by ${
-                      getWorkerColorizedString(this.apiQueue[locallyRunningJobId].worker)
-                    } , so killing our version`,
-                  );
-                  this._killJobAndIgnore(locallyRunningJobId);
-                }
-              }, ms("6s") as number);
-            }
+            this._killJobAndIgnore(locallyRunningJobId, `claimed by preferred worker ${serverJobState.worker}`);
+          } else {
+            console.log(
+              `${this.workerIdShort} ${getJobColorizedString(locallyRunningJobId)} running, but elsewhere apparently ${
+                getWorkerColorizedString(serverJobState.worker)
+              }. We are keeping ours since we are preferred`,
+            );
           }
           break;
       }
@@ -819,6 +807,12 @@ export class DockerJobQueue {
             );
             continue;
           }
+          // The definition fetch awaited: a state broadcast may have arrived
+          // meanwhile saying another worker already claimed this job. Starting
+          // it anyway would only race that worker (#330).
+          if (this.apiQueue[jobKey]?.state !== computeQueuesShared.DockerJobState.Queued || this.queue[jobKey]) {
+            continue;
+          }
           // (job.history[0].value as computeQueuesShared.StateChangeValueQueued)
           //   .definition;
           // Can I start this job?
@@ -907,13 +901,18 @@ export class DockerJobQueue {
     this.finishedAndReported.delete(jobId);
 
     // add a placeholder on the queue for this job
-    this.queue[jobId] = {
+    const queueItem: WorkerJobQueueItem = {
       phase: DockerRunPhase.CopyInputs,
       time: valueRunning.time,
       execution: null,
       definition,
       runningMessageToServer,
     };
+    this.queue[jobId] = queueItem;
+    // Killed before its container exists (e.g. another worker won the claim
+    // while inputs were copying): _killJobAndIgnore can only remove the queue
+    // entry, so check that this exact entry is still ours before each step.
+    const isRemoved = () => this.queue[jobId] !== queueItem;
     const deviceRequests = this._allocateGpus(jobId, definition, opts?.gpuIndices);
 
     this.sender(runningMessageToServer);
@@ -930,23 +929,27 @@ export class DockerJobQueue {
       let volumes: Volume[];
       let outputsDir: string;
       try {
-        if (!this.queue[jobId]) {
+        if (isRemoved()) {
           return;
         }
-        this.queue[jobId].phase = DockerRunPhase.CopyInputs;
+        queueItem.phase = DockerRunPhase.CopyInputs;
         const volumesResult = await convertIOToVolumeMounts(
           { id: jobId, definition },
           config.server,
           { keepOutputs: !!(await getRunningContainerForJob({ jobId })) },
         );
-        if (!this.queue[jobId]) {
+        if (isRemoved()) {
           return;
         }
-        this.queue[jobId].phase = DockerRunPhase.Building;
+        queueItem.phase = DockerRunPhase.Building;
         volumes = volumesResult.volumes;
         outputsDir = volumesResult.outputsDir;
       } catch (err) {
         console.error(`${this.workerIdShort} 💥 `, err);
+        if (isRemoved()) {
+          // killed meanwhile: the error is ours to ignore, not the job's
+          return;
+        }
         // Delete from our local queue before sending
         // TODO: cache locally before attempting to send
         delete this.queue[jobId];
@@ -970,13 +973,13 @@ export class DockerJobQueue {
         return;
       }
 
-      if (isKilled.value) {
+      if (isKilled.value || isRemoved()) {
         return;
       }
 
       // TODO hook up the durationMax to a timeout
       // TODO add input mounts
-      const workItem = this.queue[jobId];
+      const workItem = queueItem;
       const executionArgs: DockerJobArgs = {
         workItem,
         workerId: this.workerId,
@@ -1011,10 +1014,8 @@ export class DockerJobQueue {
       const dockerExecution: DockerJobExecution = dockerJobExecute(
         executionArgs,
       );
-      if (this.queue[jobId]) {
-        this.queue[jobId].execution = dockerExecution;
-      }
-      if (!this.queue[jobId]) {
+      queueItem.execution = dockerExecution;
+      if (isRemoved()) {
         console.log(
           `${this.workerIdShort} ${jobString} after await jobBlob.hash no job in queue so killing`,
         );
