@@ -43,6 +43,10 @@ cyan := "\\e[36m"
 test-all:
     just app test-all
 
+# A worker restarted with an unsent Finished resends it instead of rerunning the job (#358). url: http only
+test-worker-restart url worker_dir="":
+    app/test/scripts/worker-restart-keeps-finished.sh {{ url }} {{ worker_dir }}
+
 # API contract tests against any deployment (e.g. staging), with a temporary local worker on a fresh queue
 test-url url:
     #!/usr/bin/env bash
