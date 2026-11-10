@@ -860,7 +860,18 @@ const ensureQueue = async (queue: string): Promise<BaseDockerJobQueue> => {
       dataDirectory: getConfig().dataDirectory,
       debug: config.debug,
     });
-    queueSetups[queue] = userJobQueues[queue].setup();
+    const jobQueue = userJobQueues[queue];
+    const setup = jobQueue.setup();
+    queueSetups[queue] = setup;
+    // A failed setup must not stick: forget the queue so the next call retries
+    setup.catch(() => {
+      if (queueSetups[queue] === setup) {
+        delete queueSetups[queue];
+        if (userJobQueues[queue] === jobQueue) {
+          delete userJobQueues[queue];
+        }
+      }
+    });
   }
   await queueSetups[queue];
   return userJobQueues[queue];

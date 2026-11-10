@@ -71,6 +71,10 @@ export const runCommand = new Command()
     "--auto-update-interval [autoUpdateInterval:string]",
     "How often --auto-update checks for a new release. Default: 1h",
   )
+  .option(
+    "--no-kill-orphans",
+    "On startup, leave other workers' running job containers on this docker host alone (default: kill them)",
+  )
   .action(async (options, queue?: string) => {
     const METAPAGE_IO_WORKER_CPUS = Deno.env.get(`${EnvPrefix}CPUS`);
     config.cpus = typeof options.cpus === "number"
@@ -104,6 +108,8 @@ export const runCommand = new Command()
         : "/tmp/worker-metapage-io",
       config.mode,
     );
+
+    config.killOrphans = options.killOrphans !== false;
 
     const METAPAGE_IO_WORKER_DEBUG = Deno.env.get(`${EnvPrefix}DEBUG`);
     config.debug = !!(typeof (options.debug) === "boolean" ? options.debug : METAPAGE_IO_WORKER_DEBUG === "true");

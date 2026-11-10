@@ -17,7 +17,9 @@ import { assert, assertEquals } from "std/assert";
 import { join } from "std/path";
 
 const WORKER_DIR = new URL("..", import.meta.url).pathname;
-const RUN_LINES = 16;
+// A line every 150ms, so lines are being written while the new process
+// reattaches: that is where a replay can overlap the live output
+const RUN_LINES = 80;
 
 const dockerAvailable = (() => {
   try {
@@ -62,7 +64,9 @@ Deno.test({
   fn: async () => {
     const nonce = crypto.randomUUID().slice(0, 8);
     // A test-worker id: a worker starting up kills the running job containers
-    // of any other worker id, except these (DockerJobQueue.killOrphanedJobs)
+    // of any other worker id, except these (DockerJobQueue.killOrphanedJobs).
+    // And --no-kill-orphans, so this test's workers leave every other
+    // worker's containers on the host alone (other previews, a dev stack).
     const workerId = `test-worker-live-logs-${nonce}`;
     const port = freePort();
     const api = `http://localhost:${port}`;
@@ -85,6 +89,7 @@ Deno.test({
           `--port=${port}`,
           `--data-directory=${dataDirectory}`,
           `--id=${workerId}`,
+          "--no-kill-orphans",
         ],
         cwd: WORKER_DIR,
         stdout: "piped",
@@ -118,7 +123,7 @@ Deno.test({
         body: JSON.stringify({
           definition: {
             build: { dockerfile: `FROM alpine:3.18.5\nRUN echo build-marker-${nonce}\n` },
-            command: `sh -c 'for i in $(seq 1 ${RUN_LINES}); do echo run-line-$i; sleep 0.5; done'`,
+            command: `sh -c 'for i in $(seq 1 ${RUN_LINES}); do echo run-line-$i; sleep 0.15; done'`,
           },
         }),
       });

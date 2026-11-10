@@ -855,10 +855,11 @@ export class BaseDockerJobQueue {
   private bufferLogs(logs: JobStatusPayload, spool: boolean) {
     const flushed = this.persistedLogs.get(logs.jobId)?.flushed;
     if (logs.replay && !flushed) {
-      // The worker reattached to the job's running container and is about to
-      // send the container's whole output again: drop the copy held so far,
-      // or a server that kept it (or reloaded it from the spool) has every
-      // line before the reattach twice.
+      // The worker is about to send a run container's whole output from the
+      // start (a new container, or one it reattached to and docker replays):
+      // drop the copy held so far, or a server that kept it (or reloaded it
+      // from the spool) has every line before a reattach twice, or the lines
+      // of a run lost in a restart ahead of the new run's.
       this.runLogsBuffer.delete(logs.jobId);
       if (spool) {
         this.logSpool?.clear(logs.jobId, "run");
@@ -1464,6 +1465,11 @@ export class BaseDockerJobQueue {
     // too, so the lines after it went to a fresh buffer and the next Finished
     // replaced the whole stored log with them (#332). Writes still pending for
     // the previous run stay ahead of the next flush.
+    //
+    // Clearing the spool here is only ever done by an instance holding the
+    // worker's socket: a Running reaches stateChangeJobRunning from a worker's
+    // (or client's) message, never from the broadcast channel, and `flushed`
+    // is only set where stateChangeJobFinished stored the logs.
     const persisted = this.persistedLogs.get(jobId);
     if (persisted?.flushed) {
       persisted.flushed = false;
