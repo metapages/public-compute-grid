@@ -485,6 +485,11 @@ pr-daemon-down:
     # (metaframe-container-worker-network) and the shared image cache volume
     # (metaframe-container-worker-cache) are machine-wide and stay.
     containers="$(docker ps -aq --filter "label=container.mtfm.io/worker=$worker_id" 2> /dev/null)"
+    # A restart keeps the exited ones: a job that finished while the worker was
+    # down has its result there, for the restarted worker to collect (#361).
+    if [ -n "${PR_DAEMON_KEEP_DATA:-}" ] && [ -n "$containers" ]; then
+        containers="$(docker ps -q --filter "label=container.mtfm.io/worker=$worker_id" 2> /dev/null)"
+    fi
     if [ -n "$containers" ]; then
         echo "removing this branch's job containers" >&2
         # -v: an image's VOLUME lines leave anonymous volumes nothing can reuse
