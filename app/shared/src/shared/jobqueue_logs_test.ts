@@ -70,9 +70,14 @@ class FakeDb {
   }
 }
 
-const createQueue = (jobId: string) => {
-  const queue = new BaseDockerJobQueue({ serverId: "test", address: `logs-test-${jobId}`, periodicWork: false });
-  const db = new FakeDb();
+const createQueue = (jobId: string, opts?: { liveLogsDirectory?: string; db?: FakeDb }) => {
+  const queue = new BaseDockerJobQueue({
+    serverId: "test",
+    address: `logs-test-${jobId}`,
+    periodicWork: false,
+    liveLogsDirectory: opts?.liveLogsDirectory,
+  });
+  const db = opts?.db ?? new FakeDb();
   queue.db = db as unknown as DB;
   const now = Date.now();
   // deno-lint-ignore no-explicit-any
@@ -91,6 +96,9 @@ const batch = (n: number): ConsoleLogLine[] => Array.from({ length: n }, () => [
 
 const deliver = (queue: BaseDockerJobQueue, jobId: string, logs: ConsoleLogLine[]) =>
   queue.broadcastAndSendLogsToLocalClients({ jobId, step: DockerJobState.Running, logs });
+
+const deliverBuild = (queue: BaseDockerJobQueue, jobId: string, logs: ConsoleLogLine[]) =>
+  queue.broadcastAndSendLogsToLocalClients({ jobId, step: "docker build", logs });
 
 const finish = (queue: BaseDockerJobQueue, jobId: string) =>
   queue.stateChangeJobFinished(jobId, {
@@ -217,4 +225,90 @@ Deno.test("logs: a job that really runs again starts a fresh log", opts, async (
   assertEquals((await queue.getCurrentRunLogs(jobId)).map((l) => l[0]), rerun.map((l) => l[0]));
   await finish(queue, jobId);
   assertExactly(await storedRunLog(queue, db, jobId), rerun);
+});
+
+// #360: a server restarting mid-job keeps the lines streamed before it
+
+/** A new queue on the same spool directory and db, as after a restart */
+const restart = async (jobId: string, liveLogsDirectory: string, db: FakeDb) => {
+  const { queue } = createQueue(jobId, { liveLogsDirectory, db });
+  // What setup() does after loading the jobs from the db
+  // deno-lint-ignore no-explicit-any
+  await (queue as any).loadSpooledLogs();
+  return queue;
+};
+
+Deno.test("logs: a restart mid-job keeps the build and run logs streamed before it", opts, async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const jobId = "job-restart";
+    const { queue, db } = createQueue(jobId, { liveLogsDirectory: dir });
+    const build = batch(5);
+    const before = batch(20);
+    deliverBuild(queue, jobId, build);
+    deliver(queue, jobId, before);
+    // Spooled within the flush interval; the process then dies
+    await queue.flushLiveLogs();
+
+    const restarted = await restart(jobId, dir, db);
+    assertEquals((await restarted.getCurrentRunLogs(jobId)).map((l) => l[0]), before.map((l) => l[0]));
+    const after = batch(20);
+    deliver(restarted, jobId, after);
+    await finish(restarted, jobId);
+
+    assertExactly(await storedRunLog(restarted, db, jobId), [...before, ...after]);
+    assertExactly(db.buildLogs.get(jobId) ?? [], build);
+    // Stored: the spool is cleaned up
+    assertEquals([...Deno.readDirSync(dir)].flatMap((e) => [...Deno.readDirSync(`${dir}/${e.name}`)]), []);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("logs: a worker reattaching to a container replaces the run logs with the replay", opts, async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const jobId = "job-replay";
+    const { queue, db } = createQueue(jobId, { liveLogsDirectory: dir });
+    const build = batch(5);
+    const before = batch(20);
+    deliverBuild(queue, jobId, build);
+    deliver(queue, jobId, before);
+    await queue.flushLiveLogs();
+
+    const restarted = await restart(jobId, dir, db);
+    // The worker reattaches: docker replays the container's output from the start
+    restarted.broadcastAndSendLogsToLocalClients({ jobId, step: DockerJobState.Running, logs: [], replay: true });
+    deliver(restarted, jobId, before);
+    const after = batch(20);
+    deliver(restarted, jobId, after);
+    // Another restart before the job finishes still has it all, once
+    await restarted.flushLiveLogs();
+    const again = await restart(jobId, dir, db);
+    await finish(again, jobId);
+
+    assertExactly(await storedRunLog(again, db, jobId), [...before, ...after]);
+    assertExactly(db.buildLogs.get(jobId) ?? [], build);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("logs: spooled logs of a job no longer live are not reloaded", opts, async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const jobId = "job-gone";
+    const { queue, db } = createQueue(jobId, { liveLogsDirectory: dir });
+    deliver(queue, jobId, batch(5));
+    await queue.flushLiveLogs();
+
+    const { queue: restarted } = createQueue(jobId, { liveLogsDirectory: dir, db });
+    // deno-lint-ignore no-explicit-any
+    delete (restarted as any).state.jobs[jobId];
+    // deno-lint-ignore no-explicit-any
+    await (restarted as any).loadSpooledLogs();
+    assertEquals(await restarted.getCurrentRunLogs(jobId), []);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
 });
