@@ -1,11 +1,12 @@
 import { assert, assertEquals, assertRejects, assertStrictEquals } from "std/assert";
 
-import { makeEnsureQueue } from "/@/lib/ensure-queue.ts";
+import { makeEnsureQueue } from "./ensure-queue.ts";
 
 // Stands in for a job queue: like BaseDockerJobQueue, `db` is only assigned by
 // the async setup(), so a caller handed the queue too early sees it undefined.
 class FakeQueue {
   db: { getFinishedJob(): string } | undefined;
+  disposed = false;
   constructor(public address: string, private failSetup = false) {}
   async setup() {
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -13,6 +14,9 @@ class FakeQueue {
       throw new Error("setup failed");
     }
     this.db = { getFinishedJob: () => "ok" };
+  }
+  dispose() {
+    this.disposed = true;
   }
 }
 
@@ -94,4 +98,23 @@ Deno.test("a disposed queue (removed from the registry) is rebuilt on the next c
   const second = await ensureQueue("q");
   assert(second !== first);
   assertStrictEquals(registry["q"], second);
+});
+
+Deno.test("a queue whose setup failed is disposed, not left half-built", async () => {
+  const registry: { [queue: string]: FakeQueue } = {};
+  const created: FakeQueue[] = [];
+  const ensureQueue = makeEnsureQueue(registry, (queue) => {
+    const q = new FakeQueue(queue, created.length === 0);
+    created.push(q);
+    return q;
+  });
+
+  await assertRejects(() => ensureQueue("q"), Error, "setup failed");
+  assertEquals(created.length, 1);
+  assert(created[0].disposed);
+
+  const q = await ensureQueue("q");
+  assertStrictEquals(q, created[1]);
+  assertEquals(q.disposed, false);
+  assertStrictEquals(registry["q"], q);
 });

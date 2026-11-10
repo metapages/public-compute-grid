@@ -11,9 +11,11 @@
  * `registry` stays the source of truth for finished queues: a queue's
  * `dispose()` deletes itself from it, and the next call builds a new one. The
  * in-flight entry is dropped once setup settles, so a failed setup is retried
- * on the next call rather than cached.
+ * on the next call rather than cached. A queue whose setup failed is disposed
+ * before the error is passed on: its constructor already opened a broadcast
+ * channel (and maybe timers), which would otherwise stay open with no db.
  */
-export const makeEnsureQueue = <Q extends { setup(): Promise<unknown> }>(
+export const makeEnsureQueue = <Q extends { setup(): Promise<unknown>; dispose?(): void }>(
   registry: { [queue: string]: Q },
   create: (queue: string) => Q,
 ): (queue: string) => Promise<Q> => {
@@ -28,13 +30,24 @@ export const makeEnsureQueue = <Q extends { setup(): Promise<unknown> }>(
     if (!pending) {
       pending = (async () => {
         const q = create(queue);
-        await q.setup();
+        try {
+          await q.setup();
+        } catch (err) {
+          // Safe: dispose() only deletes registry[queue], which is not set yet
+          try {
+            q.dispose?.();
+          } catch (disposeErr) {
+            console.error(`Disposing queue ${queue} after a failed setup also failed`, disposeErr);
+          }
+          throw err;
+        }
         registry[queue] = q;
         return q;
       })();
       inFlight.set(queue, pending);
-      // Cleared after the set above, so even a synchronous throw from create()
-      // does not leave a rejected promise behind
+      // create() runs inside the async function above, so even a synchronous
+      // throw from it arrives here as a rejection, after the set above, and the
+      // entry is still cleared rather than left holding a rejected promise
       const clear = () => inFlight.delete(queue);
       pending.then(clear, clear);
     }

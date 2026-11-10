@@ -1,3 +1,5 @@
+import { makeEnsureQueue } from "@metapages/compute-queues-shared";
+
 import { ApiDockerJobQueue, userJobQueues } from "@/docker-jobs/ApiDockerJobQueue.ts";
 import { getServerInstanceId } from "@/util/id.ts";
 
@@ -5,26 +7,41 @@ export interface WebsocketUrlParameters {
   token: string;
 }
 
-export const getApiDockerJobQueue = async (
+const makeEnsureApiQueue = (periodicWork: boolean | undefined) =>
+  makeEnsureQueue(
+    userJobQueues as { [queue: string]: ApiDockerJobQueue },
+    // TODO: hydrate queue from some kind of persistence
+    // actually the queue should handle that itself
+    (queue) =>
+      new ApiDockerJobQueue({
+        serverId: getServerInstanceId(),
+        address: queue,
+        periodicWork,
+      }),
+  );
+
+// One per periodicWork value, since create() only gets the queue name. A
+// process only ever uses one of them: the Deno API never passes the option, a
+// Cloudflare isolate always passes false. As before, a queue that already
+// exists is returned whatever the option.
+const ensureApiQueue = {
+  default: makeEnsureApiQueue(undefined),
+  noPeriodicWork: makeEnsureApiQueue(false),
+};
+
+/**
+ * The queue for a name, created on first use. It is only published (and so
+ * only handed to any caller) once its setup() has finished; concurrent first
+ * calls share that setup.
+ * https://github.com/metapages/public-compute-grid/issues/347
+ */
+export const getApiDockerJobQueue = (
   queue: string,
   // A Cloudflare Durable Object passes periodicWork: false and schedules
   // maintenance itself, because a timer would keep it resident and billed.
   opts?: { periodicWork?: boolean },
-): Promise<ApiDockerJobQueue> => {
-  if (!userJobQueues[queue]) {
-    // TODO: hydrate queue from some kind of persistence
-    // actually the queue should handle that itself
-    const jobQueue = new ApiDockerJobQueue({
-      serverId: getServerInstanceId(),
-      address: queue,
-      periodicWork: opts?.periodicWork,
-    });
-    await jobQueue.setup();
-    userJobQueues[queue] = jobQueue;
-    return jobQueue;
-  }
-  return userJobQueues[queue];
-};
+): Promise<ApiDockerJobQueue> =>
+  opts?.periodicWork === false ? ensureApiQueue.noPeriodicWork(queue) : ensureApiQueue.default(queue);
 
 export async function wsHandlerClient(
   token: string,
@@ -61,15 +78,8 @@ export async function wsHandlerWorker(
       socket.close();
       return;
     }
-    if (!userJobQueues[token]) {
-      // TODO: hydrate queue from some kind of persistence
-      userJobQueues[token] = new ApiDockerJobQueue({
-        serverId: getServerInstanceId(),
-        address: token,
-      });
-      await userJobQueues[token].setup();
-    }
-    userJobQueues[token].connectWorker({ socket });
+    const jobQueue = await getApiDockerJobQueue(token);
+    jobQueue.connectWorker({ socket });
   } catch (err) {
     console.error(err);
   }

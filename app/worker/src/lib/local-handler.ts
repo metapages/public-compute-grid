@@ -1,5 +1,4 @@
 import { config, getConfig } from "/@/config.ts";
-import { makeEnsureQueue } from "/@/lib/ensure-queue.ts";
 import { createMcpServer, MCP_TOOLS } from "@metapages/compute-queues-mcp/server-factory";
 import { serveMcpStreamableHttp } from "@metapages/compute-queues-mcp/streamable-http";
 import { type Context, Hono } from "hono";
@@ -17,6 +16,7 @@ import {
   getJobColorizedString,
   getWorkerVersionGate,
   type InMemoryDockerJob,
+  makeEnsureQueue,
   makeStreamHandler,
   shaDockerJob,
   type StateChange,
