@@ -4,12 +4,21 @@ import { config } from "../config.ts";
 import { ensureIsolateNetwork } from "./network.ts";
 import { ensureSharedVolume } from "./volume.ts";
 
+// Until the job queue says otherwise (setKeepExitedContainer), keep every exited
+// container: one may be the result of a job that finished while the worker was
+// down, still to be collected and reported (#361).
+let keepExitedContainer: (jobId: string) => boolean = () => true;
+
+export const setKeepExitedContainer = (keep: (jobId: string) => boolean) => {
+  keepExitedContainer = keep;
+};
+
 export async function ensureResourcesAndCleanseUnknownJobContainers(
   queue: string,
 ) {
   await ensureSharedVolume();
   await ensureIsolateNetwork();
-  await removeAllDeadContainersFromQueue({ queue, workerId: config.id });
+  await removeAllDeadContainersFromQueue({ queue, workerId: config.id, keep: keepExitedContainer });
 }
 
 export const prepGpus = async (gpus: number | undefined) => {
