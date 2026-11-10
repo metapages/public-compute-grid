@@ -13,9 +13,11 @@
 import { LRUMapWithDelete } from "mnemonist";
 import { ms } from "ms";
 import { createNanoEvents, type Emitter } from "nanoevents";
+import { join } from "node:path";
 import { delay } from "std/async/delay";
 import { DB } from "@shared/db.ts";
 import { getEnv } from "@shared/env.ts";
+import { type LogKind, LogSpool } from "@shared/logspool.ts";
 import {
   type BroadcastJobDefinitions,
   type BroadcastJobStates,
@@ -333,6 +335,14 @@ const BUILD_LOG_STEPS: Set<string> = new Set([
 const MAX_BUFFERED_LOG_LINES = 10000;
 
 /**
+ * Spooled logs of a job that is not live are deleted on startup once nothing
+ * has written to them for this long. Not at once: on a spool directory shared
+ * by several instances, a job just submitted to another one may not be in the
+ * jobs this instance read from the db.
+ */
+const STALE_SPOOLED_LOGS = ms("1 hour") as number;
+
+/**
  * Base class for docker job queues with default implementations
  */
 export class BaseDockerJobQueue {
@@ -374,6 +384,12 @@ export class BaseDockerJobQueue {
    * overwrite the other's lines (#332).
    */
   private persistedLogs = new LRUMapWithDelete<string, { flushed: boolean; writes: Promise<void> }>(1000);
+  /**
+   * An on-disk copy of the buffers, so a server that restarts mid-job still
+   * has the lines streamed before the restart (#360). Only where the queue is
+   * given a directory for it: on Cloudflare there is no filesystem.
+   */
+  private readonly logSpool: LogSpool | undefined;
 
   // intervals
   protected _intervalWorkerBroadcast: ReturnType<typeof setInterval> | undefined;
@@ -394,8 +410,14 @@ export class BaseDockerJobQueue {
     address: string;
     dataDirectory?: string;
     periodicWork?: boolean;
+    /**
+     * Where to spool live job logs to disk (see LogSpool). Should survive the
+     * server process, and be shared by every instance that can take over its
+     * workers. Unset: live logs are in memory only.
+     */
+    liveLogsDirectory?: string;
   }) {
-    const { serverId, address, dataDirectory } = opts;
+    const { serverId, address, dataDirectory, liveLogsDirectory } = opts;
     this.periodicWork = opts.periodicWork ?? true;
 
     this.address = address;
@@ -403,6 +425,12 @@ export class BaseDockerJobQueue {
     console.log(`${this.addressShortString} ➕ 🎾 UserDockerJobQueue`);
     this.serverId = serverId;
     this.dataDirectory = dataDirectory || "/tmp/worker-metaframe";
+    if (liveLogsDirectory) {
+      this.logSpool = new LogSpool({
+        directory: join(liveLogsDirectory, encodeURIComponent(address)),
+        maxLines: MAX_BUFFERED_LOG_LINES,
+      });
+    }
     // console.log("⚠️💥 HARDCODING debug=true, REMOVE ME BEFORE MERGE", debug);
     this.debug = false;
     this.workers = {
@@ -611,7 +639,8 @@ export class BaseDockerJobQueue {
           // Buffer here too, so an SSE stream or logs request landing on an
           // instance that is not the one holding the worker socket still sees
           // live logs rather than waiting for the job to finish.
-          this.bufferLogs(logs);
+          // Not spooled: the instance holding the worker socket does that.
+          this.bufferLogs(logs, false);
           this.sendLogsToLocalClients(logs);
           break;
         }
@@ -808,7 +837,7 @@ export class BaseDockerJobQueue {
   }
 
   broadcastAndSendLogsToLocalClients(logs: JobStatusPayload) {
-    this.bufferLogs(logs);
+    this.bufferLogs(logs, true);
 
     this.channel.postMessage({
       type: "job-logs",
@@ -818,15 +847,35 @@ export class BaseDockerJobQueue {
     this.sendLogsToLocalClients(logs);
   }
 
-  private bufferLogs(logs: JobStatusPayload) {
+  /**
+   * @param spool also write the lines to the on-disk spool: only for lines
+   * from a worker connected here, so that with several instances sharing a
+   * spool directory each line is written once.
+   */
+  private bufferLogs(logs: JobStatusPayload, spool: boolean) {
+    const flushed = this.persistedLogs.get(logs.jobId)?.flushed;
+    if (logs.replay && !flushed) {
+      // The worker reattached to the job's running container and is about to
+      // send the container's whole output again: drop the copy held so far,
+      // or a server that kept it (or reloaded it from the spool) has every
+      // line before the reattach twice.
+      this.runLogsBuffer.delete(logs.jobId);
+      if (spool) {
+        this.logSpool?.clear(logs.jobId, "run");
+      }
+    }
     if (!logs.logs?.length) {
       return;
     }
-    if (this.persistedLogs.get(logs.jobId)?.flushed) {
+    if (flushed) {
       this.queueLogWrite(logs.jobId, () => this.appendPersistedLogs(logs));
       return;
     }
-    const buffer = BUILD_LOG_STEPS.has(logs.step) ? this.buildLogsBuffer : this.runLogsBuffer;
+    const kind: LogKind = BUILD_LOG_STEPS.has(logs.step) ? "build" : "run";
+    if (spool) {
+      this.logSpool?.append(logs.jobId, kind, logs.logs);
+    }
+    const buffer = kind === "build" ? this.buildLogsBuffer : this.runLogsBuffer;
     const existing = buffer.get(logs.jobId) || [];
     const combined = existing.concat(logs.logs);
     buffer.set(
@@ -910,8 +959,13 @@ export class BaseDockerJobQueue {
     const buildLines = this.buildLogsBuffer.get(jobId);
     const runLines = this.runLogsBuffer.get(jobId);
     const writes = this.queueLogWrite(jobId, async () => {
-      await this.storeLogBuffer(jobId, this.buildLogsBuffer, buildLines, "build");
-      await this.storeLogBuffer(jobId, this.runLogsBuffer, runLines, "run");
+      const storedBuild = await this.storeLogBuffer(jobId, this.buildLogsBuffer, buildLines, "build");
+      const storedRun = await this.storeLogBuffer(jobId, this.runLogsBuffer, runLines, "run");
+      // The db has them now. If it failed, keep the spool: a restart reloads
+      // the lines into the buffers, where readers still find them.
+      if (storedBuild && storedRun) {
+        await this.logSpool?.clear(jobId);
+      }
     });
     this.persistedLogs.get(jobId)!.flushed = true;
     return writes;
@@ -921,8 +975,8 @@ export class BaseDockerJobQueue {
     jobId: string,
     buffer: Map<string, ConsoleLogLine[]>,
     lines: ConsoleLogLine[] | undefined,
-    kind: "build" | "run",
-  ): Promise<void> {
+    kind: LogKind,
+  ): Promise<boolean> {
     if (lines?.length) {
       try {
         if (kind === "build") {
@@ -932,6 +986,7 @@ export class BaseDockerJobQueue {
         }
       } catch (err) {
         console.error(`Failed to persist ${kind} logs for job ${jobId}:`, err);
+        return false;
       }
     }
     // Readers prefer the buffer, so it stays until the db has the lines. Only
@@ -939,6 +994,41 @@ export class BaseDockerJobQueue {
     // has a fresh buffer of its own.
     if (buffer.get(jobId) === lines) {
       buffer.delete(jobId);
+    }
+    return true;
+  }
+
+  /** Write the spooled live logs out now, e.g. before a graceful shutdown. */
+  public flushLiveLogs(): Promise<void> {
+    return this.logSpool?.flush() ?? Promise.resolve();
+  }
+
+  /**
+   * Reload the buffers a previous server process spooled to disk, for the jobs
+   * still live in the queue. Spool files of any other job are left over from
+   * a crash between storing the logs and deleting the files, or belong to
+   * a job another instance is writing: delete only the stale ones.
+   */
+  private async loadSpooledLogs(): Promise<void> {
+    if (!this.logSpool) {
+      return;
+    }
+    const now = Date.now();
+    for (const { jobId, kind, lines, modified } of await this.logSpool.load()) {
+      const job = this.state.jobs[jobId];
+      if (job && (job.state === DockerJobState.Queued || job.state === DockerJobState.Running)) {
+        const buffer = kind === "build" ? this.buildLogsBuffer : this.runLogsBuffer;
+        if (!buffer.has(jobId) && lines.length) {
+          buffer.set(jobId, lines);
+          console.log(
+            `${this.addressShortString} ${
+              getJobColorizedString(jobId)
+            } 📜 reloaded ${lines.length} spooled ${kind} log lines`,
+          );
+        }
+      } else if (now - modified > STALE_SPOOLED_LOGS) {
+        await this.logSpool.clear(jobId, kind);
+      }
     }
   }
 
@@ -1080,6 +1170,7 @@ export class BaseDockerJobQueue {
     console.log(
       `${this.addressShortString} On startup got ${Object.keys(allPersistedJobInTheQueue).length} jobs from the db`,
     );
+    await this.loadSpooledLogs();
     // Why broadcast here? New UserDockerJobQueue instances will get their
     // own state from the db. Probably race conditions, it won't hurt at all
     // since correct job state always wins
@@ -1378,6 +1469,7 @@ export class BaseDockerJobQueue {
       persisted.flushed = false;
       this.buildLogsBuffer.delete(jobId);
       this.runLogsBuffer.delete(jobId);
+      this.logSpool?.clear(jobId);
     }
 
     this.state.jobs[jobId] = possiblelyNewJob;
@@ -1496,6 +1588,7 @@ export class BaseDockerJobQueue {
           // the map does not grow without bound.
           this.buildLogsBuffer.delete(jobId);
           this.runLogsBuffer.delete(jobId);
+          this.logSpool?.clear(jobId);
           sendBroadcast = true;
           console.log(`${this.addressShortString} ${getJobColorizedString(jobId)} 🪓 removed from queue`);
         }

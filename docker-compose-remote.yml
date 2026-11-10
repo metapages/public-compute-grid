@@ -43,8 +43,12 @@ services:
       - REDIS_URL=redis://redis:6379
       - DENO_BROADCAST_DEBUG=
       - METAPAGE_IO_SERVER_ID=api1
+      # Live job logs spooled to disk, on a volume all api instances share, so
+      # an instance that restarts mid-job keeps the logs streamed so far (#360)
+      - LIVE_LOGS_DIRECTORY=/live-logs
     volumes:
       - deno:/deno
+      - live-logs:/live-logs
       - node_modules:/app/node_modules
       - ./deno.json:/app/deno.json
       - ./deno.lock:/app/deno.lock:ro
@@ -99,8 +103,12 @@ services:
       - REDIS_URL=redis://redis:6379
       - DENO_BROADCAST_DEBUG=
       - METAPAGE_IO_SERVER_ID=api2
+      # Live job logs spooled to disk, on a volume all api instances share, so
+      # an instance that restarts mid-job keeps the logs streamed so far (#360)
+      - LIVE_LOGS_DIRECTORY=/live-logs
     volumes:
       - deno:/deno
+      - live-logs:/live-logs
       - node_modules:/app/node_modules
       - ./deno.json:/app/deno.json
       - ./deno.lock:/app/deno.lock:ro
@@ -155,8 +163,12 @@ services:
       - REDIS_URL=redis://redis:6379
       - DENO_BROADCAST_DEBUG=
       - METAPAGE_IO_SERVER_ID=api3
+      # Live job logs spooled to disk, on a volume all api instances share, so
+      # an instance that restarts mid-job keeps the logs streamed so far (#360)
+      - LIVE_LOGS_DIRECTORY=/live-logs
     volumes:
       - deno:/deno
+      - live-logs:/live-logs
       - node_modules:/app/node_modules
       - ./deno.json:/app/deno.json
       - ./deno.lock:/app/deno.lock:ro
@@ -463,4 +475,6 @@ services:
 
 volumes:
   denokv:
+    driver: local
+  live-logs:
     driver: local

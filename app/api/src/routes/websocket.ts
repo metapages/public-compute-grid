@@ -1,3 +1,4 @@
+import { holdSocketMessages } from "@metapages/compute-queues-shared";
 import { ApiDockerJobQueue, userJobQueues } from "@/docker-jobs/ApiDockerJobQueue.ts";
 import { getServerInstanceId } from "@/util/id.ts";
 
@@ -43,8 +44,10 @@ export async function wsHandlerClient(
       socket.close();
       return;
     }
+    const releaseMessages = holdSocketMessages(socket);
     const jobQueue = await getApiDockerJobQueue(token);
     jobQueue.connectClient({ socket });
+    releaseMessages();
   } catch (err) {
     console.error(err);
   }
@@ -61,6 +64,7 @@ export async function wsHandlerWorker(
       socket.close();
       return;
     }
+    const releaseMessages = holdSocketMessages(socket);
     if (!userJobQueues[token]) {
       // TODO: hydrate queue from some kind of persistence
       userJobQueues[token] = new ApiDockerJobQueue({
@@ -70,6 +74,7 @@ export async function wsHandlerWorker(
       await userJobQueues[token].setup();
     }
     userJobQueues[token].connectWorker({ socket });
+    releaseMessages();
   } catch (err) {
     console.error(err);
   }

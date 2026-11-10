@@ -15,6 +15,7 @@ import {
   type EnqueueJob,
   getJobColorizedString,
   getWorkerVersionGate,
+  holdSocketMessages,
   type InMemoryDockerJob,
   makeStreamHandler,
   shaDockerJob,
@@ -32,7 +33,9 @@ export class LocalDockerJobQueue extends BaseDockerJobQueue {
     dataDirectory: string;
     debug?: boolean;
   }) {
-    super(opts);
+    // The data directory outlives the process, and an --auto-update successor
+    // shares it: a restart keeps the logs of the jobs that were running (#360).
+    super({ ...opts, liveLogsDirectory: join(opts.dataDirectory, "live-logs") });
   }
 }
 
@@ -842,6 +845,12 @@ app.get("/*", serveStatic({ root: "../browser/dist" }));
 app.get("/", serveStatic({ path: "../browser/dist/index.html" }));
 app.get("*", serveStatic({ path: "../browser/dist/index.html" }));
 
+/**
+ * Each queue's setup, so a request arriving while the queue is still being set
+ * up waits for it: until then it has none of the jobs and logs it reloads.
+ */
+const queueSetups: Record<string, Promise<void>> = {};
+
 const ensureQueue = async (queue: string): Promise<BaseDockerJobQueue> => {
   // Initialize queue if it doesn't exist
   if (!userJobQueues[queue]) {
@@ -851,8 +860,9 @@ const ensureQueue = async (queue: string): Promise<BaseDockerJobQueue> => {
       dataDirectory: getConfig().dataDirectory,
       debug: config.debug,
     });
-    await userJobQueues[queue].setup();
+    queueSetups[queue] = userJobQueues[queue].setup();
   }
+  await queueSetups[queue];
   return userJobQueues[queue];
 };
 const handleWebsocket = async (socket: WebSocket, request: Request) => {
@@ -884,6 +894,7 @@ const handleWebsocket = async (socket: WebSocket, request: Request) => {
   }
 
   // Initialize queue if it doesn't exist
+  const releaseMessages = holdSocketMessages(socket);
   const queue = await ensureQueue(queueKey);
 
   // Handle client or worker connections
@@ -896,6 +907,7 @@ const handleWebsocket = async (socket: WebSocket, request: Request) => {
     socket.close();
     return;
   }
+  releaseMessages();
 };
 
 export const localHandler = createHandler(

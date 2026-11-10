@@ -303,6 +303,22 @@ export const dockerJobExecute = (args: DockerJobArgs): DockerJobExecution => {
       }
     }
 
+    if (existingRunningContainer) {
+      // Attaching with logs: true replays the container's output from the
+      // start. Tell the server first, so it replaces the run logs it already
+      // has (kept in memory, or reloaded from its spool after a restart)
+      // instead of appending the replay to them.
+      sender({
+        type: WebsocketMessageTypeWorkerToServer.JobStatusLogs,
+        payload: {
+          jobId: id,
+          step: `${DockerJobState.Running}`,
+          logs: [],
+          replay: true,
+        } as JobStatusPayload,
+      });
+    }
+
     // attach to container
     const stream = await dockerExecution.container!.attach({
       stream: true,

@@ -945,3 +945,25 @@ export const getWorkerColorizedString = (worker: string): string => {
 
   return s;
 };
+
+/**
+ * Hold the messages a just-accepted websocket receives until the queue it is
+ * for is ready and listening, then hand them over. A server that has just
+ * started sets up the queue (reading its jobs back from the db) before it
+ * attaches the socket, and a worker registers the moment it connects: without
+ * this the registration is lost, and the server drops every log line the
+ * worker sends until it notices and registers again, many seconds later.
+ *
+ * Returns the release: call it once the queue's listeners are attached.
+ */
+export const holdSocketMessages = (socket: WebSocket): () => void => {
+  const held: unknown[] = [];
+  const hold = (event: MessageEvent) => held.push(event.data);
+  socket.addEventListener("message", hold);
+  return () => {
+    socket.removeEventListener("message", hold);
+    for (const data of held) {
+      socket.dispatchEvent(new MessageEvent("message", { data }));
+    }
+  };
+};

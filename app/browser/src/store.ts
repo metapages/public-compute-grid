@@ -526,6 +526,11 @@ export const useStore = create<MainStore>((set, get) => ({
         get().appendBuildLogs(status.logs);
         break;
       case `${DockerJobState.Running}`:
+        // The worker reattached to the container and docker is replaying its
+        // output from the start: drop what is shown, the replay restores it
+        if (status.replay) {
+          get().setRunLogs(null);
+        }
         get().appendRunLogs(status.logs);
         break;
       default:
