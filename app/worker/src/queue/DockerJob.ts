@@ -432,9 +432,6 @@ export const dockerJobExecute = (args: DockerJobArgs): DockerJobExecution => {
     if (isKilled.value) {
       return;
     }
-    if (result.StatusCode !== 0) {
-      result.logs.push([`⚠️ Container exited with status code: ${result.StatusCode}`, Date.now(), true]);
-    }
     return finished(result.StatusCode);
   };
 
@@ -468,10 +465,20 @@ export const getRunningContainerForJob = async (args: {
 };
 
 /**
+ * Killed from outside (SIGKILL/SIGTERM) and not by the OOM killer: a docker or
+ * host restart, another worker's orphan check, this worker's own cleanup. The
+ * job never finished on its own, so this is no result: run it again. An OOM kill
+ * is the job's own doing, and a result.
+ */
+export const isKilledFromOutside = (state?: { ExitCode?: number; OOMKilled?: boolean }): boolean =>
+  (state?.ExitCode === 137 || state?.ExitCode === 143) && !state?.OOMKilled;
+
+/**
  * This worker's newest exited container for the job, if it belongs to the job's
  * current run: created at or after `queuedTime`. A requeue (the server lost the
  * worker) keeps the job's queuedTime, a new submission of the same id gets a new
  * one, so an older container is a result the submitter has already moved past.
+ * A container killed from outside is skipped (isKilledFromOutside).
  */
 export const getExitedContainerForJob = async (args: {
   jobId: string;
@@ -487,8 +494,12 @@ export const getExitedContainerForJob = async (args: {
   for (const containerData of exited) {
     try {
       const container = docker.getContainer(containerData.Id);
+      const info = await container.inspect();
+      if (isKilledFromOutside(info.State)) {
+        continue;
+      }
       // listContainers' Created is in whole seconds, too coarse against queuedTime
-      const created = Date.parse((await container.inspect()).Created);
+      const created = Date.parse(info.Created);
       if (created >= queuedTime && (!newest || created > newest.created)) {
         newest = { container, created };
       }

@@ -935,7 +935,7 @@ export class DockerJobQueue {
           return;
         }
         queueItem.phase = DockerRunPhase.CopyInputs;
-        const runningContainer = await getRunningContainerForJob({ jobId });
+        const runningContainer = await getRunningContainerForJob({ jobId, workerId: this.workerId });
         exitedContainer = runningContainer ? undefined : await this.findExitedContainerToCollect(jobId);
         if (!runningContainer && !exitedContainer) {
           // An earlier run's leftovers: a restart in the middle of this run must
@@ -1045,6 +1045,12 @@ export class DockerJobQueue {
         return;
       }
 
+      // Set once a Finished is handed to the sender (not yet delivered: the
+      // socket may be down). From then on the container is left to the periodic
+      // cleanup, which removes it once the server's state shows the job
+      // Finished (keepsExitedContainer). Until then it is what a restarted
+      // worker collects the result from (#361).
+      let reported = false;
       dockerExecution.finish.then(
         async (result: computeQueuesShared.DockerRunResult | undefined) => {
           if (!result) {
@@ -1183,6 +1189,7 @@ export class DockerJobQueue {
           workItem.phase = DockerRunPhase.Ended;
           delete this.queue[jobId];
 
+          reported = true;
           this._reportFinished(jobId, valueFinished);
         },
       ).catch((err: unknown) => {
@@ -1211,16 +1218,17 @@ export class DockerJobQueue {
           } as computeQueuesShared.DockerRunResultWithOutputs,
         };
 
+        reported = true;
         this._reportFinished(jobId, valueError);
       }).finally(() => {
         // I had the queue removal here initially but I wanted
         // to remove the element from the queue before sending to server
         // in case server send fails and throws an error
 
-        // Only now, with the result reported: until then the exited container
-        // is what a restarted worker collects the result from (#361).
-        if (dockerExecution.container && !isKilled.value) {
-          killAndRemove(workItem, jobId, dockerExecution.container, "DockerJob finished and reported");
+        // No result of ours to keep (ignored: the job is running or finished
+        // elsewhere, or gone): nothing to collect later, remove it now.
+        if (!reported && dockerExecution.container && !isKilled.value) {
+          killAndRemove(workItem, jobId, dockerExecution.container, "DockerJob finished, result not ours");
         }
       });
     })();

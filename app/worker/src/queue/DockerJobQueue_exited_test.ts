@@ -53,7 +53,13 @@ const concat = (...parts: Uint8Array[]): Uint8Array => {
   return out;
 };
 
-type FakeContainer = { id: string; created: string; status: "exited" | "running"; worker?: string };
+type FakeContainer = {
+  id: string;
+  created: string;
+  status: "exited" | "running";
+  exitCode?: number;
+  oomKilled?: boolean;
+};
 
 /** Replace the docker calls the worker makes with these containers */
 const stubDocker = (containers: FakeContainer[], events: string[]) => {
@@ -62,6 +68,7 @@ const stubDocker = (containers: FakeContainer[], events: string[]) => {
     getContainer: docker.getContainer,
     createContainer: docker.createContainer,
     getNetwork: docker.getNetwork,
+    listImages: docker.listImages,
   };
   docker.listContainers = ((opts: { filters: string }) => {
     const filters = JSON.parse(opts.filters) as { status?: string[] };
@@ -78,7 +85,13 @@ const stubDocker = (containers: FakeContainer[], events: string[]) => {
       inspect: () =>
         Promise.resolve({
           Created: c.created,
-          State: { Status: c.status, ExitCode: 3, StartedAt: STARTED, FinishedAt: FINISHED },
+          State: {
+            Status: c.status,
+            ExitCode: c.exitCode ?? 3,
+            OOMKilled: !!c.oomKilled,
+            StartedAt: STARTED,
+            FinishedAt: FINISHED,
+          },
         }),
       logs: () =>
         Promise.resolve(concat(frame(1, `${STARTED} hello from the first run\n`), frame(2, `${FINISHED} oops\n`))),
@@ -90,8 +103,11 @@ const stubDocker = (containers: FakeContainer[], events: string[]) => {
   }) as typeof docker.getContainer;
   docker.createContainer = (() => {
     events.push("createContainer");
-    return Promise.reject(new Error("the job must not run again"));
+    return Promise.reject(new Error("a new run: not in this test"));
   }) as unknown as typeof docker.createContainer;
+  // the job's image is there, so a new run gets as far as createContainer
+  docker.listImages =
+    (() => Promise.resolve([{ RepoTags: [`${DEFINITION.image}:latest`] }])) as unknown as typeof docker.listImages;
   docker.getNetwork = (() => ({ inspect: () => Promise.resolve({}) })) as unknown as typeof docker.getNetwork;
   return () => Object.assign(docker, original);
 };
@@ -170,11 +186,15 @@ for (
         },
       } as BroadcastJobStates);
 
-      await waitFor(() => events.includes("remove exited-container"));
+      await waitFor(() => events.includes("send Finished"));
 
       assert(!events.includes("createContainer"), "the job must not run again");
-      // reported first, removed after
-      assertEquals(events.filter((e) => e !== "send Running"), ["send Finished", "remove exited-container"]);
+      // Sent is not delivered: the container stays, for the periodic cleanup to
+      // remove once the server's state shows the job Finished
+      assert(!events.includes("remove exited-container"), "removed before the server has the result");
+      assert(queue.keepsExitedContainer(JOB));
+      queue._updateApiQueue({ state: { jobs: { [JOB]: job(DockerJobState.Finished, WORKER, queuedTime) } } });
+      assert(!queue.keepsExitedContainer(JOB));
 
       const finished = sent
         .map((m) => m.payload as StateChange)
@@ -195,6 +215,48 @@ for (
     }
   });
 }
+
+Deno.test("restart: a container killed from outside (137, not OOM) is not a result, the job runs again", async () => {
+  const dataDirectory = await Deno.makeTempDir();
+  const saved = { dataDirectory: config.dataDirectory, mode: config.mode, server: config.server };
+  Object.assign(config, { dataDirectory, mode: "local", server: "http://localhost:0" });
+
+  const events: string[] = [];
+  // e.g. stopped by a docker restart, or another worker's orphan check
+  const restore = stubDocker([{ id: "killed-container", created: STARTED, status: "exited", exitCode: 137 }], events);
+  const queue = newQueue([], events);
+  try {
+    await queue.onUpdateSetAllJobStates({
+      state: { jobs: { [JOB]: job(DockerJobState.Queued, "", Date.parse(STARTED) - 1000) } },
+    } as BroadcastJobStates);
+
+    await waitFor(() => events.includes("createContainer"));
+    // removed as an earlier run's leftover before the new run starts
+    assertEquals(events.filter((e) => e !== "send Running").slice(0, 2), [
+      "remove killed-container",
+      "createContainer",
+    ]);
+  } finally {
+    restore();
+    Object.assign(config, saved);
+    await new Promise((r) => setTimeout(r, 1100));
+    await Deno.remove(dataDirectory, { recursive: true });
+  }
+});
+
+Deno.test("getExitedContainerForJob: an OOM kill is a result, a kill from outside is not", async () => {
+  const restore = stubDocker([
+    { id: "sigterm", created: "2026-11-10T10:00:03Z", status: "exited", exitCode: 143 },
+    { id: "sigkill", created: "2026-11-10T10:00:02Z", status: "exited", exitCode: 137 },
+    { id: "oom", created: "2026-11-10T10:00:01Z", status: "exited", exitCode: 137, oomKilled: true },
+  ], []);
+  try {
+    const found = await getExitedContainerForJob({ jobId: JOB, workerId: WORKER, queuedTime: 0 });
+    assertEquals(found?.id, "oom");
+  } finally {
+    restore();
+  }
+});
 
 Deno.test("getExitedContainerForJob: only a container of the job's current run, the newest", async () => {
   const queuedTime = Date.parse("2026-11-10T10:00:00.500Z");
