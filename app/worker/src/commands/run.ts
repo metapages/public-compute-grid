@@ -352,7 +352,7 @@ export async function connectToServer(
     maxJobDuration,
     queue: queueId,
     jobDefinitions: jobDefinitionCache,
-    finishedJobs: new FinishedJobsStore(kv, workerId),
+    finishedJobs: new FinishedJobsStore(kv, workerId, queueId),
     handover,
   };
   const dockerJobQueue = new DockerJobQueue(dockerJobQueueArgs);

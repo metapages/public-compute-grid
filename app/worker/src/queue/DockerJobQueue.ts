@@ -1242,7 +1242,13 @@ export class DockerJobQueue {
         console.log(`${this.workerIdShort} ${getJobColorizedString(jobId)} 🚨 failed to persist Finished: ${err}`);
       }
     }
-    this.sender(message);
+    // Callers do not await this, so a throw here would be an unhandled
+    // rejection, which exits the process
+    try {
+      this.sender(message);
+    } catch (err) {
+      console.log(`${this.workerIdShort} ${getJobColorizedString(jobId)} 🚨 failed to send Finished: ${err}`);
+    }
   }
 
   /**
@@ -1274,6 +1280,8 @@ export class DockerJobQueue {
    */
   _forgetFinished(jobId: string, opts?: { persisted?: boolean }) {
     const known = this.finishedAndReported.delete(jobId);
+    // Not awaited: sets and deletes go through the one KV handle in order, and
+    // the delete in _startJob is issued long before that run can report.
     if ((known || opts?.persisted) && this.finishedJobs) {
       this.finishedJobs.delete(jobId).catch((err) =>
         console.log(

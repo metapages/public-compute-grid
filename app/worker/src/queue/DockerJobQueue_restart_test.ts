@@ -1,3 +1,4 @@
+import { serialize } from "node:v8";
 import { assert, assertEquals } from "std/assert";
 import { join } from "std/path";
 
@@ -11,7 +12,7 @@ import {
 } from "@metapages/compute-queues-shared";
 import type { KvStore } from "../../../shared/src/shared/kv.ts";
 import { DockerJobQueue } from "/@/queue/DockerJobQueue.ts";
-import { FinishedJobsStore, fitForKv } from "/@/queue/FinishedJobsStore.ts";
+import { FinishedJobsStore, fitForKv, MaxPersistedBytes } from "/@/queue/FinishedJobsStore.ts";
 import type { JobDefinitionCache } from "/@/queue/JobDefinitionCache.ts";
 
 /**
@@ -22,6 +23,7 @@ import type { JobDefinitionCache } from "/@/queue/JobDefinitionCache.ts";
  */
 
 const workerId = "test-worker-358";
+const queueId = "test-queue-358";
 const jobId = "job-358";
 const definition: DockerJobDefinitionInputRefs = { image: "alpine:3", command: "echo once" };
 
@@ -51,9 +53,9 @@ const createWorker = async (kvPath: string, opts?: { handover?: "standby" }) => 
     version: "test",
     time: Date.now(),
     maxJobDuration: "1h",
-    queue: "test-queue-358",
+    queue: queueId,
     jobDefinitions,
-    finishedJobs: new FinishedJobsStore(kv, workerId),
+    finishedJobs: new FinishedJobsStore(kv, workerId, queueId),
     handover: opts?.handover,
   });
   queue.stopPeriodicRegistration();
@@ -123,7 +125,7 @@ Deno.test("a restarted worker does not rerun a job it finished before the restar
     // The server catches up: the record has done its job and is removed from disk
     await after.broadcast(DockerJobState.Finished);
     await settle();
-    assertEquals(await new FinishedJobsStore(after.kv, workerId).get(jobId), null);
+    assertEquals(await new FinishedJobsStore(after.kv, workerId, queueId).get(jobId), null);
 
     // The same definition submitted again is a new run and is claimed
     await after.broadcast(DockerJobState.Queued, "");
@@ -183,20 +185,71 @@ Deno.test("a stale record on disk does not stop a new run from being picked up a
   });
 });
 
-Deno.test("a Finished too big for a KV value keeps the tail of its logs", () => {
-  const logs: [string, number][] = Array.from({ length: 5000 }, (_, i) => [`line ${i} ${"x".repeat(40)}`, i]);
-  const message: WebsocketMessageWorkerToServer = {
+const bigFinished = (line: (i: number) => string): WebsocketMessageWorkerToServer => {
+  const logs: [string, number][] = Array.from({ length: 5000 }, (_, i) => [line(i), i]);
+  return {
     type: "StateChange",
     payload: { job: jobId, tag: workerId, state: DockerJobState.Finished, value: { result: { ...result, logs } } },
   } as unknown as WebsocketMessageWorkerToServer;
-  const fitted = fitForKv(message);
-  const fittedLogs = (fitted.payload as { value: { result: DockerRunResultWithOutputs } }).value.result.logs!;
-  assert(new TextEncoder().encode(JSON.stringify(fitted)).length <= 60 * 1024);
-  assert(fittedLogs.length > 0 && fittedLogs.length < logs.length);
-  assertEquals(fittedLogs.at(-1), logs.at(-1), "the last line, where an error shows, is kept");
-  assertEquals(
-    (message.payload as { value: { result: DockerRunResultWithOutputs } }).value.result.logs!.length,
-    logs.length,
-    "the message itself is not modified",
-  );
+};
+const logsOf = (m: WebsocketMessageWorkerToServer) =>
+  (m.payload as { value: { result: DockerRunResultWithOutputs } }).value.result.logs!;
+
+for (
+  const [name, line] of [
+    ["ascii", (i: number) => `line ${i} ${"x".repeat(40)}`],
+    // Any character above U+00FF makes V8 store the whole string as UTF-16:
+    // about twice its JSON size, which is what Deno KV measures
+    ["progress bar", (i: number) => `━ line ${i} ${"x".repeat(40)}`],
+    ["emoji", (i: number) => `💥 line ${i} ${"x".repeat(40)}`],
+  ] as const
+) {
+  Deno.test(`a Finished too big for a KV value (${name} logs) is stored with the tail of its logs`, async () => {
+    await withKvFile(async (path) => {
+      const message = bigFinished(line);
+      const kv = await openKv(path);
+      try {
+        const store = new FinishedJobsStore(kv, workerId, queueId);
+        await store.set(jobId, message);
+        const stored = await store.get(jobId);
+        assert(stored, "the trimmed message fits in a real KV value");
+        const storedLogs = logsOf(stored);
+        assert(storedLogs.length > 0 && storedLogs.length < logsOf(message).length);
+        assertEquals(storedLogs.at(-1), logsOf(message).at(-1), "the last line, where an error shows, is kept");
+        assertEquals(logsOf(message).length, 5000, "the message itself is not modified");
+        assert(serialize(fitForKv(message)).byteLength <= MaxPersistedBytes);
+      } finally {
+        kv.close();
+      }
+    });
+  });
+}
+
+Deno.test("finished records are per queue: workers sharing a KV file and id do not see each other's", async () => {
+  await withKvFile(async (path) => {
+    const kv = await openKv(path);
+    try {
+      const a = new FinishedJobsStore(kv, workerId, "queue-a");
+      const b = new FinishedJobsStore(kv, workerId, "queue-b");
+      await a.set(jobId, bigFinished((i) => `${i}`));
+      assertEquals(await b.get(jobId), null);
+      await b.delete(jobId);
+      assert(await a.get(jobId), "queue b's delete leaves queue a's record");
+    } finally {
+      kv.close();
+    }
+  });
+});
+
+Deno.test("reporting Finished does not reject when the send throws", async () => {
+  await withKvFile(async (path) => {
+    const worker = await createWorker(path);
+    worker.queue.sender = () => {
+      throw new Error("socket gone");
+    };
+    // Callers do not await it: a rejection would be unhandled and exit the process
+    await finishLocally(worker.queue);
+    assert(await new FinishedJobsStore(worker.kv, workerId, queueId).get(jobId), "it is persisted all the same");
+    worker.kv.close();
+  });
 });

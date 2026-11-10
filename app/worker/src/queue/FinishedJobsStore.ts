@@ -1,12 +1,17 @@
 import { ms } from "ms";
+import { serialize } from "node:v8";
 
 import type { DockerRunResultWithOutputs, WebsocketMessageWorkerToServer } from "@metapages/compute-queues-shared";
 import type { KvStore } from "../../../shared/src/shared/kv.ts";
 
 /** Long enough to outlive any server outage worth surviving, short enough not to accumulate. */
 const FinishedReportedExpiry = ms("7d") as number;
-/** Deno KV rejects values over 64 KiB; leave room for the key and encoding. */
-const MaxPersistedBytes = 60 * 1024;
+/**
+ * Deno KV rejects values over 64 KiB, measured V8-serialized: a string with
+ * any character above U+00FF is stored as UTF-16, two bytes for every
+ * character, so its JSON length can be half the real size. Keep a margin.
+ */
+export const MaxPersistedBytes = 63 * 1024;
 
 /**
  * The Finished messages a worker has sent, persisted in its local KV (#358).
@@ -21,10 +26,19 @@ const MaxPersistedBytes = 60 * 1024;
  * rather than recomputed.
  */
 export class FinishedJobsStore {
-  constructor(private readonly kv: KvStore, private readonly workerId: string) {}
+  /**
+   * Keyed by queue too: workers on one machine with the default data
+   * directory share the KV file and the worker id, and a job id (a hash of
+   * the definition) can be live in two queues at once.
+   */
+  constructor(
+    private readonly kv: KvStore,
+    private readonly workerId: string,
+    private readonly queue: string,
+  ) {}
 
   private key(jobId: string): string[] {
-    return ["worker-finished-reported", this.workerId, jobId];
+    return ["worker-finished-reported", this.workerId, this.queue, jobId];
   }
 
   async set(jobId: string, message: WebsocketMessageWorkerToServer): Promise<void> {
@@ -47,7 +61,7 @@ export class FinishedJobsStore {
  * shows.
  */
 export const fitForKv = (message: WebsocketMessageWorkerToServer): WebsocketMessageWorkerToServer => {
-  const size = (m: unknown) => new TextEncoder().encode(JSON.stringify(m)).length;
+  const size = (m: unknown) => serialize(m).byteLength;
   if (size(message) <= MaxPersistedBytes) {
     return message;
   }
