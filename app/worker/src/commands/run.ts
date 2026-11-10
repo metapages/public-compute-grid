@@ -29,6 +29,7 @@ import { getKv } from "../../../shared/src/shared/kv.ts";
 import mod from "../../mod.json" with { type: "json" };
 import { setGlobalDockerJobQueue } from "../cli.ts";
 import { killAndRemoveContainerForJob } from "../queue/cleanup.ts";
+import { FinishedJobsStore } from "../queue/FinishedJobsStore.ts";
 import { JobDefinitionCache } from "../queue/JobDefinitionCache.ts";
 import { shouldStartInStandby, startAutoUpdate, takeOverFromPredecessor } from "../upgrade/autoUpdate.ts";
 import { HANDOVER_ID_ENV } from "../upgrade/successor.ts";
@@ -351,6 +352,7 @@ export async function connectToServer(
     maxJobDuration,
     queue: queueId,
     jobDefinitions: jobDefinitionCache,
+    finishedJobs: new FinishedJobsStore(kv, workerId),
     handover,
   };
   const dockerJobQueue = new DockerJobQueue(dockerJobQueueArgs);
