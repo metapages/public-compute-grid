@@ -62,6 +62,16 @@ export class DockerJobQueue {
   /** Jobs we have already explained we cannot claim, so the reason is logged once */
   private unclaimableJobsLogged = new Set<string>();
   /**
+   * Jobs this worker has finished and reported, keyed by id, holding the
+   * Finished state change we sent. Until the server reflects that, its
+   * broadcasts still say the job is Running on us, and with no local entry
+   * that looks exactly like a job we lost in a restart: without this record
+   * _claimJobs would run the job a second time (#346). Cleared as soon as the
+   * server says anything other than "Running on us" for the id, so a genuine
+   * resubmission of the same id can be claimed again.
+   */
+  finishedAndReported = new Map<string, computeQueuesShared.WebsocketMessageWorkerToServer>();
+  /**
    * Set while this worker is in an --auto-update handover. In every handover
    * state the worker claims nothing: a successor ("standby") waits for its
    * predecessor, which shares its worker id, to stop claiming; a predecessor
@@ -488,6 +498,16 @@ export class DockerJobQueue {
     //   }
     // });
 
+    // Once the server has stopped saying a job we finished is running on us,
+    // the record has done its job. Anything after that (Queued again, Running
+    // elsewhere, gone) is a new life for the id.
+    for (const jobId of [...this.finishedAndReported.keys()]) {
+      const apiJob = this.apiQueue[jobId];
+      if (apiJob?.state !== DockerJobState.Running || apiJob.worker !== this.workerId) {
+        this.finishedAndReported.delete(jobId);
+      }
+    }
+
     // Prefetch the job definitions for the jobs in the queue
     // this will also only prefetch the jobs that are not already in the cache
     this.jobDefinitions.prefetch(Object.keys(jobStates));
@@ -695,6 +715,18 @@ export class DockerJobQueue {
 
         // check docker if they are?
         for (const runningJobId of jobsServerSaysAreRunningOnMe) {
+          const finishedMessage = this.finishedAndReported.get(runningJobId);
+          if (finishedMessage && !this.queue[runningJobId]) {
+            // A stale broadcast from before the server saw our Finished, not a
+            // job we lost. Remind the server instead of running it again.
+            console.log(
+              `${this.workerIdShort} 🎳 _claimJobs runningJobId=${
+                getJobColorizedString(runningJobId)
+              } server says running on me but I already finished it, resending Finished`,
+            );
+            this.sender(finishedMessage);
+            continue;
+          }
           if (!this.queue[runningJobId]) {
             console.log(
               `${this.workerIdShort} 🎳 _claimJobs runningJobId=${
@@ -865,6 +897,9 @@ export class DockerJobQueue {
       },
     };
 
+    // This is a new run of the id, so the server saying Running on us is true again
+    this.finishedAndReported.delete(jobId);
+
     // add a placeholder on the queue for this job
     const queueItem: WorkerJobQueueItem = {
       phase: DockerRunPhase.CopyInputs,
@@ -901,7 +936,7 @@ export class DockerJobQueue {
         const volumesResult = await convertIOToVolumeMounts(
           { id: jobId, definition },
           config.server,
-          { keepOutputs: !!(await getRunningContainerForJob({ jobId })) },
+          { keepOutputs: !!(await getRunningContainerForJob({ jobId, workerId: this.workerId })) },
         );
         if (isRemoved()) {
           return;
@@ -915,7 +950,6 @@ export class DockerJobQueue {
           // killed meanwhile: the error is ours to ignore, not the job's
           return;
         }
-        // TODO too much code duplication here
         // Delete from our local queue before sending
         // TODO: cache locally before attempting to send
         delete this.queue[jobId];
@@ -935,20 +969,7 @@ export class DockerJobQueue {
           } as computeQueuesShared.DockerRunResultWithOutputs,
         };
 
-        // console.log(
-        //   `${this.workerIdShort} ${jobString} 🤡 SENDINGDockerJobState.Finished reason`,
-        //   valueError.reason,
-        // );
-
-        this.sender({
-          type: computeQueuesShared.WebsocketMessageTypeWorkerToServer.StateChange,
-          payload: {
-            job: jobId,
-            tag: this.workerId,
-            state: computeQueuesShared.DockerJobState.Finished,
-            value: valueError,
-          },
-        });
+        this._reportFinished(jobId, valueError);
         return;
       }
 
@@ -1149,21 +1170,7 @@ export class DockerJobQueue {
           workItem.phase = DockerRunPhase.Ended;
           delete this.queue[jobId];
 
-          // console.log(
-          //   `${this.workerIdShort} ${jobString} 🤡 SENDINGDockerJobState.Finished reason`,
-          //   valueFinished.reason,
-          // );
-
-          this.sender({
-            type: computeQueuesShared.WebsocketMessageTypeWorkerToServer
-              .StateChange,
-            payload: {
-              job: jobId,
-              tag: this.workerId,
-              state: computeQueuesShared.DockerJobState.Finished,
-              value: valueFinished,
-            },
-          });
+          this._reportFinished(jobId, valueFinished);
         },
       ).catch((err: unknown) => {
         workItem.phase = DockerRunPhase.Ended;
@@ -1191,26 +1198,33 @@ export class DockerJobQueue {
           } as computeQueuesShared.DockerRunResultWithOutputs,
         };
 
-        // console.log(
-        //   `${this.workerIdShort} ${jobString} 🤡 SENDINGDockerJobState.Finished reason`,
-        //   valueError.reason,
-        // );
-
-        this.sender({
-          type: computeQueuesShared.WebsocketMessageTypeWorkerToServer.StateChange,
-          payload: {
-            job: jobId,
-            tag: this.workerId,
-            state: computeQueuesShared.DockerJobState.Finished,
-            value: valueError,
-          },
-        });
+        this._reportFinished(jobId, valueError);
       }).finally(() => {
         // I had the queue removal here initially but I wanted
         // to remove the element from the queue before sending to server
         // in case server send fails and throws an error
       });
     })();
+  }
+
+  /**
+   * Tell the server this worker finished the job, and remember that it did so a
+   * stale "Running on me" broadcast does not start it again (#346). The local
+   * queue entry must already be gone.
+   */
+  _reportFinished(jobId: string, value: computeQueuesShared.StateChangeValueFinished) {
+    const message: computeQueuesShared.WebsocketMessageWorkerToServer = {
+      type: computeQueuesShared.WebsocketMessageTypeWorkerToServer.StateChange,
+      payload: {
+        job: jobId,
+        tag: this.workerId,
+        state: computeQueuesShared.DockerJobState.Finished,
+        value,
+      },
+    };
+    // Record before sending, in case the server's answer comes back before send returns.
+    this.finishedAndReported.set(jobId, message);
+    this.sender(message);
   }
 
   /**
