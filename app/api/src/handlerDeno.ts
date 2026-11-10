@@ -65,6 +65,22 @@ export const addDenoStaticRoutes = (app: Hono): void => {
  * Kept out of handlerHono.ts because hono's Deno serveStatic reads Deno
  * globals at import, and the Cloudflare Worker imports handlerHono.ts.
  */
-export const handlerHttp = createApp({ serveStatic: addDenoStaticRoutes }).fetch as (
-  request: Request,
-) => Promise<Response | undefined>;
+/**
+ * The worker release this checkout is at, for the --auto-update version gate.
+ * Read from disk, not imported: the docker stacks mount an empty app/worker
+ * into the api containers, and an import would stop the api from starting.
+ */
+const readWorkerVersion = (): string | undefined => {
+  try {
+    const mod = JSON.parse(Deno.readTextFileSync(new URL("../../worker/mod.json", import.meta.url)));
+    return typeof mod?.version === "string" ? mod.version : undefined;
+  } catch {
+    console.log("app/worker/mod.json not found: not serving the worker version gate");
+    return undefined;
+  }
+};
+
+export const handlerHttp = createApp({ serveStatic: addDenoStaticRoutes, workerVersion: readWorkerVersion() })
+  .fetch as (
+    request: Request,
+  ) => Promise<Response | undefined>;

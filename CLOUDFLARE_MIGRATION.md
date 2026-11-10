@@ -28,17 +28,22 @@ with no `Deno.*` or Workers-only calls. Only the runtime adapters are runtime-sp
 
 The migration is merged and deployed; what is left lives in its own issues.
 
-| issue | what                                              | when                         |
-| ----- | ------------------------------------------------- | ---------------------------- |
-| #330  | A double-claimed job runs to completion twice     | any time                     |
-| #318  | Publish a worker release so idle workers go quiet | any time                     |
-| #319  | Remove the Deno Deploy era env vars and secrets   | any time                     |
-| #320  | Delete the Deno Deploy app and the old S3 bucket  | once the domain has settled  |
-| #315  | Worker can go deaf (ping/pong weaknesses)         | when it next recurs          |
-| #322  | Stricter worker version gate                      | after #318, or when it costs |
+| issue | what                                                          | when                             |
+| ----- | ------------------------------------------------------------- | -------------------------------- |
+| #346  | A finished job is started again on the same worker            | **first** — it runs twice        |
+| #330  | A double-claimed job runs to completion twice                 | with #346                        |
+| #342  | Smoke-test each Cloudflare deploy, after it settles           | next: #346 is only visible there |
+| #341  | Run `just test cloudflare` in CI                              | any time                         |
+| #347  | Concurrent first requests to a new queue get a half-built one | any time, small                  |
+| #320  | Delete the Deno Deploy app and the old S3 bucket              | once the domain has settled      |
+| #315  | Worker can go deaf (ping/pong weaknesses)                     | when it next recurs              |
+| #322  | Stricter worker version gate                                  | when it costs                    |
+| #343  | Pre-existing test flakes                                      | when they bite                   |
+| #344  | Worker on Node, one server/worker/CLI program                 | the long-term direction          |
 
 Done since this table was written: #317 (deploy token rotated), #321 (docs-only pushes), #314 (two suites on one queue),
-#316 (`container.mtfm.io` is served by the Worker as of 2026-11-07). `just test cloudflare` passes 71/71.
+#316 (`container.mtfm.io` is served by the Worker as of 2026-11-07), #318 (0.54.87 published), #319 (Deno Deploy era env
+vars). `just test cloudflare` passes 71/71, and `just test-url https://container.mtfm.io` 9/10 — the failure is #346.
 
 ## 0. Integration tests first
 
@@ -266,7 +271,10 @@ Nothing here is required for the migration — this PR already removes the Deno 
       / `DENO_BROADCAST_REDIS_URL`. **None of these exist on Cloudflare and none should be added**: the Worker has
       exactly `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT` as secrets and `AWS_REGION`, `AWS_S3_BUCKET`
       as vars (verified with `wrangler secret list`). D1 replaces Deno KV and one Durable Object per queue replaces the
-      Redis bus, so there is nothing to configure in their place
+      Redis bus, so there is nothing to configure in their place. #319 removed the remaining references from the code
+      comments and docs; the compose stacks keep their own `DENO_KV_*` / `REDIS_URL` values for their `denokv` and
+      `redis` services. What is left is outside the repo: delete the `DENO_DEPLOY_TOKEN` Actions secret (repo and org),
+      remove these variables from local `.env` files, and delete the Deno Deploy project (next item)
 - [ ] Delete the Deno Deploy app and the old S3 bucket whenever convenient — jobs have a 30-day lifespan, so the
       bucket's contents are all disposable
 - [ ] Add `just test cloudflare` to CI, so the Worker path cannot rot
@@ -299,10 +307,15 @@ the local-mode worker run, and those are development and test targets, not deplo
 - `wrangler deploy` with several environments defined warns that it is picking the top-level environment by implication.
   Production now names it explicitly (`--env ""`), because that warning describes exactly how a staging deploy reaches
   production by accident.
-- Seen once on the first run against the real hostname, not on the re-run: the big-log contract test read **3485** log
-  lines where the job wrote 3000 — duplicated, not truncated. Only one worker was attached, so this is not the
-  double-claim duplication of #330; the suspect is the late-log append path, which appends lines arriving after a job's
-  logs were flushed. The re-run passed 10/10, so it is intermittent.
+- The big-log contract test read **3485** log lines where the job wrote 3000 — duplicated, not truncated. First seen
+  once and written off as intermittent, with the late-log append path as the suspect. That was wrong, and worth
+  recording as a lesson: a surplus of output is evidence about _execution_, not only about storage. Against the real
+  hostname it now reproduces every run (3485, then 3005), and the worker log says why — the job **ran to completion
+  twice on one worker**. The worker finishes a job and drops its local entry, the server still broadcasts the job as
+  `Running` on that worker for about a second, and `_claimJobs` reads "running on me but not local" as a job to restart.
+  The late-log append path then faithfully appends a second execution's output. Filed as #346. It needs real round-trip
+  latency, so neither `just test cloudflare` nor a local-mode worker shows it: only a deployed stack does, which is the
+  argument for #342.
 
 - A queue's Durable Object could drop its worker the moment the object was rebuilt, leaving every job Queued:
   `getApiDockerJobQueue` memoizes queues in a module-level map, which is per _isolate_, not per Durable Object. A new

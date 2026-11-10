@@ -71,13 +71,16 @@ import { setJobStateFinished } from "../client.ts";
  * deployment; the new Deno Deploy does not, so on the native implementation an
  * api instance holding a worker's websocket never hears about a job enqueued
  * over HTTP on another instance, and the job sits Queued forever. Redis pubsub
- * is the bus instead, in production and in the local multi-instance stack
- * alike. Native is only correct where a single process is the whole server —
- * the worker's `--mode=local`.
+ * is the bus instead wherever there are several api instances: today only the
+ * `remote` docker stack, which mirrors a multi-instance server. Native is only
+ * correct where a single process is the whole server — the worker's
+ * `--mode=local`.
  *
  * On Cloudflare each queue lives in exactly one Durable Object, so there are no
  * other instances to tell: the runtime installs a no-op channel with
- * setBroadcastChannelFactory before any queue is created.
+ * setBroadcastChannelFactory before any queue is created. Production runs
+ * there, so it sets neither REDIS_URL nor DENO_BROADCAST_REDIS_URL, and none
+ * should be added (#319).
  */
 const redisUrl: string | undefined = getEnv("DENO_BROADCAST_REDIS_URL") ||
   getEnv("REDIS_URL");
@@ -110,7 +113,8 @@ export const setBroadcastChannelFactory = (factory: BroadcastChannelFactory): vo
 
 if (redisUrl) {
   // The library reads DENO_BROADCAST_REDIS_URL at import time and throws
-  // without it, so bridge production's REDIS_URL onto the name it wants.
+  // without it, so bridge REDIS_URL (what the remote stack sets) onto the
+  // name it wants.
   Deno.env.set("DENO_BROADCAST_REDIS_URL", redisUrl);
   try {
     const { BroadcastChannelRedis } = await import(
@@ -973,6 +977,7 @@ export class BaseDockerJobQueue {
       return result;
     }
     const { promise: allResponded, resolve: markAllResponded } = Promise.withResolvers<void>();
+    let responses = 0;
 
     // First attach listeners to all the workers
     const eventUnbinds: (() => void)[] = [];
@@ -1005,8 +1010,15 @@ export class BaseDockerJobQueue {
               runningJobs,
             );
 
-            result[status.id] = status;
-            if (Object.keys(result).length >= expectedResponders) {
+            // Two sockets can share a worker id during an --auto-update
+            // handover: keep both, so the successor is visible next to its
+            // predecessor (the worker verifies the handover from this).
+            // Version and response count: two sockets can share the version
+            // too (a reconnect while the old half-open socket is unswept).
+            const key = result[status.id] ? `${status.id}@${status.version ?? "unknown"}#${responses}` : status.id;
+            result[key] = status;
+            responses++;
+            if (responses >= expectedResponders) {
               markAllResponded();
             }
           }
@@ -1625,8 +1637,16 @@ export class BaseDockerJobQueue {
               );
             }
 
+            // One entry per socket, not per worker id. During an --auto-update
+            // handover the successor runs with its predecessor's id, on its
+            // own socket, while the predecessor still holds its jobs. Keyed by
+            // id, the successor's registration overwrote the predecessor's
+            // entry but kept the predecessor's socket, so the predecessor
+            // closing then dropped the id altogether and its running jobs were
+            // requeued as WorkerLost. Keyed by socket, the id stays registered
+            // as long as either process is connected.
             const indexOfCurrent = this.workers.myWorkers.findIndex(
-              (w) => w.registration.id === newWorkerRegistration.id,
+              (w) => w.connection === connection.socket,
             );
             // If there is nothing
             if (indexOfCurrent < 0) {
@@ -1905,7 +1925,9 @@ export class BaseDockerJobQueue {
     if (!messageString) {
       return;
     }
-    const failedWorkers: string[] = [];
+    // The entries, not their ids: two sockets can share an id (an --auto-update
+    // handover), and a dead one must not take the live one with it.
+    const failedWorkers: typeof this.workers.myWorkers = [];
 
     if (this.debug) {
       console.log(
@@ -1929,7 +1951,7 @@ export class BaseDockerJobQueue {
               )
             } websocket not open (state: ${worker.connection.readyState})`,
           );
-          failedWorkers.push(worker.registration.id);
+          failedWorkers.push(worker);
         }
       } catch (err) {
         console.log(
@@ -1939,7 +1961,7 @@ export class BaseDockerJobQueue {
             )
           }: ${err}`,
         );
-        failedWorkers.push(worker.registration.id);
+        failedWorkers.push(worker);
       }
     });
 
@@ -1948,12 +1970,12 @@ export class BaseDockerJobQueue {
       console.log(
         `🚨 Removing ${failedWorkers.length} failed workers: ${
           failedWorkers
-            .map((id) => getWorkerColorizedString(id))
+            .map((worker) => getWorkerColorizedString(worker.registration.id))
             .join(", ")
         }`,
       );
       this.workers.myWorkers = this.workers.myWorkers.filter(
-        (worker) => !failedWorkers.includes(worker.registration.id),
+        (worker) => !failedWorkers.includes(worker),
       );
       this.myWorkersHaveChanged();
     }

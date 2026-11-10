@@ -10,7 +10,7 @@ import { uploadHandler as uploadHandlerDeprecated } from "@/routes/deprecated/up
 import { metricsHandler } from "@/routes/metrics.ts";
 import { cancelJobHandler } from "@/routes/queue/job/cancel.ts";
 import { statusHandler } from "@/routes/status.ts";
-import { makeJobUrlMiddleware, makeStreamHandler } from "@metapages/compute-queues-shared";
+import { makeJobUrlMiddleware, makeStreamHandler, WORKER_VERSIONS_PATH } from "@metapages/compute-queues-shared";
 import { type Context, Hono } from "hono";
 import { cors } from "hono/cors";
 
@@ -21,6 +21,7 @@ import { getJobsHandler } from "./routes/api/v1/jobs.ts";
 import { getBuildLogsHandler, getRunLogsHandler } from "./routes/api/v1/logs.ts";
 import { getJobNamespacesHandler } from "./routes/api/v1/namespaces.ts";
 import { getJobResultHandler } from "./routes/api/v1/result.ts";
+import { makeWorkerVersionsHandler } from "./routes/api/v1/workerVersions.ts";
 import { getApiDockerJobQueue } from "./routes/websocket.ts";
 // MCP (Model Context Protocol) handlers
 import { handleMCPHealth, handleMCPInfo } from "./routes/mcp/http.ts";
@@ -35,7 +36,15 @@ const streamHandler = makeStreamHandler({
  * way (Deno from disk below, Cloudflare from Workers Static Assets).
  * `serveStatic` registers them last, after every API route.
  */
-export const createApp = (opts?: { serveStatic?: (app: Hono) => void }): Hono => {
+export const createApp = (opts?: {
+  serveStatic?: (app: Hono) => void;
+  /**
+   * The worker release this server was built with (app/worker/mod.json), for
+   * the --auto-update version gate. Without it the gate is not served, and
+   * auto-updating workers stay on their version.
+   */
+  workerVersion?: string;
+}): Hono => {
   const app = new Hono();
 
   // app.use(logger((message: string, ...rest: string[]) => {
@@ -60,6 +69,9 @@ export const createApp = (opts?: { serveStatic?: (app: Hono) => void }): Hono =>
 
   // Put your custom routes here
   app.get("/healthz", (c: Context) => c.text("OK"));
+  if (opts?.workerVersion) {
+    app.get(WORKER_VERSIONS_PATH, makeWorkerVersionsHandler(opts.workerVersion));
+  }
 
   const toImplementPlaceholder = (c: Context) => c.text("Not implemented");
 

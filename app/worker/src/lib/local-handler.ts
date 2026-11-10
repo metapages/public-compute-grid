@@ -17,6 +17,7 @@ import {
   formatContentDisposition,
   formatSubmitResponse,
   getJobColorizedString,
+  getWorkerVersionGate,
   type InMemoryDockerJob,
   InvalidJobIdError,
   makeJobUrlMiddleware,
@@ -25,7 +26,10 @@ import {
   type StateChange,
   type SubmittedJob,
   userJobQueues,
+  WORKER_VERSIONS_PATH,
 } from "@metapages/compute-queues-shared";
+
+import mod from "../../mod.json" with { type: "json" };
 
 export class LocalDockerJobQueue extends BaseDockerJobQueue {
   constructor(opts: {
@@ -665,6 +669,7 @@ app.use(
 
 app.get("/health", (c: Context) => c.text("OK"));
 app.get("/healthz", (c: Context) => c.text("OK"));
+app.get(WORKER_VERSIONS_PATH, (c: Context) => c.json(getWorkerVersionGate(mod.version)));
 
 // app.get("/f/:key", downloadHandler);
 // app.get("/f/:key/exists", existsHandler);

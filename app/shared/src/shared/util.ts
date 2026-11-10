@@ -138,8 +138,30 @@ export const formatLogsS3Key = (id: string, kind: "build" | "run"): string => {
   return `j/${id}/${kind}-logs.json`;
 };
 
-const resolvePreferredWorker = (workerA: string, workerB: string) => {
-  return workerA.localeCompare(workerB) < 0 ? workerA : workerB;
+/**
+ * If two workers claim a job, this resolves which worker should keep it. The
+ * server and every worker must reach the same answer independently, whatever
+ * the argument order, so this is a plain code-unit comparison: localeCompare
+ * depends on the runtime's locale and can call two distinct ids equal.
+ * @returns preferred worker id
+ */
+export const resolvePreferredWorker = (workerA: string, workerB: string): string => {
+  return workerA < workerB ? workerA : workerB;
+};
+
+/**
+ * True when the server says the job is Running on another worker that wins the
+ * claim over `workerId`, i.e. `workerId` should drop its own copy right away.
+ * Compares raw worker ids (never the colorized display strings).
+ */
+export const isJobClaimedByPreferredOtherWorker = (
+  job: InMemoryDockerJob | undefined | null,
+  workerId: string,
+): boolean => {
+  if (!job || job.state !== DockerJobState.Running || !job.worker || job.worker === workerId) {
+    return false;
+  }
+  return resolvePreferredWorker(workerId, job.worker) !== workerId;
 };
 
 // TODO make this more robust? 1. Replace invalid characters with underscores

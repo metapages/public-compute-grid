@@ -86,9 +86,7 @@
     ]
   },
   "allowScripts": {
-    "allow": [
-      "npm:protobufjs"
-    ],
+    "allow": [],
     "deny": [
       "npm:ssh2",
       "npm:cpu-features"

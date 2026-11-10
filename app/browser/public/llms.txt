@@ -1,7 +1,7 @@
 # worker.metapage.io - Public Compute Queues
 
 > Open-source, browser-first compute queues for running Docker containers on distributed workers
-> Version: 0.54.80
+> Version: 0.54.87
 > Production: https://container.mtfm.io
 > Documentation: https://docs.metapage.io/docs/containers
 > Repository: https://github.com/metapages/worker.metapage.io
@@ -31,7 +31,7 @@ This project provides a web-based system for executing Docker containers on dist
 
 2. **API Server** (`app/api/`)
    - Deno-based HTTP server using Hono framework
-   - Deployed to Deno Deploy (Cloudflare Workers-like)
+   - Deployed to Cloudflare Workers (D1 + one Durable Object per queue)
    - REST API for job submission, queue management, file storage
    - WebSocket support for real-time job status updates
    - S3-compatible blob storage with signed URLs
@@ -215,7 +215,7 @@ just deploy [version]   # Bump version, commit, trigger CI/CD
 ## Deployment
 
 ### Production API
-- **Platform**: Deno Deploy
+- **Platform**: Cloudflare Workers
 - **Trigger**: Push to `main` branch
 - **URL**: https://container.mtfm.io
 - **Includes**: Browser client (built as part of API deployment)
@@ -223,7 +223,7 @@ just deploy [version]   # Bump version, commit, trigger CI/CD
 ### Worker Distribution
 - **Image**: Docker Hub `metapage/metaframe-docker-worker`
 - **Trigger**: Git semver tags
-- **Version**: Current 0.54.80
+- **Version**: Current 0.54.87
 
 ## Important Constraints & Limitations
 
@@ -240,7 +240,7 @@ just deploy [version]   # Bump version, commit, trigger CI/CD
 docker run -p 8000:8000 --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /tmp:/tmp \
-  metapage/metaframe-docker-worker:0.54.80 run \
+  metapage/metaframe-docker-worker:0.54.87 run \
   --mode=local \
   --cpus=2 \
   --max-job-duration=20m \
@@ -252,7 +252,7 @@ docker run -p 8000:8000 --rm \
 docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /tmp:/tmp \
-  metapage/metaframe-docker-worker:0.54.80 run \
+  metapage/metaframe-docker-worker:0.54.87 run \
   --cpus=2 \
   --max-job-duration=20m \
   --data-directory=/tmp/worker-metapage-io-remote \

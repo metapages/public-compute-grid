@@ -24,19 +24,6 @@ import { getEnv } from "./env.ts";
 
 const IGNORE_CERTIFICATE_ERRORS: boolean = getEnv("IGNORE_CERTIFICATE_ERRORS") === "true";
 
-/**
- * If two workers claim a job, this function will resolve which worker should take the job.
- * @param workerA
- * @param workerB
- * @returns preferred worker id
- */
-export const resolvePreferredWorker = (
-  workerA: string,
-  workerB: string,
-): string => {
-  return workerA.localeCompare(workerB) < 0 ? workerA : workerB;
-};
-
 export type JobMessagePayload = {
   message: WebsocketMessageClientToServer;
   jobId: string;

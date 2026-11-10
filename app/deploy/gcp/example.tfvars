@@ -1,5 +1,5 @@
 region                        = "us-central1"
-worker_image                  = "metapage/metaframe-docker-worker:0.40.4-standalone"
+worker_image                  = "metapage/metaframe-docker-worker:0.54.87-standalone"
 opentelemetry_collector_image = "docker.io/otel/opentelemetry-collector-contrib:0.113.0"
 
 worker_groups = {
