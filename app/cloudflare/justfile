@@ -166,10 +166,6 @@ smoke env="staging" +args="":
     esac
     deno run --allow-net scripts/smoke.ts "${url}" {{ args }}
 
-# Unit tests (the smoke check, against a stub)
-test:
-    deno test --allow-net scripts/
-
 # Print the deployed workers.dev URL for an env [staging|production]
 url env="staging":
     #!/usr/bin/env bash
@@ -186,11 +182,12 @@ url env="staging":
 wrangler +args="":
     {{ WRANGLER }} {{ args }}
 
-# Unit tests. `cloudflare:workers` only exists in workerd, so the tests run with
+# Unit tests: the Durable Objects (src) and the deploy smoke check against a stub
+# (scripts). `cloudflare:workers` only exists in workerd, so the tests run with
 # an import map that stands in a stub for it. --import-map replaces the workspace
 
 # maps rather than adding to them, so it is the root imports plus this member's.
-test +args="src":
+test +args="src scripts":
     #!/usr/bin/env bash
     set -euo pipefail
     map=$(mktemp -t cloudflare-test-import-map.XXXXXX)
