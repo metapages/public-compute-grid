@@ -66,6 +66,11 @@ export interface DockerJobArgs {
   // always defined, no jobs run forever
   maxJobDuration: number;
   isKilled: { value: boolean };
+  /**
+   * This job's container already ran to the end (it exited while the worker was
+   * down): collect its exit code and logs instead of running the job again.
+   */
+  exitedContainer?: Container;
 }
 
 // this comes out
