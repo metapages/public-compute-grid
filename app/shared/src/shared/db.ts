@@ -21,10 +21,9 @@ import {
 } from "@shared/types.ts";
 import { addJobProcessSubmissionWebhook } from "@shared/webhooks.ts";
 
-import { JobDataCacheDurationMilliseconds, JobLogsDurationMilliseconds } from "./constants.ts";
+import { JobDataCacheDurationMilliseconds } from "./constants.ts";
 import {
   formatDefinitionS3Key,
-  formatLogsS3Key,
   formatResultsS3Key,
   getJobColorizedString,
   getQueueColorizedString,
@@ -905,37 +904,16 @@ export class DB {
   }
 
   /**
-   * Build/run logs. These are streamed live over the websocket while a job
-   * runs, but agents and scripts driving the HTTP API need them after the
-   * fact too — especially build logs, which are the only way to diagnose a
-   * Dockerfile that failed to build. Written once, when the job reaches a
-   * terminal state (see BaseDockerJobQueue.flushLogBuffer).
+   * Build/run logs of jobs that finished before logs were written to storage
+   * as they stream in (JobLogs, #360): this pointed at one blob per job and
+   * kind. Read-only; nothing writes these any more.
    */
-  async storeBuildLogs(jobId: string, logs: ConsoleLogLine[]): Promise<void> {
-    await this.storeLogs(jobId, "build", logs);
-  }
-
   async getBuildLogs(jobId: string): Promise<ConsoleLogLine[] | null> {
     return await this.getLogs(jobId, "build");
   }
 
-  async storeRunLogs(jobId: string, logs: ConsoleLogLine[]): Promise<void> {
-    await this.storeLogs(jobId, "run", logs);
-  }
-
   async getRunLogs(jobId: string): Promise<ConsoleLogLine[] | null> {
     return await this.getLogs(jobId, "run");
-  }
-
-  /**
-   * The lines go to blob storage and the store keeps a pointer: a long build's
-   * log is far bigger than a store value may be (64 KiB on Deno KV, ~2 MB a
-   * row on D1), and logs that didn't fit used to be dropped.
-   */
-  private async storeLogs(jobId: string, kind: "build" | "run", logs: ConsoleLogLine[]): Promise<void> {
-    const key = formatLogsS3Key(jobId, kind);
-    await putJsonToS3(key, logs);
-    await this.kv.set([`${kind}-logs`, jobId], { key }, { expireIn: JobLogsDurationMilliseconds });
   }
 
   private async getLogs(jobId: string, kind: "build" | "run"): Promise<ConsoleLogLine[] | null> {
