@@ -325,6 +325,14 @@ export interface JobStatusPayload {
     | `${DockerJobState.Running}`
     | "docker image push";
   logs: ConsoleLogLine[];
+  /**
+   * Sent (with no logs) by a worker just before it streams a run container's
+   * output from the start: a new container's, or a still-running one's that
+   * it reattached to after a restart (docker replays it). The server drops the
+   * run logs it holds for the job, so they are neither duplicated nor mixed
+   * with a run lost in the restart.
+   */
+  replay?: boolean;
 }
 
 export interface InstanceRegistration {

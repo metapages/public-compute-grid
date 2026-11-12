@@ -185,7 +185,17 @@ Deno.test(
         !build.body.data.some((l) => l[0].includes(`out-${marker}`)),
         "program output leaked into build logs",
       );
+
+      // The whole logs as single files: the same lines
+      const runFile = await getJson<[string, number, boolean?][]>(`${prefix}/logs.run.json`);
+      assertEquals(runFile.status, 200, `${prefix}/logs.run.json`);
+      assertEquals(runFile.body, body.data, `${prefix}/logs.run.json`);
+      const buildFile = await getJson<[string, number, boolean?][]>(`${prefix}/logs.build.json`);
+      assertEquals(buildFile.status, 200, `${prefix}/logs.build.json`);
+      assertEquals(buildFile.body, build.body.data, `${prefix}/logs.build.json`);
     }
+    const unknownLogs = await getJson(`/j/no-such-job-${marker}/logs.run.json`);
+    assertEquals(unknownLogs.status, 404, "logs.run.json of an unknown job");
 
     const badSince = await getJson(`/q/${QUEUE_ID}/j/${jobId}/run-logs.json?since=abc`);
     assertEquals(badSince.status, 400);
@@ -247,6 +257,10 @@ Deno.test("contract: logs bigger than a store value are kept after the job finis
       const lines = body.data.map((l) => l[0]).join("").split("\n").filter((l) => l.startsWith(marker));
       assertExactLines(lines, lineCount, `${path}: persisted run log`);
     }
+    const { status, body } = await getJson<[string, number][]>(`/j/${jobId}/logs.run.json`);
+    assertEquals(status, 200, "logs.run.json");
+    const lines = body.map((l) => l[0]).join("").split("\n").filter((l) => l.startsWith(marker));
+    assertExactLines(lines, lineCount, "logs.run.json");
   }));
 });
 

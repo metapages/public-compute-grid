@@ -15,8 +15,11 @@ import {
   type EnqueueJob,
   getJobColorizedString,
   getWorkerVersionGate,
+  holdSocketMessages,
   type InMemoryDockerJob,
+  type LogKind,
   makeStreamHandler,
+  serveJobLogs,
   shaDockerJob,
   type StateChange,
   userJobQueues,
@@ -320,6 +323,27 @@ const makeLogsHandler = (kind: "build" | "run") => {
 };
 
 export const getBuildLogsHandler = makeLogsHandler("build");
+
+/** A job's whole log as one JSON array of lines (see serveJobLogs) */
+const makeLogFileHandler = (kind: LogKind) => {
+  return async (c: Context) => {
+    try {
+      const jobId: string | undefined = c.req.param("jobId");
+      if (!jobId) {
+        c.status(404);
+        return c.json({ error: "No jobId specified" });
+      }
+      const jobQueue = await ensureQueue(c.req.param("queue") || "local");
+      return await serveJobLogs({ storage: jobQueue.logs.storage, db: jobQueue.db, jobId, kind });
+    } catch (err) {
+      console.error(`Error getting ${kind} logs`, err);
+      return c.text((err as Error).message, 500);
+    }
+  };
+};
+
+const getBuildLogFileHandler = makeLogFileHandler("build");
+const getRunLogFileHandler = makeLogFileHandler("run");
 export const getRunLogsHandler = makeLogsHandler("run");
 
 export const streamJobHandler = makeStreamHandler({
@@ -656,6 +680,8 @@ app.get("/f/:key/exists", existsHandler);
 app.put("/f/:key", uploadHandler);
 app.get("/j/:jobId/build-logs.json", getBuildLogsHandler);
 app.get("/j/:jobId/run-logs.json", getRunLogsHandler);
+app.get("/j/:jobId/logs.build.json", getBuildLogFileHandler);
+app.get("/j/:jobId/logs.run.json", getRunLogFileHandler);
 app.get("/j/:jobId/definition.json", getDefinitionHandler);
 app.get("/j/:jobId/result.json", getJobResultsHandler);
 app.get("/j/:jobId/results.json", getJobResultsHandler);
@@ -676,6 +702,8 @@ app.get("/q/:queue/j/:jobId/outputs/*", getJobOutputsHandler);
 // app.get("/q/:queue/j/:jobId/namespaces.json", getJobNamespacesHandler);
 app.get("/q/:queue/j/:jobId/build-logs.json", getBuildLogsHandler);
 app.get("/q/:queue/j/:jobId/run-logs.json", getRunLogsHandler);
+app.get("/q/:queue/j/:jobId/logs.build.json", getBuildLogFileHandler);
+app.get("/q/:queue/j/:jobId/logs.run.json", getRunLogFileHandler);
 // Server-Sent Events: follow one job's build logs, run logs and state to completion
 app.get("/q/:queue/j/:jobId/stream", streamJobHandler);
 app.get("/q/:queue/j/:jobId/definition.json", getDefinitionHandler);
@@ -842,6 +870,12 @@ app.get("/*", serveStatic({ root: "../browser/dist" }));
 app.get("/", serveStatic({ path: "../browser/dist/index.html" }));
 app.get("*", serveStatic({ path: "../browser/dist/index.html" }));
 
+/**
+ * Each queue's setup, so a request arriving while the queue is still being set
+ * up waits for it: until then it has none of the jobs and logs it reloads.
+ */
+const queueSetups: Record<string, Promise<void>> = {};
+
 const ensureQueue = async (queue: string): Promise<BaseDockerJobQueue> => {
   // Initialize queue if it doesn't exist
   if (!userJobQueues[queue]) {
@@ -851,8 +885,20 @@ const ensureQueue = async (queue: string): Promise<BaseDockerJobQueue> => {
       dataDirectory: getConfig().dataDirectory,
       debug: config.debug,
     });
-    await userJobQueues[queue].setup();
+    const jobQueue = userJobQueues[queue];
+    const setup = jobQueue.setup();
+    queueSetups[queue] = setup;
+    // A failed setup must not stick: forget the queue so the next call retries
+    setup.catch(() => {
+      if (queueSetups[queue] === setup) {
+        delete queueSetups[queue];
+        if (userJobQueues[queue] === jobQueue) {
+          delete userJobQueues[queue];
+        }
+      }
+    });
   }
+  await queueSetups[queue];
   return userJobQueues[queue];
 };
 const handleWebsocket = async (socket: WebSocket, request: Request) => {
@@ -884,6 +930,7 @@ const handleWebsocket = async (socket: WebSocket, request: Request) => {
   }
 
   // Initialize queue if it doesn't exist
+  const releaseMessages = holdSocketMessages(socket);
   const queue = await ensureQueue(queueKey);
 
   // Handle client or worker connections
@@ -896,6 +943,7 @@ const handleWebsocket = async (socket: WebSocket, request: Request) => {
     socket.close();
     return;
   }
+  releaseMessages();
 };
 
 export const localHandler = createHandler(
