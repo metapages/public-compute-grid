@@ -285,10 +285,14 @@ export const dockerJobExecute = (args: DockerJobArgs): DockerJobExecution => {
       return;
     }
 
+    // Reattaching to the job's container, still running from before this
+    // worker restarted, rather than starting a new one
+    let reattached = false;
     if (existingRunningContainer) {
       const containerInfo = await existingRunningContainer.inspect();
       if (containerInfo.State?.Status === "running") {
         dockerExecution.container = existingRunningContainer;
+        reattached = true;
       }
     }
 
@@ -307,13 +311,28 @@ export const dockerJobExecute = (args: DockerJobArgs): DockerJobExecution => {
       }
     }
 
-    // attach to container
-    const stream = await dockerExecution.container!.attach({
-      stream: true,
-      stdout: true,
-      stderr: true,
-      logs: existingRunningContainer ? true : false,
+    // Either way the server is about to get the container's whole output from
+    // the start: a reattached container's is replayed, a new container's is
+    // all new. Tell it first, so it replaces the run logs it already has (kept
+    // in memory, or reloaded from its spool after a restart, or from a run
+    // this worker lost in a restart) instead of appending to them.
+    sender({
+      type: WebsocketMessageTypeWorkerToServer.JobStatusLogs,
+      payload: {
+        jobId: id,
+        step: `${DockerJobState.Running}`,
+        logs: [],
+        replay: true,
+      } as JobStatusPayload,
     });
+
+    // A reattached container's output is read with logs+follow: one ordered
+    // stream, the history then the live output. attach with logs: true joins
+    // the two non-atomically, and a line written meanwhile came in both.
+    // A new container is attached before it starts, so nothing is missed.
+    const stream = reattached
+      ? await dockerExecution.container!.logs({ follow: true, stdout: true, stderr: true })
+      : await dockerExecution.container!.attach({ stream: true, stdout: true, stderr: true });
     // console.log(`🤡 after attach`, containerInfo);
     dockerExecution.container!.modem.demuxStream(stream, grabberOutStream, grabberErrStream);
 
@@ -323,7 +342,7 @@ export const dockerJobExecute = (args: DockerJobArgs): DockerJobExecution => {
 
     workItem.phase = DockerRunPhase.Running;
 
-    if (!existingRunningContainer) {
+    if (!reattached) {
       // is buffer
       const _: Buffer = await dockerExecution.container!.start();
       console.log(
