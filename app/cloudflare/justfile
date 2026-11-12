@@ -138,7 +138,7 @@ secrets env="staging":
     printf '%s' "$secret_key" | {{ WRANGLER }} secret put AWS_SECRET_ACCESS_KEY $envflag
     printf '%s' "$endpoint" | {{ WRANGLER }} secret put AWS_ENDPOINT $envflag
 
-# Deploy [env: staging|production]
+# Deploy, then smoke-check it once it settles [env: staging|production]. SKIP_SMOKE=1 skips the check
 deploy env="staging": build
     #!/usr/bin/env bash
     set -euo pipefail
@@ -151,6 +151,20 @@ deploy env="staging": build
     else
         {{ WRANGLER }} deploy --env {{ env }}
     fi
+    # A broken deploy must fail here (and so fail the Actions run), not go
+    # unnoticed until someone uses it. Undo one with: just cloudflare wrangler rollback
+    if [ -z "${SKIP_SMOKE:-}" ]; then just smoke {{ env }}; fi
+
+# Wait for a deploy to settle, then smoke-check it [env: staging|production, or a URL]
+smoke env="staging" +args="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{ env }}" in
+        production) url="https://container.mtfm.io" ;;
+        http://* | https://*) url="{{ env }}" ;;
+        *) url="$(just url {{ env }})" ;;
+    esac
+    deno run --allow-net scripts/smoke.ts "${url}" {{ args }}
 
 # Print the deployed workers.dev URL for an env [staging|production]
 url env="staging":
@@ -168,11 +182,12 @@ url env="staging":
 wrangler +args="":
     {{ WRANGLER }} {{ args }}
 
-# Unit tests. `cloudflare:workers` only exists in workerd, so the tests run with
+# Unit tests: the Durable Objects (src) and the deploy smoke check against a stub
+# (scripts). `cloudflare:workers` only exists in workerd, so the tests run with
 # an import map that stands in a stub for it. --import-map replaces the workspace
 
 # maps rather than adding to them, so it is the root imports plus this member's.
-test +args="src":
+test +args="src scripts":
     #!/usr/bin/env bash
     set -euo pipefail
     map=$(mktemp -t cloudflare-test-import-map.XXXXXX)
@@ -185,5 +200,5 @@ test +args="src":
 
 # Typecheck the Cloudflare entry
 @check:
-    deno check src/worker.ts
+    deno check src/worker.ts scripts/
     echo "✅ cloudflare typescript compilation"
