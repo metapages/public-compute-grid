@@ -8,8 +8,14 @@ import { config } from "../config.ts";
 import { DockerRunPhase, type WorkerJobQueueItem } from "./types.ts";
 import { getDockerFiltersForJob } from "./utils.ts";
 
-export const removeAllDeadContainersFromQueue = async (args: { queue: string; workerId: string }) => {
-  const { queue, workerId } = args;
+/**
+ * @param keep a job whose exited container must stay: it may hold a result not
+ * yet reported (#361)
+ */
+export const removeAllDeadContainersFromQueue = async (
+  args: { queue: string; workerId: string; keep?: (jobId: string) => boolean },
+) => {
+  const { queue, workerId, keep } = args;
   if (config.DebugDisableContainerDeletion) {
     // console.log(
     //   `${getQueueColorizedString(queue)}
@@ -28,6 +34,9 @@ export const removeAllDeadContainersFromQueue = async (args: { queue: string; wo
     const containerId = containerData.Id;
     const containerLabels = containerData.Labels;
     const jobId = containerLabels[ContainerLabelId];
+    if (jobId && keep?.(jobId)) {
+      continue;
+    }
     // jobs created during functional tests are ignored
     // const containerTestMode = containerLabels[ContainerLabelTestMode];
     // if (containerTestMode !== "true") {
