@@ -65,6 +65,12 @@ test-url url:
     done
     cd app/test && QUEUE_ID="${queue}" API_URL={{ url }} deno test --allow-all --unstable-kv src/contract_api_test.ts
 
+# Pass another checkout's app/worker as a control. Needs docker, jq and curl.
+
+# A job whose container exits while its worker is down is collected on restart, not rerun (#361)
+test-worker-restart-exited worker_dir="app/worker":
+    app/test/scripts/worker-restart-collects-exited.sh {{ worker_dir }}
+
 # target: worker (local-mode worker on :8000, queue "local" — the default) |
 # stack (the full compose stack, queue "local1") | prod (no redirect).
 # Symlinked, not copied, so edits are live; cq is pointed at the local stack so
@@ -483,6 +489,11 @@ pr-daemon-down:
     # (metaframe-container-worker-network) and the shared image cache volume
     # (metaframe-container-worker-cache) are machine-wide and stay.
     containers="$(docker ps -aq --filter "label=container.mtfm.io/worker=$worker_id" 2> /dev/null)"
+    # A restart keeps the exited ones: a job that finished while the worker was
+    # down has its result there, for the restarted worker to collect (#361).
+    if [ -n "${PR_DAEMON_KEEP_DATA:-}" ] && [ -n "$containers" ]; then
+        containers="$(docker ps -q --filter "label=container.mtfm.io/worker=$worker_id" 2> /dev/null)"
+    fi
     if [ -n "$containers" ]; then
         echo "removing this branch's job containers" >&2
         # -v: an image's VOLUME lines leave anonymous volumes nothing can reuse

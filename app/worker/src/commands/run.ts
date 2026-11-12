@@ -1,5 +1,5 @@
 import { config, parseGpuSpec } from "/@/config.ts";
-import { prepGpus, runChecksOnInterval } from "/@/docker/utils.ts";
+import { prepGpus, runChecksOnInterval, setKeepExitedContainer } from "/@/docker/utils.ts";
 import { checkConnection, type ClockReading, monotonicNow, PingStats } from "/@/lib/connection-watchdog.ts";
 import { localHandler } from "/@/lib/local-handler.ts";
 import { processes, waitForDocker } from "/@/processes.ts";
@@ -369,6 +369,7 @@ export async function connectToServer(
   };
   const dockerJobQueue = new DockerJobQueue(dockerJobQueueArgs);
   setGlobalDockerJobQueue(dockerJobQueue);
+  setKeepExitedContainer((jobId) => dockerJobQueue.keepsExitedContainer(jobId));
 
   rws.addEventListener("error", (error: Error) => {
     console.log(`Websocket error=${error.message}`);

@@ -1,7 +1,9 @@
+import type { Container } from "dockerode";
 import { ms } from "ms";
 import parseDuration from "parse-duration";
 import { config } from "/@/config.ts";
 import { ensureIsolateNetwork } from "/@/docker/network.ts";
+import { killAndRemove, killAnyStoppedContainersForJob } from "/@/queue/cleanup.ts";
 import { convertIOToVolumeMounts, getOutputs } from "/@/queue/IO.ts";
 import { convertStringToDockerCommand, getDockerFiltersForJob, gpuIndicesFromDeviceRequests } from "/@/queue/utils.ts";
 
@@ -18,8 +20,7 @@ import {
 import mod from "../../mod.json" with { type: "json" };
 import { ContainerLabelId, ContainerLabelWorker } from "./constants.ts";
 import { docker } from "./dockerClient.ts";
-import { dockerJobExecute } from "./DockerJob.ts";
-import { getRunningContainerForJob } from "./index.ts";
+import { dockerJobExecute, getExitedContainerForJob, getRunningContainerForJob } from "./DockerJob.ts";
 import type { FinishedJobsStore } from "./FinishedJobsStore.ts";
 import type { JobDefinitionCache } from "./JobDefinitionCache.ts";
 import {
@@ -939,15 +940,26 @@ export class DockerJobQueue {
       }
       let volumes: Volume[];
       let outputsDir: string;
+      let exitedContainer: Container | undefined;
       try {
         if (isRemoved()) {
           return;
         }
         queueItem.phase = DockerRunPhase.CopyInputs;
+        const runningContainer = await getRunningContainerForJob({ jobId, workerId: this.workerId });
+        exitedContainer = runningContainer ? undefined : await this.findExitedContainerToCollect(jobId);
+        if (!runningContainer && !exitedContainer) {
+          // An earlier run's leftovers: a restart in the middle of this run must
+          // not mistake one for this run's result.
+          await killAnyStoppedContainersForJob({ jobId, workerId: this.workerId });
+        }
+        if (isRemoved()) {
+          return;
+        }
         const volumesResult = await convertIOToVolumeMounts(
           { id: jobId, definition },
           config.server,
-          { keepOutputs: !!(await getRunningContainerForJob({ jobId, workerId: this.workerId })) },
+          { keepOutputs: !!runningContainer || !!exitedContainer },
         );
         if (isRemoved()) {
           return;
@@ -1016,6 +1028,7 @@ export class DockerJobQueue {
           )
           : config.maxJobDuration,
         isKilled,
+        exitedContainer,
       };
 
       // Not awaiting, it should have already been created, but let's
@@ -1043,6 +1056,12 @@ export class DockerJobQueue {
         return;
       }
 
+      // Set once a Finished is handed to the sender (not yet delivered: the
+      // socket may be down). From then on the container is left to the periodic
+      // cleanup, which removes it once the server's state shows the job
+      // Finished (keepsExitedContainer). Until then it is what a restarted
+      // worker collects the result from (#361).
+      let reported = false;
       dockerExecution.finish.then(
         async (result: computeQueuesShared.DockerRunResult | undefined) => {
           if (!result) {
@@ -1181,6 +1200,7 @@ export class DockerJobQueue {
           workItem.phase = DockerRunPhase.Ended;
           delete this.queue[jobId];
 
+          reported = true;
           this._reportFinished(jobId, valueFinished);
         },
       ).catch((err: unknown) => {
@@ -1209,13 +1229,57 @@ export class DockerJobQueue {
           } as computeQueuesShared.DockerRunResultWithOutputs,
         };
 
+        reported = true;
         this._reportFinished(jobId, valueError);
       }).finally(() => {
         // I had the queue removal here initially but I wanted
         // to remove the element from the queue before sending to server
         // in case server send fails and throws an error
+
+        // No result of ours to keep (ignored: the job is running or finished
+        // elsewhere, or gone): nothing to collect later, remove it now.
+        if (!reported && dockerExecution.container && !isKilled.value) {
+          killAndRemove(workItem, jobId, dockerExecution.container, "DockerJob finished, result not ours");
+        }
       });
     })();
+  }
+
+  /**
+   * This worker's exited container for the job's current run, left by a worker
+   * (this id, an earlier process) that went down before reporting its result.
+   * Collecting it, rather than running the job again, keeps the original exit
+   * code, logs and outputs (#361). Whether the server still says Running on us
+   * or has requeued the job after losing us does not matter: getExitedContainerForJob
+   * tells a requeue from a new submission by the job's queuedTime.
+   */
+  async findExitedContainerToCollect(jobId: string): Promise<Container | undefined> {
+    const queuedTime = this.apiQueue[jobId]?.queuedTime;
+    if (!queuedTime) {
+      return undefined;
+    }
+    try {
+      return await getExitedContainerForJob({ jobId, workerId: this.workerId, queuedTime });
+    } catch (err) {
+      console.log(
+        `${this.workerIdShort} ${getJobColorizedString(jobId)} could not look for an exited container: ${err}`,
+      );
+      return undefined;
+    }
+  }
+
+  /**
+   * Whether the periodic cleanup must leave this job's exited container alone:
+   * it may still hold a result nobody has reported. Until the first full job
+   * state arrives nothing is known, so everything is kept.
+   */
+  keepsExitedContainer(jobId: string): boolean {
+    if (!this.gotFirstCompleteJobState || this.queue[jobId]) {
+      return true;
+    }
+    const apiJob = this.apiQueue[jobId];
+    return apiJob?.state === DockerJobState.Queued ||
+      (apiJob?.state === DockerJobState.Running && apiJob.worker === this.workerId);
   }
 
   /**
