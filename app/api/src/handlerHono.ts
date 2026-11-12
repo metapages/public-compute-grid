@@ -17,7 +17,12 @@ import { getDefinitionHandler } from "./routes/api/v1/definition.ts";
 import { getJobInputsHandler } from "./routes/api/v1/jobInputs.ts";
 import { getJobOutputsHandler } from "./routes/api/v1/jobOutputs.ts";
 import { getJobsHandler } from "./routes/api/v1/jobs.ts";
-import { getBuildLogsHandler, getRunLogsHandler } from "./routes/api/v1/logs.ts";
+import {
+  getBuildLogFileHandler,
+  getBuildLogsHandler,
+  getRunLogFileHandler,
+  getRunLogsHandler,
+} from "./routes/api/v1/logs.ts";
 import { getJobNamespacesHandler } from "./routes/api/v1/namespaces.ts";
 import { getJobResultHandler } from "./routes/api/v1/result.ts";
 import { makeWorkerVersionsHandler } from "./routes/api/v1/workerVersions.ts";
@@ -85,6 +90,8 @@ export const createApp = (opts?: {
   app.put("/f/:key", uploadHandler);
   app.get("/j/:jobId/build-logs.json", getBuildLogsHandler);
   app.get("/j/:jobId/run-logs.json", getRunLogsHandler);
+  app.get("/j/:jobId/logs.build.json", getBuildLogFileHandler);
+  app.get("/j/:jobId/logs.run.json", getRunLogFileHandler);
   app.get("/j/:jobId/definition.json", getDefinitionHandler);
   app.get("/j/:jobId/result.json", getJobResultHandler);
   app.get("/j/:jobId/results.json", getJobResultHandler);
@@ -108,6 +115,8 @@ export const createApp = (opts?: {
   app.get("/q/:queue/j/:jobId/results.json", getJobResultHandler);
   app.get("/q/:queue/j/:jobId/build-logs.json", getBuildLogsHandler);
   app.get("/q/:queue/j/:jobId/run-logs.json", getRunLogsHandler);
+  app.get("/q/:queue/j/:jobId/logs.build.json", getBuildLogFileHandler);
+  app.get("/q/:queue/j/:jobId/logs.run.json", getRunLogFileHandler);
   // Server-Sent Events: follow one job's build logs, run logs and state to completion
   app.get("/q/:queue/j/:jobId/stream", streamHandler);
   app.get("/q/:queue/j/:jobId/history.json", toImplementPlaceholder);

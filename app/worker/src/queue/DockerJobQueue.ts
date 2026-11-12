@@ -394,7 +394,9 @@ export class DockerJobQueue {
       return;
     }
     this.performedInitialContainerCheckAfterJobState = true;
-    await this.killOrphanedJobs();
+    if (config.killOrphans) {
+      await this.killOrphanedJobs();
+    }
     await this.checkForLocallyRunningJobs();
   }
 

@@ -163,6 +163,8 @@ curl -s "$API/q/$QUEUE/status"
 | GET    | `/q/:queue/j/:jobId/stream`                 | **SSE**: `build-log`, `run-log`, `state`, `final` |
 | GET    | `/q/:queue/j/:jobId/build-logs.json?since=` | Build logs slice → `{data, nextCursor, isFinal}`  |
 | GET    | `/q/:queue/j/:jobId/run-logs.json?since=`   | Run logs slice, same shape                        |
+| GET    | `/j/:jobId/logs.build.json`                 | The whole build log, one JSON array of lines      |
+| GET    | `/j/:jobId/logs.run.json`                   | The whole run log, one JSON array of lines        |
 | GET    | `/q/:queue/j/:jobId/result.json`            | `{"data": null}` until finished                   |
 | GET    | `/q/:queue/j/:jobId/definition.json`        | The submitted definition                          |
 | GET    | `/q/:queue/j/:jobId/outputs/*`              | One output file, decoded                          |
@@ -172,9 +174,8 @@ curl -s "$API/q/$QUEUE/status"
 | GET    | `/f/:sha256/exists`                         | 200 if present — check before uploading           |
 | GET    | `/f/:sha256`                                | Download a blob                                   |
 
-The `build-logs.json` / `run-logs.json` / `stream` endpoints read a live in-memory buffer while the job runs and the
-persisted copy afterwards, so they work both during and after execution. Logs are retained for about a week — much less
-than results.
+The log endpoints and `stream` read the logs from storage, where lines land within about a second, so they work both
+during and after execution.
 
 ### SSE event shapes
 
