@@ -23,6 +23,8 @@ No authentication. CORS is open, so browsers can call it directly.
 | `GET`  | `/j/:jobId/outputs/*`                  | Raw output file bytes.                      |
 | `GET`  | `/q/:queue/j/:jobId/build-logs.json`   | Image build / pull / clone logs.             |
 | `GET`  | `/q/:queue/j/:jobId/run-logs.json`     | The container's own stdout/stderr.            |
+| `GET`  | `/j/:jobId/logs.build.json`            | The whole build log, as one JSON array.       |
+| `GET`  | `/j/:jobId/logs.run.json`              | The whole run log, as one JSON array.         |
 | `GET`  | `/q/:queue/j/:jobId/stream`            | SSE: logs and state, live, until finished.   |
 | `GET`  | `/q/:queue/j/:jobId/namespaces.json`   | Namespaces waiting on this job.             |
 | `POST` | `/q/:queue/j/:jobId/cancel`            | Cancel.                                     |
@@ -94,11 +96,18 @@ GET /q/:queue/j/:jobId/build-logs.json?since=28
 Poll with `since=<the previous nextCursor>` to follow a running job without re-reading what you already have.
 `isFinal: true` means the job has finished and no more lines are coming.
 
-These read the live in-memory buffer while a job runs and the persisted copy afterwards, so they work during and after
-execution. Logs are retained about a week — much less than results.
+Logs are written to storage (the bucket, or the worker's data directory in local mode) within about a second of a
+line arriving, so these work during and after execution, and a server restarting mid-job keeps them. The unqueued
+`/j/:jobId/build-logs.json` works the same way.
 
-An unqueued `/j/:jobId/build-logs.json` also exists, but it can only see persisted logs, so it returns nothing until the
-job finishes.
+### `GET /j/:jobId/logs.build.json` · `logs.run.json`
+
+The whole log at once, as a JSON array of lines (`[["text", timestampMs, isStderr?], ...]`), for a running job (its log
+so far) or a finished one. `[]` for a job with nothing logged yet, 404 for an unknown job. `/q/:queue/j/:jobId/...`
+works too.
+
+In storage a running job's log is a series of chunks, `j/<jobId>/logs/<kind>/*.json`, merged into one file,
+`j/<jobId>/logs/<kind>.json`, when it finishes; these endpoints serve either as one array.
 
 ### `GET /q/:queue/j/:jobId/stream`
 

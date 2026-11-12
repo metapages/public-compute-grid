@@ -1,7 +1,9 @@
+import type { Container } from "dockerode";
 import { ms } from "ms";
 import parseDuration from "parse-duration";
 import { config } from "/@/config.ts";
 import { ensureIsolateNetwork } from "/@/docker/network.ts";
+import { killAndRemove, killAnyStoppedContainersForJob } from "/@/queue/cleanup.ts";
 import { convertIOToVolumeMounts, getOutputs } from "/@/queue/IO.ts";
 import { convertStringToDockerCommand, getDockerFiltersForJob, gpuIndicesFromDeviceRequests } from "/@/queue/utils.ts";
 
@@ -18,8 +20,8 @@ import {
 import mod from "../../mod.json" with { type: "json" };
 import { ContainerLabelId, ContainerLabelWorker } from "./constants.ts";
 import { docker } from "./dockerClient.ts";
-import { dockerJobExecute } from "./DockerJob.ts";
-import { getRunningContainerForJob } from "./index.ts";
+import { dockerJobExecute, getExitedContainerForJob, getRunningContainerForJob } from "./DockerJob.ts";
+import type { FinishedJobsStore } from "./FinishedJobsStore.ts";
 import type { JobDefinitionCache } from "./JobDefinitionCache.ts";
 import {
   type DockerJobArgs,
@@ -72,6 +74,12 @@ export class DockerJobQueue {
    */
   finishedAndReported = new Map<string, computeQueuesShared.WebsocketMessageWorkerToServer>();
   /**
+   * The same record, persisted to the local KV, so it survives a restart and
+   * reaches an --auto-update successor (same worker id, same data directory),
+   * neither of which has this process's memory (#358).
+   */
+  finishedJobs: FinishedJobsStore | undefined;
+  /**
    * Set while this worker is in an --auto-update handover. In every handover
    * state the worker claims nothing: a successor ("standby") waits for its
    * predecessor, which shares its worker id, to stop claiming; a predecessor
@@ -80,8 +88,9 @@ export class DockerJobQueue {
   handover: computeQueuesShared.WorkerHandoverState | undefined;
 
   constructor(args: DockerJobQueueArgs) {
-    const { sender, cpus, gpus, id, maxJobDuration, queue, jobDefinitions, handover } = args;
+    const { sender, cpus, gpus, id, maxJobDuration, queue, jobDefinitions, handover, finishedJobs } = args;
     this.handover = handover;
+    this.finishedJobs = finishedJobs;
     this.cpus = cpus;
     this.gpus = gpus;
     this.sender = sender;
@@ -385,7 +394,9 @@ export class DockerJobQueue {
       return;
     }
     this.performedInitialContainerCheckAfterJobState = true;
-    await this.killOrphanedJobs();
+    if (config.killOrphans) {
+      await this.killOrphanedJobs();
+    }
     await this.checkForLocallyRunningJobs();
   }
 
@@ -504,7 +515,7 @@ export class DockerJobQueue {
     for (const jobId of [...this.finishedAndReported.keys()]) {
       const apiJob = this.apiQueue[jobId];
       if (apiJob?.state !== DockerJobState.Running || apiJob.worker !== this.workerId) {
-        this.finishedAndReported.delete(jobId);
+        this._forgetFinished(jobId);
       }
     }
 
@@ -715,7 +726,7 @@ export class DockerJobQueue {
 
         // check docker if they are?
         for (const runningJobId of jobsServerSaysAreRunningOnMe) {
-          const finishedMessage = this.finishedAndReported.get(runningJobId);
+          const finishedMessage = this.queue[runningJobId] ? undefined : await this._getFinished(runningJobId);
           if (finishedMessage && !this.queue[runningJobId]) {
             // A stale broadcast from before the server saw our Finished, not a
             // job we lost. Remind the server instead of running it again.
@@ -897,8 +908,9 @@ export class DockerJobQueue {
       },
     };
 
-    // This is a new run of the id, so the server saying Running on us is true again
-    this.finishedAndReported.delete(jobId);
+    // This is a new run of the id, so the server saying Running on us is true
+    // again, and a record from an earlier run (even one only on disk) is stale
+    this._forgetFinished(jobId, { persisted: true });
 
     // add a placeholder on the queue for this job
     const queueItem: WorkerJobQueueItem = {
@@ -928,15 +940,26 @@ export class DockerJobQueue {
       }
       let volumes: Volume[];
       let outputsDir: string;
+      let exitedContainer: Container | undefined;
       try {
         if (isRemoved()) {
           return;
         }
         queueItem.phase = DockerRunPhase.CopyInputs;
+        const runningContainer = await getRunningContainerForJob({ jobId, workerId: this.workerId });
+        exitedContainer = runningContainer ? undefined : await this.findExitedContainerToCollect(jobId);
+        if (!runningContainer && !exitedContainer) {
+          // An earlier run's leftovers: a restart in the middle of this run must
+          // not mistake one for this run's result.
+          await killAnyStoppedContainersForJob({ jobId, workerId: this.workerId });
+        }
+        if (isRemoved()) {
+          return;
+        }
         const volumesResult = await convertIOToVolumeMounts(
           { id: jobId, definition },
           config.server,
-          { keepOutputs: !!(await getRunningContainerForJob({ jobId, workerId: this.workerId })) },
+          { keepOutputs: !!runningContainer || !!exitedContainer },
         );
         if (isRemoved()) {
           return;
@@ -1005,6 +1028,7 @@ export class DockerJobQueue {
           )
           : config.maxJobDuration,
         isKilled,
+        exitedContainer,
       };
 
       // Not awaiting, it should have already been created, but let's
@@ -1032,6 +1056,12 @@ export class DockerJobQueue {
         return;
       }
 
+      // Set once a Finished is handed to the sender (not yet delivered: the
+      // socket may be down). From then on the container is left to the periodic
+      // cleanup, which removes it once the server's state shows the job
+      // Finished (keepsExitedContainer). Until then it is what a restarted
+      // worker collects the result from (#361).
+      let reported = false;
       dockerExecution.finish.then(
         async (result: computeQueuesShared.DockerRunResult | undefined) => {
           if (!result) {
@@ -1170,6 +1200,7 @@ export class DockerJobQueue {
           workItem.phase = DockerRunPhase.Ended;
           delete this.queue[jobId];
 
+          reported = true;
           this._reportFinished(jobId, valueFinished);
         },
       ).catch((err: unknown) => {
@@ -1198,21 +1229,65 @@ export class DockerJobQueue {
           } as computeQueuesShared.DockerRunResultWithOutputs,
         };
 
+        reported = true;
         this._reportFinished(jobId, valueError);
       }).finally(() => {
         // I had the queue removal here initially but I wanted
         // to remove the element from the queue before sending to server
         // in case server send fails and throws an error
+
+        // No result of ours to keep (ignored: the job is running or finished
+        // elsewhere, or gone): nothing to collect later, remove it now.
+        if (!reported && dockerExecution.container && !isKilled.value) {
+          killAndRemove(workItem, jobId, dockerExecution.container, "DockerJob finished, result not ours");
+        }
       });
     })();
   }
 
   /**
-   * Tell the server this worker finished the job, and remember that it did so a
-   * stale "Running on me" broadcast does not start it again (#346). The local
-   * queue entry must already be gone.
+   * This worker's exited container for the job's current run, left by a worker
+   * (this id, an earlier process) that went down before reporting its result.
+   * Collecting it, rather than running the job again, keeps the original exit
+   * code, logs and outputs (#361). Whether the server still says Running on us
+   * or has requeued the job after losing us does not matter: getExitedContainerForJob
+   * tells a requeue from a new submission by the job's queuedTime.
    */
-  _reportFinished(jobId: string, value: computeQueuesShared.StateChangeValueFinished) {
+  async findExitedContainerToCollect(jobId: string): Promise<Container | undefined> {
+    const queuedTime = this.apiQueue[jobId]?.queuedTime;
+    if (!queuedTime) {
+      return undefined;
+    }
+    try {
+      return await getExitedContainerForJob({ jobId, workerId: this.workerId, queuedTime });
+    } catch (err) {
+      console.log(
+        `${this.workerIdShort} ${getJobColorizedString(jobId)} could not look for an exited container: ${err}`,
+      );
+      return undefined;
+    }
+  }
+
+  /**
+   * Whether the periodic cleanup must leave this job's exited container alone:
+   * it may still hold a result nobody has reported. Until the first full job
+   * state arrives nothing is known, so everything is kept.
+   */
+  keepsExitedContainer(jobId: string): boolean {
+    if (!this.gotFirstCompleteJobState || this.queue[jobId]) {
+      return true;
+    }
+    const apiJob = this.apiQueue[jobId];
+    return apiJob?.state === DockerJobState.Queued ||
+      (apiJob?.state === DockerJobState.Running && apiJob.worker === this.workerId);
+  }
+
+  /**
+   * Tell the server this worker finished the job, and remember that it did so a
+   * stale "Running on me" broadcast does not start it again (#346), not even
+   * after a restart (#358). The local queue entry must already be gone.
+   */
+  async _reportFinished(jobId: string, value: computeQueuesShared.StateChangeValueFinished) {
     const message: computeQueuesShared.WebsocketMessageWorkerToServer = {
       type: computeQueuesShared.WebsocketMessageTypeWorkerToServer.StateChange,
       payload: {
@@ -1224,7 +1299,62 @@ export class DockerJobQueue {
     };
     // Record before sending, in case the server's answer comes back before send returns.
     this.finishedAndReported.set(jobId, message);
-    this.sender(message);
+    // Persist before sending too: until the server has it, the message only
+    // lives in the socket's send queue, and a restart would lose the result.
+    if (this.finishedJobs) {
+      try {
+        await this.finishedJobs.set(jobId, message);
+      } catch (err) {
+        console.log(`${this.workerIdShort} ${getJobColorizedString(jobId)} 🚨 failed to persist Finished: ${err}`);
+      }
+    }
+    // Callers do not await this, so a throw here would be an unhandled
+    // rejection, which exits the process
+    try {
+      this.sender(message);
+    } catch (err) {
+      console.log(`${this.workerIdShort} ${getJobColorizedString(jobId)} 🚨 failed to send Finished: ${err}`);
+    }
+  }
+
+  /**
+   * The Finished this worker reported for the job, from memory or, after a
+   * restart or handover, from the local KV (then remembered in memory too, so
+   * it is cleared like any other record).
+   */
+  async _getFinished(jobId: string): Promise<computeQueuesShared.WebsocketMessageWorkerToServer | undefined> {
+    const inMemory = this.finishedAndReported.get(jobId);
+    if (inMemory || !this.finishedJobs) {
+      return inMemory;
+    }
+    try {
+      const persisted = await this.finishedJobs.get(jobId);
+      if (persisted) {
+        this.finishedAndReported.set(jobId, persisted);
+        return persisted;
+      }
+    } catch (err) {
+      console.log(`${this.workerIdShort} ${getJobColorizedString(jobId)} 🚨 failed to read persisted Finished: ${err}`);
+    }
+    return undefined;
+  }
+
+  /**
+   * Drop the finished record for the id, in memory and in the local KV. Unless
+   * `persisted`, only a record this process knows of is deleted: one it never
+   * loaded may still be needed by its predecessor or successor, and expires.
+   */
+  _forgetFinished(jobId: string, opts?: { persisted?: boolean }) {
+    const known = this.finishedAndReported.delete(jobId);
+    // Not awaited: sets and deletes go through the one KV handle in order, and
+    // the delete in _startJob is issued long before that run can report.
+    if ((known || opts?.persisted) && this.finishedJobs) {
+      this.finishedJobs.delete(jobId).catch((err) =>
+        console.log(
+          `${this.workerIdShort} ${getJobColorizedString(jobId)} 🚨 failed to delete persisted Finished: ${err}`,
+        )
+      );
+    }
   }
 
   /**
