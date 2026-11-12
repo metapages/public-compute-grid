@@ -133,10 +133,6 @@ export const formatResultsS3Key = (id: string): string => {
   return `j/${id}/result.json`;
 };
 
-export const formatLogsS3Key = (id: string, kind: "build" | "run"): string => {
-  return `j/${id}/${kind}-logs.json`;
-};
-
 /**
  * If two workers claim a job, this resolves which worker should keep it. The
  * server and every worker must reach the same answer independently, whatever

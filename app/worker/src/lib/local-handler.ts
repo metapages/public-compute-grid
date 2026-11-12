@@ -17,7 +17,9 @@ import {
   getWorkerVersionGate,
   holdSocketMessages,
   type InMemoryDockerJob,
+  type LogKind,
   makeStreamHandler,
+  serveJobLogs,
   shaDockerJob,
   type StateChange,
   userJobQueues,
@@ -33,9 +35,7 @@ export class LocalDockerJobQueue extends BaseDockerJobQueue {
     dataDirectory: string;
     debug?: boolean;
   }) {
-    // The data directory outlives the process, and an --auto-update successor
-    // shares it: a restart keeps the logs of the jobs that were running (#360).
-    super({ ...opts, liveLogsDirectory: join(opts.dataDirectory, "live-logs") });
+    super(opts);
   }
 }
 
@@ -323,6 +323,27 @@ const makeLogsHandler = (kind: "build" | "run") => {
 };
 
 export const getBuildLogsHandler = makeLogsHandler("build");
+
+/** A job's whole log as one JSON array of lines (see serveJobLogs) */
+const makeLogFileHandler = (kind: LogKind) => {
+  return async (c: Context) => {
+    try {
+      const jobId: string | undefined = c.req.param("jobId");
+      if (!jobId) {
+        c.status(404);
+        return c.json({ error: "No jobId specified" });
+      }
+      const jobQueue = await ensureQueue(c.req.param("queue") || "local");
+      return await serveJobLogs({ storage: jobQueue.logs.storage, db: jobQueue.db, jobId, kind });
+    } catch (err) {
+      console.error(`Error getting ${kind} logs`, err);
+      return c.text((err as Error).message, 500);
+    }
+  };
+};
+
+const getBuildLogFileHandler = makeLogFileHandler("build");
+const getRunLogFileHandler = makeLogFileHandler("run");
 export const getRunLogsHandler = makeLogsHandler("run");
 
 export const streamJobHandler = makeStreamHandler({
@@ -659,6 +680,8 @@ app.get("/f/:key/exists", existsHandler);
 app.put("/f/:key", uploadHandler);
 app.get("/j/:jobId/build-logs.json", getBuildLogsHandler);
 app.get("/j/:jobId/run-logs.json", getRunLogsHandler);
+app.get("/j/:jobId/logs.build.json", getBuildLogFileHandler);
+app.get("/j/:jobId/logs.run.json", getRunLogFileHandler);
 app.get("/j/:jobId/definition.json", getDefinitionHandler);
 app.get("/j/:jobId/result.json", getJobResultsHandler);
 app.get("/j/:jobId/results.json", getJobResultsHandler);
@@ -679,6 +702,8 @@ app.get("/q/:queue/j/:jobId/outputs/*", getJobOutputsHandler);
 // app.get("/q/:queue/j/:jobId/namespaces.json", getJobNamespacesHandler);
 app.get("/q/:queue/j/:jobId/build-logs.json", getBuildLogsHandler);
 app.get("/q/:queue/j/:jobId/run-logs.json", getRunLogsHandler);
+app.get("/q/:queue/j/:jobId/logs.build.json", getBuildLogFileHandler);
+app.get("/q/:queue/j/:jobId/logs.run.json", getRunLogFileHandler);
 // Server-Sent Events: follow one job's build logs, run logs and state to completion
 app.get("/q/:queue/j/:jobId/stream", streamJobHandler);
 app.get("/q/:queue/j/:jobId/definition.json", getDefinitionHandler);

@@ -201,6 +201,16 @@ Deno.test({
         const count = runText.split(`run-line-${i}\n`).length - 1;
         assertEquals(count, 1, `run-line-${i} is in the run logs ${count} times:\n${runText}`);
       }
+
+      // The whole logs as single files, the same lines
+      for (const [kind, expected] of [["run", finalRun], ["build", finalBuild]] as const) {
+        const response = await fetch(`${api}/j/${jobId}/logs.${kind}.json`);
+        assertEquals(response.status, 200, `/j/${jobId}/logs.${kind}.json`);
+        assertEquals(await response.json(), expected.data, `/j/${jobId}/logs.${kind}.json`);
+      }
+      // Finished: on disk, one merged file per kind and no chunks left
+      const logsDirectory = join(dataDirectory, "local", "j", jobId, "logs");
+      assertEquals([...Deno.readDirSync(logsDirectory)].map((entry) => entry.name).sort(), ["build.json", "run.json"]);
       passed = true;
     } finally {
       try {

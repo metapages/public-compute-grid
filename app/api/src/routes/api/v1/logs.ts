@@ -2,9 +2,24 @@ import type { Context } from "hono";
 
 import { db } from "@/db/db.ts";
 import { userJobQueues } from "@/docker-jobs/ApiDockerJobQueue.ts";
-import type { ConsoleLogLine } from "@metapages/compute-queues-shared";
+import {
+  type ConsoleLogLine,
+  DEFAULT_QUEUE_DATA_DIRECTORY,
+  getLogStorage,
+  type LogKind,
+  type LogStorage,
+  readStoredLogs,
+  serveJobLogs,
+} from "@metapages/compute-queues-shared";
 
-type LogKind = "build" | "run";
+/**
+ * Where the queues store job logs: the bucket (on Cloudflare, R2), so any
+ * instance or isolate reads them, wherever the queue holding the worker is.
+ * Chosen on first use: Workers only populate the environment once the module
+ * graph is loaded.
+ */
+let storage: LogStorage | undefined;
+const logStorage = (): LogStorage => (storage ??= getLogStorage(DEFAULT_QUEUE_DATA_DIRECTORY));
 
 /**
  * Build and run logs for a job, as a cursor-paged slice.
@@ -27,14 +42,16 @@ const getLogs = async (
   jobId: string,
   kind: LogKind,
 ): Promise<ConsoleLogLine[]> => {
-  // A live job's logs only exist in the queue's in-memory buffer until it
-  // finishes. Read through the queue when we have one (never create it — this
-  // is a read-only endpoint), otherwise go straight to the persisted store.
+  // The queue holding the job's worker also has the lines not written yet:
+  // read through it when it is here (never create it — this is a read-only
+  // endpoint), otherwise straight from storage.
   const jobQueue = queueName ? userJobQueues[queueName] : undefined;
   if (jobQueue) {
     return kind === "build" ? await jobQueue.getCurrentBuildLogs(jobId) : await jobQueue.getCurrentRunLogs(jobId);
   }
-  return (kind === "build" ? await db.getBuildLogs(jobId) : await db.getRunLogs(jobId)) ?? [];
+  const lines = await readStoredLogs(logStorage(), jobId, kind);
+  // Jobs finished before logs were stored in storage have them in the db
+  return lines.length ? lines : (kind === "build" ? await db.getBuildLogs(jobId) : await db.getRunLogs(jobId)) ?? [];
 };
 
 const makeLogsHandler = (kind: LogKind) => {
@@ -71,3 +88,31 @@ const makeLogsHandler = (kind: LogKind) => {
 
 export const getBuildLogsHandler = makeLogsHandler("build");
 export const getRunLogsHandler = makeLogsHandler("run");
+
+/**
+ * A job's whole log, live or finished, as one JSON array of lines:
+ *
+ *   GET /j/:jobId/logs.build.json
+ *   GET /j/:jobId/logs.run.json
+ *
+ * Read from storage, where a live job's log is several chunks and a finished
+ * one a single file: they are streamed as one array either way.
+ */
+const makeLogFileHandler = (kind: LogKind) => {
+  return async (c: Context) => {
+    try {
+      const jobId: string | undefined = c.req.param("jobId");
+      if (!jobId) {
+        c.status(404);
+        return c.json({ error: "No job provided" });
+      }
+      return await serveJobLogs({ storage: logStorage(), db, jobId, kind });
+    } catch (err) {
+      console.error(`Error getting ${kind} logs`, err);
+      return c.text((err as Error).message, 500);
+    }
+  };
+};
+
+export const getBuildLogFileHandler = makeLogFileHandler("build");
+export const getRunLogFileHandler = makeLogFileHandler("run");
