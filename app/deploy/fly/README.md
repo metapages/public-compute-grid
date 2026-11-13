@@ -1,5 +1,9 @@
 # Deploy to Fly
 
+> **Deprecated.** Fly.io is deprecating features this setup relies on (such as the GPU Machines `workers-a` runs on), so
+> don't build on it. The worker image pins in `workers-{a,b}.fly.toml` are still rewritten by `just sync-worker-version`
+> on every `just deploy`, so a manual `fly deploy` picks up the current release, but nothing deploys them automatically.
+
 This is a quick-start with the steps needed to deploy metapage's workers to Fly.io. For a full walkthrough that explains
 things in more detail, see the
 [Deployment on Fly.io](https://www.notion.so/metapages/fly-io-d9ea8c75141c42aeba5c93f3f7143b48) published doc.

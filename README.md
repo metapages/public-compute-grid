@@ -236,7 +236,8 @@ horizintal scaling worker fleets.
 ### High level commands:
 
 - develop: `just dev`
-- bump or set a new version and publish artifacts: `just deploy`
+- bump or set a new version and publish artifacts: `just deploy` (also rewrites every worker image pin in the docs and
+  deploy configs to the new version, see `just sync-worker-version`)
 - test the entire project: `just test`
 
 Finer commands are `just` in subdirectories.

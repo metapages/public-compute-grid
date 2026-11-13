@@ -134,7 +134,8 @@ just worker dev|prod     # worker only, against local or prod api
 just browser dev|prod
 just api dev
 just docs dev            # docs site
-just deploy [version]    # bump version + commit; CI publishes
+just deploy [version]    # bump version, sync every worker image pin, commit; CI publishes
+just sync-worker-version # rewrite every metaframe-docker-worker:<semver> pin to mod.json
 ```
 
 Local stack is HTTPS via mkcert at `https://worker-metaframe.localhost`; run `mkcert -install` once.
@@ -151,6 +152,10 @@ Local stack is HTTPS via mkcert at `https://worker-metaframe.localhost`; run `mk
   `DENO_BROADCAST_REDIS_URL` must not be added to it: D1 replaces Deno KV, the Durable Object replaces the Redis bus.
   The docker compose stacks still set their own `DENO_KV_*` / `REDIS_URL` for their local services.
 - Bumping `app/worker/mod.json` version → worker binary + docker images published, git tag pushed.
+- `mod.json` is the only place to edit the worker version. Never hand-edit a `metaframe-docker-worker:<semver>` pin or
+  an llms.txt `Version:` line: `just deploy` rewrites them all, and `just check-worker-version` (part of
+  `pr-daemon-check` and `ci`) fails on any that differ. Mark an intentional old pin with `worker-version-pin: ignore` on
+  that line or the line above.
 
 ## Editing rules of thumb
 

@@ -1,3 +1,5 @@
+# DEPRECATED: see README.md. The image tag is kept in step with app/worker/mod.json by
+# `just sync-worker-version`, but this app is only deployed by hand.
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 
 app = 'metapage-io-workers-a'
