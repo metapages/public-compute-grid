@@ -9,6 +9,7 @@ import type { Container, ContainerCreateOptions } from "dockerode";
 import type { Buffer } from "std/node/buffer";
 
 import {
+  type ConsoleLogLine,
   DockerJobState,
   type DockerRunResult,
   getJobColorizedString,
@@ -232,6 +233,9 @@ export const dockerJobExecute = (args: DockerJobArgs): DockerJobExecution => {
     if (isKilled.value) {
       return;
     }
+    if (args.exitedContainer) {
+      return await collectExitedContainer(args.exitedContainer);
+    }
     if (workItem) {
       workItem.phase = DockerRunPhase.Building;
     }
@@ -281,10 +285,14 @@ export const dockerJobExecute = (args: DockerJobArgs): DockerJobExecution => {
       return;
     }
 
+    // Reattaching to the job's container, still running from before this
+    // worker restarted, rather than starting a new one
+    let reattached = false;
     if (existingRunningContainer) {
       const containerInfo = await existingRunningContainer.inspect();
       if (containerInfo.State?.Status === "running") {
         dockerExecution.container = existingRunningContainer;
+        reattached = true;
       }
     }
 
@@ -303,13 +311,28 @@ export const dockerJobExecute = (args: DockerJobArgs): DockerJobExecution => {
       }
     }
 
-    // attach to container
-    const stream = await dockerExecution.container!.attach({
-      stream: true,
-      stdout: true,
-      stderr: true,
-      logs: existingRunningContainer ? true : false,
+    // Either way the server is about to get the container's whole output from
+    // the start: a reattached container's is replayed, a new container's is
+    // all new. Tell it first, so it replaces the run logs it already has (kept
+    // in memory, or reloaded from its spool after a restart, or from a run
+    // this worker lost in a restart) instead of appending to them.
+    sender({
+      type: WebsocketMessageTypeWorkerToServer.JobStatusLogs,
+      payload: {
+        jobId: id,
+        step: `${DockerJobState.Running}`,
+        logs: [],
+        replay: true,
+      } as JobStatusPayload,
     });
+
+    // A reattached container's output is read with logs+follow: one ordered
+    // stream, the history then the live output. attach with logs: true joins
+    // the two non-atomically, and a line written meanwhile came in both.
+    // A new container is attached before it starts, so nothing is missed.
+    const stream = reattached
+      ? await dockerExecution.container!.logs({ follow: true, stdout: true, stderr: true })
+      : await dockerExecution.container!.attach({ stream: true, stdout: true, stderr: true });
     // console.log(`🤡 after attach`, containerInfo);
     dockerExecution.container!.modem.demuxStream(stream, grabberOutStream, grabberErrStream);
 
@@ -319,7 +342,7 @@ export const dockerJobExecute = (args: DockerJobArgs): DockerJobExecution => {
 
     workItem.phase = DockerRunPhase.Running;
 
-    if (!existingRunningContainer) {
+    if (!reattached) {
       // is buffer
       const _: Buffer = await dockerExecution.container!.start();
       console.log(
@@ -335,8 +358,6 @@ export const dockerJobExecute = (args: DockerJobArgs): DockerJobExecution => {
     );
     const dataWait = await dockerExecution.container!.wait();
     result.StatusCode = dataWait != null ? dataWait.StatusCode : null;
-
-    console.log(`${getWorkerColorizedString(workerId)} ${getJobColorizedString(id)} ✅ container finished`, dataWait);
 
     // Enhanced status code analysis
     if (dataWait?.StatusCode === 137) {
@@ -385,21 +406,52 @@ export const dockerJobExecute = (args: DockerJobArgs): DockerJobExecution => {
       ]);
     }
 
+    return finished(dataWait?.StatusCode);
+  };
+
+  // The container is left in place: DockerJobQueue removes it once the result
+  // has been reported. Until then it is the result, and a worker restarted in
+  // between collects it again (see collectExitedContainer).
+  const finished = (statusCode: number | undefined) => {
     finishTime = finishTime || Date.now();
     if (!result.duration && finishTime && startTime) {
       result.duration = finishTime - startTime;
-    }
-
-    // remove the container out-of-band (return quickly)
-    if (dockerExecution.container) {
-      killAndRemove(workItem, id, dockerExecution.container, "DockerJob.finish normally");
     }
 
     if (workItem) {
       workItem.phase = DockerRunPhase.UploadOutputs;
     }
 
+    console.log(`${getWorkerColorizedString(workerId)} ${getJobColorizedString(id)} ✅ container finished`, {
+      StatusCode: statusCode,
+    });
     return result;
+  };
+
+  /**
+   * The container ran to the end while no worker was watching it (the worker
+   * was down). Its exit code, logs and outputs (on the host, in the job's
+   * outputs dir) are the job's result, so read them instead of running it again.
+   */
+  const collectExitedContainer = async (container: Container) => {
+    dockerExecution.container = container;
+    workItem.phase = DockerRunPhase.Running;
+    const info = await container.inspect();
+    // set finishTime first: maxDurationCheck must not judge a finished run
+    finishTime = Date.parse(info.State?.FinishedAt) || Date.now();
+    startTime = Date.parse(info.State?.StartedAt) || finishTime;
+    result.StatusCode = info.State?.ExitCode;
+    console.log(
+      `${getWorkerColorizedString(workerId)} ${
+        getJobColorizedString(id)
+      } ♻️ collecting the result of container ${container.id} (exited with ${result.StatusCode} while the worker was down)`,
+    );
+    const logs = await container.logs({ stdout: true, stderr: true, timestamps: true, follow: false });
+    result.logs.push(...parseDockerLogs(logs as unknown as Uint8Array));
+    if (isKilled.value) {
+      return;
+    }
+    return finished(result.StatusCode);
   };
 
   dockerExecution.kill = kill;
@@ -429,4 +481,74 @@ export const getRunningContainerForJob = async (args: {
       );
     }
   }
+};
+
+/**
+ * Killed from outside (SIGKILL/SIGTERM) and not by the OOM killer: a docker or
+ * host restart, another worker's orphan check, this worker's own cleanup. The
+ * job never finished on its own, so this is no result: run it again. An OOM kill
+ * is the job's own doing, and a result.
+ */
+export const isKilledFromOutside = (state?: { ExitCode?: number; OOMKilled?: boolean }): boolean =>
+  (state?.ExitCode === 137 || state?.ExitCode === 143) && !state?.OOMKilled;
+
+/**
+ * This worker's newest exited container for the job, if it belongs to the job's
+ * current run: created at or after `queuedTime`. A requeue (the server lost the
+ * worker) keeps the job's queuedTime, a new submission of the same id gets a new
+ * one, so an older container is a result the submitter has already moved past.
+ * A container killed from outside is skipped (isKilledFromOutside).
+ */
+export const getExitedContainerForJob = async (args: {
+  jobId: string;
+  workerId: string;
+  queuedTime: number;
+}): Promise<Container | undefined> => {
+  const { jobId, workerId, queuedTime } = args;
+  const exited = await docker.listContainers({
+    all: true,
+    filters: getDockerFiltersForJob({ jobId, workerId, status: "exited" }),
+  });
+  let newest: { container: Container; created: number } | undefined;
+  for (const containerData of exited) {
+    try {
+      const container = docker.getContainer(containerData.Id);
+      const info = await container.inspect();
+      if (isKilledFromOutside(info.State)) {
+        continue;
+      }
+      // listContainers' Created is in whole seconds, too coarse against queuedTime
+      const created = Date.parse(info.Created);
+      if (created >= queuedTime && (!newest || created > newest.created)) {
+        newest = { container, created };
+      }
+    } catch (err) {
+      console.log(`${getJobColorizedString(jobId)} :: could not inspect exited container ${containerData.Id}: ${err}`);
+    }
+  }
+  return newest?.container;
+};
+
+/**
+ * Docker's multiplexed log stream (non-TTY containers) with timestamps: frames
+ * of an 8 byte header (stream type, 3 bytes padding, uint32 BE length), then
+ * "<RFC3339Nano timestamp> <line>".
+ */
+export const parseDockerLogs = (buffer: Uint8Array): ConsoleLogLine[] => {
+  const decoder = new TextDecoder();
+  const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  const lines: ConsoleLogLine[] = [];
+  let offset = 0;
+  while (offset + 8 <= buffer.length) {
+    const isStdErr = buffer[offset] === 2;
+    const length = view.getUint32(offset + 4);
+    const frame = decoder.decode(buffer.subarray(offset + 8, offset + 8 + length));
+    offset += 8 + length;
+    const space = frame.indexOf(" ");
+    const time = space > 0 ? Date.parse(frame.substring(0, space)) : NaN;
+    const text = Number.isNaN(time) ? frame : frame.substring(space + 1);
+    const logTime = Number.isNaN(time) ? Date.now() : time;
+    lines.push(isStdErr ? [text, logTime, true] : [text, logTime]);
+  }
+  return lines;
 };

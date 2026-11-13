@@ -11,12 +11,15 @@ import type {
   WorkerRegistration,
 } from "@metapages/compute-queues-shared";
 
+import type { FinishedJobsStore } from "./FinishedJobsStore.ts";
 import type { JobDefinitionCache } from "./JobDefinitionCache.ts";
 
 export interface DockerJobQueueArgs extends WorkerRegistration {
   sender: WebsocketMessageSenderWorker;
   queue: string;
   jobDefinitions: JobDefinitionCache;
+  /** Where finished-and-reported jobs are persisted, so a restart remembers them (#358) */
+  finishedJobs?: FinishedJobsStore;
   /** Start in this handover state (a successor starts in "standby"). */
   handover?: WorkerHandoverState;
 }
@@ -63,6 +66,11 @@ export interface DockerJobArgs {
   // always defined, no jobs run forever
   maxJobDuration: number;
   isKilled: { value: boolean };
+  /**
+   * This job's container already ran to the end (it exited while the worker was
+   * down): collect its exit code and logs instead of running the job again.
+   */
+  exitedContainer?: Container;
 }
 
 // this comes out

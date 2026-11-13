@@ -34,6 +34,9 @@ export interface Arguments {
   autoUpdate: boolean;
   // How often to check for a new release, in ms.
   autoUpdateInterval: number;
+  // On startup, kill the running job containers of other worker ids on this
+  // docker host (see DockerJobQueue.killOrphanedJobs).
+  killOrphans: boolean;
 }
 
 /**
@@ -60,6 +63,7 @@ export const config: Arguments = {
   DebugDisableContainerDeletion: false, // for debugging and testing.
   autoUpdate: false,
   autoUpdateInterval: parseDuration("1h") as number,
+  killOrphans: true,
 };
 
 export const getConfig = (): Arguments => {

@@ -6,6 +6,7 @@ import type { DockerJobQueue } from "./queue/DockerJobQueue.ts";
 import { runCommand } from "/@/commands/run.ts";
 import { testCommand } from "/@/commands/test.ts";
 import { processes } from "/@/processes.ts";
+import { userJobQueues } from "@metapages/compute-queues-shared";
 
 import { Command } from "@cliffy/command";
 
@@ -13,6 +14,17 @@ import mod from "../mod.json" with { type: "json" };
 
 // Global reference to the DockerJobQueue for cleanup
 let globalDockerJobQueue: DockerJobQueue | null = null;
+
+/**
+ * In local mode this process is also the server: write out the live job logs
+ * it has not spooled to disk yet, so the next process reloads all of them
+ * (#360). Bounded, so a stuck disk cannot block the exit.
+ */
+const flushLiveLogs = () =>
+  Promise.race([
+    Promise.all(Object.values(userJobQueues).map((queue) => queue.flushLiveLogs())),
+    new Promise((resolve) => setTimeout(resolve, 2000)),
+  ]);
 
 // Function to set the global reference
 export const setGlobalDockerJobQueue = (queue: DockerJobQueue) => {
@@ -23,7 +35,7 @@ const args = Deno.args;
 
 // running in docker doesn't automatically kill on ctrl-c
 // https://github.com/nodejs/node/issues/4182
-Deno.addSignalListener("SIGINT", () => {
+Deno.addSignalListener("SIGINT", async () => {
   console.log("SIGINT Cleaning up processes...");
   if (globalDockerJobQueue) {
     globalDockerJobQueue.stopPeriodicRegistration();
@@ -31,10 +43,11 @@ Deno.addSignalListener("SIGINT", () => {
   if (processes.dockerd) {
     processes.dockerd.kill("SIGINT");
   }
+  await flushLiveLogs();
   Deno.exit(0);
 });
 
-Deno.addSignalListener("SIGTERM", () => {
+Deno.addSignalListener("SIGTERM", async () => {
   console.log("SIGTERM Cleaning up processes...");
   if (globalDockerJobQueue) {
     globalDockerJobQueue.stopPeriodicRegistration();
@@ -42,6 +55,7 @@ Deno.addSignalListener("SIGTERM", () => {
   if (processes.dockerd) {
     processes.dockerd.kill("SIGTERM");
   }
+  await flushLiveLogs();
   Deno.exit(0);
 });
 

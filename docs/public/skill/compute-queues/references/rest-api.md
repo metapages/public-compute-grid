@@ -18,6 +18,8 @@ auth. CORS open.
 | `GET`  | `/j/:jobId/inputs/*`                   | Raw input bytes.                        |
 | `GET`  | `/q/:queue/j/:jobId/build-logs.json`   | Build/pull/clone logs. `?since=N`.      |
 | `GET`  | `/q/:queue/j/:jobId/run-logs.json`     | Container stdout/stderr. `?since=N`.    |
+| `GET`  | `/j/:jobId/logs.build.json`            | Whole build log, one JSON array.        |
+| `GET`  | `/j/:jobId/logs.run.json`              | Whole run log, one JSON array.          |
 | `GET`  | `/q/:queue/j/:jobId/stream`            | SSE: logs + state until finished.       |
 | `GET`  | `/q/:queue/j/:jobId/namespaces.json`   | Namespaces waiting on the job.          |
 | `POST` | `/q/:queue/j/:jobId/cancel`            | Cancel → `finishedReason: "Cancelled"`. |
@@ -189,7 +191,7 @@ event: final       data: {"state":"Finished","reason":"Success"}
 ```
 
 Everything already known is replayed on connect, so a stream opened against a finished job returns its whole history and
-`final` immediately. Logs are retained about a week — much less than results.
+`final` immediately. Logs are kept with the job's other files.
 
 ## WebSocket
 

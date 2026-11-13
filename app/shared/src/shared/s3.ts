@@ -75,6 +75,55 @@ export class S3BlobStore {
     return true;
   }
 
+  /** The object's body, or undefined if there is none. */
+  async getText(key: string): Promise<string | undefined> {
+    const response = await this.client.fetch(this.objectUrl(key).toString(), { method: "GET" });
+    if (response.status === 404) {
+      await response.body?.cancel();
+      return undefined;
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error(`GET ${key} failed: ${response.status}`);
+    }
+    return await response.text();
+  }
+
+  async putText(key: string, body: string, contentType = "application/json"): Promise<void> {
+    const response = await this.client.fetch(this.objectUrl(key).toString(), {
+      method: "PUT",
+      body,
+      headers: { "Content-Type": contentType },
+    });
+    await response.body?.cancel();
+    if (!response.ok) {
+      throw new Error(`PUT ${key} failed: ${response.status}`);
+    }
+  }
+
+  /** Every key under the prefix (ListObjectsV2, all pages), in the bucket's (lexicographic) order. */
+  async list(prefix: string): Promise<string[]> {
+    const keys: string[] = [];
+    let continuationToken: string | undefined;
+    do {
+      const url = this.objectUrl("");
+      url.searchParams.set("list-type", "2");
+      url.searchParams.set("prefix", prefix);
+      if (continuationToken) {
+        url.searchParams.set("continuation-token", continuationToken);
+      }
+      const response = await this.client.fetch(url.toString(), { method: "GET" });
+      const body = await response.text();
+      if (!response.ok) {
+        throw new Error(`LIST ${prefix} failed: ${response.status} ${body.slice(0, 300)}`);
+      }
+      const page = parseListObjectsV2(body);
+      keys.push(...page.keys);
+      continuationToken = page.nextContinuationToken;
+    } while (continuationToken);
+    return keys;
+  }
+
   async delete(key: string): Promise<void> {
     const response = await this.client.fetch(this.objectUrl(key).toString(), { method: "DELETE" });
     await response.body?.cancel();
@@ -112,6 +161,24 @@ export class S3BlobStore {
     }
   }
 }
+
+const unescapeXml = (text: string) =>
+  text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(
+    /&amp;/g,
+    "&",
+  );
+
+/**
+ * The keys of a ListObjectsV2 response, and the token for the next page if it
+ * is truncated. A regex rather than an XML parser: Workers have no DOMParser,
+ * and the response's shape is fixed.
+ */
+export const parseListObjectsV2 = (xml: string): { keys: string[]; nextContinuationToken?: string } => {
+  const keys = [...xml.matchAll(/<Key>([^<]*)<\/Key>/g)].map((match) => unescapeXml(match[1]));
+  const truncated = /<IsTruncated>\s*true\s*<\/IsTruncated>/.test(xml);
+  const token = xml.match(/<NextContinuationToken>([^<]*)<\/NextContinuationToken>/)?.[1];
+  return { keys, nextContinuationToken: truncated && token ? unescapeXml(token) : undefined };
+};
 
 export const blobStoreConfigFromEnv = (): BlobStoreConfig => ({
   endpoint: getEnv("AWS_ENDPOINT") || undefined,

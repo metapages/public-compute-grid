@@ -178,9 +178,10 @@ Deno.test("Test upload and download", async () => {
 });
 
 Deno.test("Test exists API", async () => {
-  const word = `hello${Math.floor(Math.random() * 100000)}`;
+  // A UUID so the hash can't match an object a previous run left in the bucket
+  const word = `hello${crypto.randomUUID()}`;
   const content = `${Array(50).fill(word).join("")}`;
-  const rootName = `hello${Math.floor(Math.random() * 100000)}.txt`;
+  const rootName = `hello${crypto.randomUUID()}.txt`;
   const fileName = `/tmp/${rootName}`;
 
   await Deno.writeTextFile(fileName, content);
