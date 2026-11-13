@@ -62,7 +62,7 @@ Deno.addSignalListener("SIGTERM", async () => {
 await new Command()
   .description("Commands for running a metapage worker")
   .name("worker")
-  .version("v1.0.0")
+  .version(mod.version)
   .help({
     types: false,
     hints: false,

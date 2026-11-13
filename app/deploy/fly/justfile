@@ -16,6 +16,8 @@ grey := "\\e[90m"
     echo -e ""
     just --list --unsorted --list-heading $'🌱 Fly.io:\n\n'
     echo -e ""
+    echo -e "        {{ yellow }}DEPRECATED{{ normal }}: Fly.io is deprecating the features this needs. See README.md"
+    echo -e ""
     echo -e "        Monitor GPU queue:   {{ green }}https://fly.io/apps/metapage-io-workers-a/monitoring{{ normal }}"
     echo -e "        Monitor CPU queue:   {{ green }}https://fly.io/apps/metapage-io-workers-b/monitoring{{ normal }}"
     echo -e "        Monitor Autoscaler:  {{ green }}https://fly.io/apps/metapage-io-autoscaler/monitoring{{ normal }}"

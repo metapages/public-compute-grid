@@ -1,7 +1,5 @@
 import parseDuration from "parse-duration";
 
-export const VERSION: string = "0.2.0";
-
 export interface GpuConfig {
   // Total number of available GPUs (for capacity calculation)
   totalGpus: number;
