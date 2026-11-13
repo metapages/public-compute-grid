@@ -8,11 +8,9 @@
   // jobs submitted against the workers.dev origin carry input URLs on that
   // hostname and resolve only while it answers.
   "workers_dev": true,
-  // The real hostname (#316). A custom domain owns its DNS record, so the old
-  // A/AAAA records pointing at Deno Deploy had to be deleted before this could
-  // be attached — `override_existing_dns_record` is refused for externally
-  // managed records. Rollback is deleting the custom domain and restoring
-  // `A 69.67.170.170` / `AAAA 2602:f70f::1`, unproxied.
+  // The real hostname (#316). A custom domain owns its DNS record:
+  // `override_existing_dns_record` is refused for externally managed records,
+  // so any other record for this name must be deleted before it can attach.
   "routes": [{ "pattern": "container.mtfm.io", "custom_domain": true }],
   "main": "dist/worker.js",
   "no_bundle": true,

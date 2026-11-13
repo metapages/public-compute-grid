@@ -4,8 +4,8 @@
  *
  * These run against any API_URL — the local-mode worker, the compose stack
  * (Deno), the Cloudflare stack (wrangler dev) and staging — so they must not
- * import server internals or touch the database. They are the safety net for
- * the Deno Deploy → Cloudflare migration (issue #308) and for the later
+ * import server internals or touch the database. They keep the Deno and
+ * Cloudflare servers interchangeable, and are the safety net for the later
  * server/worker/cli unification: if two servers pass this file, clients can't
  * tell them apart.
  *
