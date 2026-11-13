@@ -18,6 +18,7 @@ import {
   holdSocketMessages,
   type InMemoryDockerJob,
   type LogKind,
+  makeEnsureQueue,
   makeStreamHandler,
   serveJobLogs,
   shaDockerJob,
@@ -870,37 +871,20 @@ app.get("/*", serveStatic({ root: "../browser/dist" }));
 app.get("/", serveStatic({ path: "../browser/dist/index.html" }));
 app.get("*", serveStatic({ path: "../browser/dist/index.html" }));
 
-/**
- * Each queue's setup, so a request arriving while the queue is still being set
- * up waits for it: until then it has none of the jobs and logs it reloads.
- */
-const queueSetups: Record<string, Promise<void>> = {};
-
-const ensureQueue = async (queue: string): Promise<BaseDockerJobQueue> => {
-  // Initialize queue if it doesn't exist
-  if (!userJobQueues[queue]) {
-    userJobQueues[queue] = new LocalDockerJobQueue({
+// Initialize the queue if it doesn't exist. Concurrent first requests share
+// one setup rather than racing it (#347), and a request arriving while the queue
+// is still being set up waits for it: until then it has none of the jobs and
+// logs it reloads. A failed setup is not kept, so the next call retries.
+const ensureQueue: (queue: string) => Promise<BaseDockerJobQueue> = makeEnsureQueue(
+  userJobQueues,
+  (queue) =>
+    new LocalDockerJobQueue({
       serverId: "local",
       address: queue,
       dataDirectory: getConfig().dataDirectory,
       debug: config.debug,
-    });
-    const jobQueue = userJobQueues[queue];
-    const setup = jobQueue.setup();
-    queueSetups[queue] = setup;
-    // A failed setup must not stick: forget the queue so the next call retries
-    setup.catch(() => {
-      if (queueSetups[queue] === setup) {
-        delete queueSetups[queue];
-        if (userJobQueues[queue] === jobQueue) {
-          delete userJobQueues[queue];
-        }
-      }
-    });
-  }
-  await queueSetups[queue];
-  return userJobQueues[queue];
-};
+    }),
+);
 const handleWebsocket = async (socket: WebSocket, request: Request) => {
   const url = new URL(request.url);
   const pathTokens = url.pathname.split("/").filter((x) => x !== "");
