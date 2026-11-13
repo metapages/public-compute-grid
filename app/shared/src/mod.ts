@@ -9,4 +9,5 @@ export * from "./shared/constants.ts";
 export * from "./shared/stream-handler.ts";
 export * from "./shared/env.ts";
 export * from "./shared/workerVersions.ts";
+export * from "./shared/ensure-queue.ts";
 export * from "./shared/joblogs.ts";

@@ -1,4 +1,5 @@
-import { holdSocketMessages } from "@metapages/compute-queues-shared";
+import { holdSocketMessages, makeEnsureQueue } from "@metapages/compute-queues-shared";
+
 import { ApiDockerJobQueue, userJobQueues } from "@/docker-jobs/ApiDockerJobQueue.ts";
 import { getServerInstanceId } from "@/util/id.ts";
 
@@ -6,27 +7,35 @@ export interface WebsocketUrlParameters {
   token: string;
 }
 
-export const getApiDockerJobQueue = async (
+type ApiQueueOptions = { periodicWork?: boolean; serverId?: string };
+
+const ensureApiQueue = makeEnsureQueue(
+  userJobQueues as { [queue: string]: ApiDockerJobQueue },
+  // TODO: hydrate queue from some kind of persistence
+  // actually the queue should handle that itself
+  (queue: string, opts?: ApiQueueOptions) =>
+    new ApiDockerJobQueue({
+      serverId: opts?.serverId ?? getServerInstanceId(),
+      address: queue,
+      periodicWork: opts?.periodicWork,
+    }),
+);
+
+/**
+ * The queue for a name, created on first use. It is only published (and so
+ * only handed to any caller) once its setup() has finished; concurrent first
+ * calls share that setup, and only the call that builds the queue has its
+ * opts applied. As before, a queue that already exists is returned whatever
+ * the opts.
+ * https://github.com/metapages/public-compute-grid/issues/347
+ */
+export const getApiDockerJobQueue = (
   queue: string,
   // A Cloudflare Durable Object passes periodicWork: false and schedules
   // maintenance itself, because a timer would keep it resident and billed. It
   // also passes its own serverId, one per queue instance (see queue-do.ts).
-  opts?: { periodicWork?: boolean; serverId?: string },
-): Promise<ApiDockerJobQueue> => {
-  if (!userJobQueues[queue]) {
-    // TODO: hydrate queue from some kind of persistence
-    // actually the queue should handle that itself
-    const jobQueue = new ApiDockerJobQueue({
-      serverId: opts?.serverId ?? getServerInstanceId(),
-      address: queue,
-      periodicWork: opts?.periodicWork,
-    });
-    await jobQueue.setup();
-    userJobQueues[queue] = jobQueue;
-    return jobQueue;
-  }
-  return userJobQueues[queue];
-};
+  opts?: ApiQueueOptions,
+): Promise<ApiDockerJobQueue> => ensureApiQueue(queue, opts);
 
 export async function wsHandlerClient(
   token: string,
@@ -66,15 +75,8 @@ export async function wsHandlerWorker(
       return;
     }
     const releaseMessages = holdSocketMessages(socket);
-    if (!userJobQueues[token]) {
-      // TODO: hydrate queue from some kind of persistence
-      userJobQueues[token] = new ApiDockerJobQueue({
-        serverId: getServerInstanceId(),
-        address: token,
-      });
-      await userJobQueues[token].setup();
-    }
-    userJobQueues[token].connectWorker({ socket });
+    const jobQueue = await getApiDockerJobQueue(token);
+    jobQueue.connectWorker({ socket });
     releaseMessages();
   } catch (err) {
     console.error(err);
